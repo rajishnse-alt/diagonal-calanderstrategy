@@ -468,24 +468,62 @@ sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
 sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
 
 # ─────────────────────────────────────────────
+# PRE-COMPUTE LONG CANDIDATES (needed for snapshot)
+# ─────────────────────────────────────────────
+ce_cands = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
+pe_cands = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
+best_ce  = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
+best_pe  = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
+
+# ─────────────────────────────────────────────
 # MARKET SNAPSHOT
 # ─────────────────────────────────────────────
-st.markdown("<div class='sec-hdr'>📊 Market</div>", unsafe_allow_html=True)
-c1, c2, c3, c4 = st.columns(4)
-with c1:
+st.markdown("<div class='sec-hdr'>📊 Market Snapshot</div>", unsafe_allow_html=True)
+
+# Row 1 — Spot + ATM
+r1c1, r1c2 = st.columns(2)
+with r1c1:
     st.markdown(f"<div class='card'><div class='lbl'>NIFTY Spot</div>"
                 f"<div class='val-big'>₹{spot:,.2f}</div></div>", unsafe_allow_html=True)
-with c2:
+with r1c2:
     st.markdown(f"<div class='card card-gold'><div class='lbl'>ATM Strike</div>"
                 f"<div class='val-big val-gold'>{atm}</div></div>", unsafe_allow_html=True)
-with c3:
-    st.markdown(f"<div class='card card-ce'><div class='lbl'>ATM+{short_steps} CE (near) — SELL</div>"
-                f"<div class='val-big val-ce'>₹{sell_ce_ltp:.2f}</div>"
-                f"<div class='lbl'>Strike {sell_ce_strike}</div></div>", unsafe_allow_html=True)
-with c4:
-    st.markdown(f"<div class='card card-pe'><div class='lbl'>ATM-{short_steps} PE (near) — SELL</div>"
-                f"<div class='val-big val-pe'>₹{sell_pe_ltp:.2f}</div>"
-                f"<div class='lbl'>Strike {sell_pe_strike}</div></div>", unsafe_allow_html=True)
+
+# Row 2 — CE legs
+r2c1, r2c2 = st.columns(2)
+ce_buy_pct = f"{best_ce['ltp']/sell_ce_ltp*100:.0f}% of sell LTP" if sell_ce_ltp > 0 and best_ce['ltp'] > 0 else ""
+with r2c1:
+    st.markdown(
+        f"<div class='card card-ce'>"
+        f"<div class='lbl'>📅 {near_exp} &nbsp;|&nbsp; CE SELL — ATM+{short_steps}</div>"
+        f"<div class='val-big val-ce'>₹{sell_ce_ltp:.2f}</div>"
+        f"<div class='lbl'>Strike {sell_ce_strike}</div>"
+        f"</div>", unsafe_allow_html=True)
+with r2c2:
+    st.markdown(
+        f"<div class='card' style='border-left:3px solid var(--bull);'>"
+        f"<div class='lbl'>📅 {far_exp} &nbsp;|&nbsp; CE BUY (far) — best match</div>"
+        f"<div class='val-big' style='color:var(--bull);'>₹{best_ce['ltp']:.2f}</div>"
+        f"<div class='lbl'>Strike {int(best_ce['strike'])} &nbsp;·&nbsp; {ce_buy_pct}</div>"
+        f"</div>", unsafe_allow_html=True)
+
+# Row 3 — PE legs
+r3c1, r3c2 = st.columns(2)
+pe_buy_pct = f"{best_pe['ltp']/sell_pe_ltp*100:.0f}% of sell LTP" if sell_pe_ltp > 0 and best_pe['ltp'] > 0 else ""
+with r3c1:
+    st.markdown(
+        f"<div class='card card-pe'>"
+        f"<div class='lbl'>📅 {near_exp} &nbsp;|&nbsp; PE SELL — ATM-{short_steps}</div>"
+        f"<div class='val-big val-pe'>₹{sell_pe_ltp:.2f}</div>"
+        f"<div class='lbl'>Strike {sell_pe_strike}</div>"
+        f"</div>", unsafe_allow_html=True)
+with r3c2:
+    st.markdown(
+        f"<div class='card' style='border-left:3px solid var(--bull);'>"
+        f"<div class='lbl'>📅 {far_exp} &nbsp;|&nbsp; PE BUY (far) — best match</div>"
+        f"<div class='val-big' style='color:var(--bull);'>₹{best_pe['ltp']:.2f}</div>"
+        f"<div class='lbl'>Strike {int(best_pe['strike'])} &nbsp;·&nbsp; {pe_buy_pct}</div>"
+        f"</div>", unsafe_allow_html=True)
 
 if sell_ce_ltp == 0 or sell_pe_ltp == 0:
     st.warning(f"⚠️ ATM±{short_steps} ({sell_ce_strike}/{sell_pe_strike}) has zero LTP — "
@@ -496,14 +534,7 @@ if sell_ce_ltp == 0 or sell_pe_ltp == 0:
 # ─────────────────────────────────────────────
 st.markdown("<div class='sec-hdr'>📋 Option Chain — Near vs Far (ATM ±10)</div>", unsafe_allow_html=True)
 
-ce_cands = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
-pe_cands = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
-
-# Best auto-match from candidates
-best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
-best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
-
-# Target LTPs
+# Target LTPs (ce_cands / pe_cands / best_ce / best_pe computed above before snapshot)
 target_ce = sell_ce_ltp * ltp_ratio / 100.0
 target_pe = sell_pe_ltp * ltp_ratio / 100.0
 
