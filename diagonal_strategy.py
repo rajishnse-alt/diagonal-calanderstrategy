@@ -165,7 +165,6 @@ def fetch_expiries(tok):
         return None, str(e)
 
 
-@st.cache_data(ttl=120)
 def fetch_chain(tok, expiry):
     for url in UPSTOX_OC_URLS:
         try:
@@ -382,15 +381,12 @@ if "access_token" in st.session_state:
 
 if "access_token" not in st.session_state:
     auth_url = build_auth_url(api_key, redirect_uri)
-    st.markdown(f"""
-    <div class='login-box'>
-      <p style='font-family:var(--hdr);font-size:20px;font-weight:700;color:white;'>Login with Upstox</p>
-      <p style='color:#4a6080;font-size:12px;font-family:var(--mono);margin-bottom:1.5rem;'>One click per trading day</p>
-      <a href='{auth_url}'
-         style='display:inline-block;background:linear-gradient(135deg,#2979ff,#651fff);
-                color:white;padding:11px 28px;border-radius:8px;text-decoration:none;
-                font-family:var(--mono);font-size:13px;font-weight:600;'>CONNECT →</a>
-    </div>""", unsafe_allow_html=True)
+    st.markdown("<div class='login-box'>", unsafe_allow_html=True)
+    st.markdown("### 🔐 Login with Upstox")
+    st.markdown("<p style='color:#4a6080;font-size:12px;font-family:monospace;'>One click per trading day</p>",
+                unsafe_allow_html=True)
+    st.link_button("CONNECT →", auth_url, use_container_width=False)
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 token = st.session_state["access_token"]
@@ -686,6 +682,94 @@ with col_lpe:
     )
 
 # ─────────────────────────────────────────────
+# TRADE SCHEDULER
+# ─────────────────────────────────────────────
+st.markdown("<div class='sec-hdr'>⏰ Trade Scheduler</div>", unsafe_allow_html=True)
+
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+sched_col1, sched_col2, sched_col3 = st.columns([2, 2, 3])
+with sched_col1:
+    sched_day = st.selectbox(
+        "Initiate on Day",
+        WEEKDAY_NAMES,
+        index=st.session_state.get("sched_day_idx", 0),
+        key="sched_day_sel",
+    )
+    st.session_state["sched_day_idx"] = WEEKDAY_NAMES.index(sched_day)
+with sched_col2:
+    sched_time_str = st.text_input(
+        "At Time (HH:MM, 24h IST)",
+        value=st.session_state.get("sched_time_str", "15:15"),
+        key="sched_time_inp",
+    )
+    st.session_state["sched_time_str"] = sched_time_str
+with sched_col3:
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.info(f"📌 Current schedule: **{sched_day} {sched_time_str} IST** — keep running app, it will alert when it's time.")
+
+# Parse schedule and compute next trigger
+_sched_ok = False
+try:
+    _th, _tm = [int(x) for x in sched_time_str.split(":")]
+    _target_weekday = WEEKDAY_NAMES.index(sched_day)  # 0=Mon … 4=Fri
+    _sched_ok = True
+except Exception:
+    st.warning("⚠️ Invalid time format — use HH:MM (e.g. 15:15)")
+
+if _sched_ok:
+    _now_dt   = now  # already datetime with IST tz
+    _now_wd   = _now_dt.weekday()          # 0=Mon
+    _days_fwd = (_target_weekday - _now_wd) % 7
+    _next_trigger = _now_dt.replace(hour=_th, minute=_tm, second=0, microsecond=0)
+    if _days_fwd > 0:
+        _next_trigger += timedelta(days=_days_fwd)
+    elif _days_fwd == 0 and _now_dt >= _next_trigger:
+        _next_trigger += timedelta(days=7)   # same weekday but already past → next week
+
+    _delta = _next_trigger - _now_dt
+    _delta_secs = int(_delta.total_seconds())
+    _hrs, _rem  = divmod(_delta_secs, 3600)
+    _mins, _secs = divmod(_rem, 60)
+    _countdown_str = f"{_hrs}h {_mins}m {_secs}s"
+
+    # Within 5 min past trigger on the right day → FIRE ALERT
+    _on_trigger_day = (_now_dt.weekday() == _target_weekday)
+    _trigger_time_today = _now_dt.replace(hour=_th, minute=_tm, second=0, microsecond=0)
+    _secs_past = (_now_dt - _trigger_time_today).total_seconds()
+    _is_trigger_window = _on_trigger_day and (0 <= _secs_past <= 300)   # 0–5 min window
+
+    if _is_trigger_window:
+        st.markdown(
+            f"<div style='background:#003318;border:2px solid #00e676;border-radius:10px;"
+            f"padding:1rem 1.5rem;text-align:center;'>"
+            f"<div style='font-family:var(--hdr);font-size:22px;color:#00e676;'>🚨 INITIATE POSITIONS NOW</div>"
+            f"<div style='font-family:var(--mono);font-size:13px;color:#c8d8f0;margin-top:.4rem;'>"
+            f"It is {sched_day} {sched_time_str} IST &nbsp;·&nbsp; "
+            f"CE SELL {sell_ce_strike} @₹{sell_ce_ltp:.2f} &nbsp;·&nbsp; "
+            f"PE SELL {sell_pe_strike} @₹{sell_pe_ltp:.2f}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        _bar_pct = max(0, min(100, int(100 - _delta_secs / (7 * 86400) * 100)))
+        st.markdown(
+            f"<div style='background:var(--surface);border:1px solid var(--border);"
+            f"border-radius:10px;padding:.75rem 1rem;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+            f"<span style='font-family:var(--mono);font-size:11px;color:var(--muted);'>NEXT TRIGGER</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:#ffc940;'>"
+            f"⏳ {_countdown_str}</span>"
+            f"<span style='font-family:var(--mono);font-size:11px;color:var(--muted);'>"
+            f"{_next_trigger.strftime('%a %d %b %Y %H:%M IST')}</span>"
+            f"</div>"
+            f"<div style='background:var(--border);border-radius:4px;height:4px;margin-top:.5rem;'>"
+            f"<div style='background:var(--gold);height:4px;width:{_bar_pct}%;border-radius:4px;'></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+# ─────────────────────────────────────────────
 # SUMMARY & NET PREMIUM
 # ─────────────────────────────────────────────
 st.markdown("<div class='sec-hdr'>💰 Position Summary</div>", unsafe_allow_html=True)
@@ -783,7 +867,15 @@ with st.sidebar:
     st.metric("BE ↑", f"{int(be_up):,}")
     st.metric("BE ↓", f"{int(be_dn):,}")
     st.divider()
+    refresh_secs = st.slider("🔄 Auto-refresh (sec)", min_value=15, max_value=120, value=30, step=5)
+    st.caption(f"Updated {now.strftime('%H:%M:%S IST')}")
+    st.divider()
     if st.button("🔓 Logout"):
         for k in list(st.session_state.keys()): del st.session_state[k]
         st.rerun()
-    st.caption(f"Updated {now.strftime('%H:%M:%S IST')}")
+
+# ─────────────────────────────────────────────
+# AUTO-REFRESH — live prices + scheduler tick
+# ─────────────────────────────────────────────
+time.sleep(refresh_secs)
+st.rerun()
