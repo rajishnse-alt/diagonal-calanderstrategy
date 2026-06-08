@@ -676,20 +676,36 @@ with r1c2:
                 f"<div class='val-big val-gold'>{atm}</div></div>", unsafe_allow_html=True)
 
 # Row 1b — PCR + SPCL (near chain, using exact atm_tracker formulas)
-_pcr, _pcr_chg, _tot_ce_oi, _tot_pe_oi, _spcl, _atm_ce, _atm_pe, (_sent_lbl, _sent_col) = \
-    calc_pcr_spcl(near_ce, near_pe, near_ce_oi, near_pe_oi,
-                  near_ce_oi_chg, near_pe_oi_chg, atm,
-                  vix_day_open=_open_vix if _vix_ok else None)
+try:
+    _pcr, _pcr_chg, _tot_ce_oi, _tot_pe_oi, _spcl, _atm_ce, _atm_pe, (_sent_lbl, _sent_col) = \
+        calc_pcr_spcl(near_ce, near_pe, near_ce_oi, near_pe_oi,
+                      near_ce_oi_chg, near_pe_oi_chg, atm,
+                      vix_day_open=_open_vix if _vix_ok else None)
+except Exception as _pcr_ex:
+    st.error(f"PCR calc error: {_pcr_ex}")
+    _pcr = _pcr_chg = _tot_ce_oi = _tot_pe_oi = _atm_ce = _atm_pe = 0.0
+    _spcl = None
+    _sent_lbl, _sent_col = "N/A", "var(--muted)"
+
 _prev_pcr = st.session_state.get("prev_pcr", _pcr)
 st.session_state["prev_pcr"] = _pcr
 _pcr_delta = _pcr - _prev_pcr
 _pcr_has_oi = _tot_ce_oi > 0
+
+# ATM-specific OI (single strike)
+_atm_ce_oi = near_ce_oi.get(float(atm), 0)
+_atm_pe_oi = near_pe_oi.get(float(atm), 0)
+_atm_pcr   = (_atm_pe_oi / _atm_ce_oi) if _atm_ce_oi > 0 else 0.0
+_atm_has_oi = _atm_ce_oi > 0
 
 pb1, pb2, pb3 = st.columns(3)
 with pb1:
     if _pcr_has_oi:
         _pcr_dir_col = "var(--bull)" if _pcr_delta > 0.01 else ("var(--bear)" if _pcr_delta < -0.01 else "var(--muted)")
         _pcr_dir_sym = "↑" if _pcr_delta > 0.01 else ("↓" if _pcr_delta < -0.01 else "→")
+        # ATM PCR pill
+        _atm_pcr_str = f"{_atm_pcr:.2f}" if _atm_has_oi else "—"
+        _atm_pcr_col = "var(--bull)" if _atm_pcr >= 1.1 else ("var(--bear)" if _atm_pcr < 0.9 and _atm_has_oi else "var(--gold)")
         st.markdown(
             f"<div class='card' style='border-left:4px solid {_sent_col};'>"
             f"<div class='lbl'>PCR OI &nbsp;·&nbsp; ATM±10 strikes</div>"
@@ -702,6 +718,11 @@ with pb1:
             f"<span style='color:{_pcr_dir_col};font-weight:700;'>{_pcr_chg:.2f}{_pcr_dir_sym}{_pcr:.2f}</span>"
             f" &nbsp;·&nbsp; CE:ATM+10 | PE:ATM-10<br>"
             f"CE OI <b>{_tot_ce_oi/1e5:.1f}L</b> &nbsp;·&nbsp; PE OI <b>{_tot_pe_oi/1e5:.1f}L</b>"
+            f"</div>"
+            f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+            f"<span class='lbl'>ATM <span class='strike-pill-ce'>{atm}</span> PCR &nbsp;</span>"
+            f"<span style='font-family:var(--mono);font-size:14px;font-weight:700;color:{_atm_pcr_col};'>{_atm_pcr_str}</span>"
+            f"<span class='lbl'> &nbsp;CE {_atm_ce_oi/1e5:.1f}L / PE {_atm_pe_oi/1e5:.1f}L</span>"
             f"</div></div>",
             unsafe_allow_html=True)
     else:
