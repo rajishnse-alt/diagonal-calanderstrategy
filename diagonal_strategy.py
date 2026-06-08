@@ -204,6 +204,33 @@ def parse_chain(data):
     return spot, atm, ce_map, pe_map
 
 
+def fetch_vix(tok):
+    """Fetch India VIX open and current LTP from Upstox market-quote API."""
+    try:
+        r = requests.get(
+            "https://api.upstox.com/v2/market-quote/quotes",
+            params={"instrument_key": "NSE_INDEX|India VIX"},
+            headers=hdr(tok), timeout=10,
+        )
+        if r.status_code == 401:
+            return None, None, "token_expired"
+        d = r.json()
+        if d.get("status") == "success":
+            data = d.get("data", {})
+            # response key uses colon separator
+            vd = (data.get("NSE_INDEX:India VIX")
+                  or data.get("NSE_INDEX|India VIX")
+                  or next(iter(data.values()), None))
+            if vd:
+                ohlc     = vd.get("ohlc", {})
+                open_vix = float(ohlc.get("open") or 0)
+                curr_vix = float(vd.get("last_price") or 0)
+                return open_vix, curr_vix, None
+        return None, None, str(d)
+    except Exception as e:
+        return None, None, str(e)
+
+
 def weeks_out(expiry_str):
     try:
         return ((datetime.strptime(expiry_str, "%Y-%m-%d").date()
@@ -395,14 +422,12 @@ token = st.session_state["access_token"]
 # PARAMETERS
 # ─────────────────────────────────────────────
 st.markdown("<div class='sec-hdr'>⚙️ Parameters</div>", unsafe_allow_html=True)
-col_p1, col_p2, col_p3 = st.columns([2, 2, 2])
+col_p1, col_p2 = st.columns([2, 2])
 with col_p1:
     sell_lots = st.number_input("Short Leg Lots (SELL)", min_value=1, max_value=20, value=1)
 with col_p2:
     ltp_ratio = st.slider("Long LTP target (% of Sell LTP)", 30, 80, 50, 5,
                           help="Far strike selected where LTP ≈ this % of the sold LTP")
-with col_p3:
-    short_steps = st.number_input("OTM Steps for Short (default 6 = 300 pts)", min_value=1, max_value=15, value=6)
 
 # ─────────────────────────────────────────────
 # EXPIRY DATES
@@ -457,9 +482,42 @@ if fe or not far_raw:
 spot, atm, near_ce, near_pe = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe  = parse_chain(far_raw)
 
-# ATM ± SHORT_STEPS strikes
-sell_ce_strike = atm + short_steps * STEP   # e.g. ATM + 300
-sell_pe_strike = atm - short_steps * STEP   # e.g. ATM - 300
+# ── VIX fetch (needed before strike selection) ──────────────────────────────
+_open_vix, _curr_vix, _vix_err = fetch_vix(token)
+if _vix_err == "token_expired":
+    del st.session_state["access_token"]; st.rerun()
+
+_days_to_exp = max(
+    (datetime.strptime(near_exp, "%Y-%m-%d").date() - now.date()).days, 1
+)
+
+if _open_vix and _curr_vix and spot:
+    _eff_vix   = max(_open_vix, _curr_vix)
+    _daily_vix = _eff_vix / math.sqrt(252)
+    _exp_1s    = spot * (_eff_vix / 100) * math.sqrt(_days_to_exp / 252)
+    _exp_2s    = _exp_1s * 2
+    _steps_1s  = max(1, round(_exp_1s / STEP))
+    _steps_2s  = max(1, round(_exp_2s / STEP))
+    _vix_ok    = True
+else:
+    _eff_vix = _daily_vix = _exp_1s = _exp_2s = 0.0
+    _steps_1s = _steps_2s = SHORT_STEPS          # fallback to constant
+    _vix_ok   = False
+
+# Seed session_state with VIX default only when VIX value changes
+# (preserves user override across auto-refreshes, resets when VIX shifts)
+_vix_default = _steps_1s  # VIX-implied steps (or fallback SHORT_STEPS)
+if st.session_state.get("_last_vix_default") != _vix_default:
+    st.session_state["_last_vix_default"] = _vix_default
+    st.session_state["short_steps_val"]   = _vix_default
+
+# short_steps slider is rendered inside the VIX section below;
+# read the current value from session_state here so strike calc uses it
+short_steps = st.session_state.get("short_steps_val", _vix_default)
+
+# ATM ± short_steps strikes
+sell_ce_strike = atm + short_steps * STEP
+sell_pe_strike = atm - short_steps * STEP
 sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
 sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
 
@@ -524,6 +582,103 @@ with r3c2:
 if sell_ce_ltp == 0 or sell_pe_ltp == 0:
     st.warning(f"⚠️ ATM±{short_steps} ({sell_ce_strike}/{sell_pe_strike}) has zero LTP — "
                f"try a smaller steps value or check market hours.")
+
+# ─────────────────────────────────────────────
+# VIX ANALYSIS — expected move & auto-derived strikes
+# ─────────────────────────────────────────────
+st.markdown("<div class='sec-hdr'>🌡️ India VIX — Expected Move &amp; Auto Strike Selection</div>",
+            unsafe_allow_html=True)
+
+if not _vix_ok:
+    st.warning(f"VIX data unavailable ({_vix_err}) — strikes defaulted to {SHORT_STEPS} steps.")
+else:
+    # Derived range bounds (rounded to nearest strike)
+    _upper_1s = round((spot + _exp_1s) / STEP) * STEP
+    _lower_1s = round((spot - _exp_1s) / STEP) * STEP
+    _upper_2s = round((spot + _exp_2s) / STEP) * STEP
+    _lower_2s = round((spot - _exp_2s) / STEP) * STEP
+
+    _vix_trend = ("↑ expanding" if _curr_vix > _open_vix
+                  else ("↓ contracting" if _curr_vix < _open_vix else "→ unchanged"))
+
+    # ── Row 1: VIX cards ────────────────────────
+    _v1, _v2, _v3, _v4 = st.columns(4)
+    with _v1:
+        st.markdown(
+            f"<div class='card'><div class='lbl'>VIX Open</div>"
+            f"<div class='val-big val-gold'>{_open_vix:.2f}</div></div>",
+            unsafe_allow_html=True)
+    with _v2:
+        _vcol = "var(--bear)" if _curr_vix > _open_vix else "var(--bull)"
+        st.markdown(
+            f"<div class='card'><div class='lbl'>VIX Current ({_vix_trend})</div>"
+            f"<div class='val-big' style='color:{_vcol};'>{_curr_vix:.2f}</div></div>",
+            unsafe_allow_html=True)
+    with _v3:
+        st.markdown(
+            f"<div class='card card-gold'><div class='lbl'>Effective VIX (higher of two)</div>"
+            f"<div class='val-big val-gold'>{_eff_vix:.2f}</div>"
+            f"<div class='lbl'>Daily σ: {_daily_vix:.2f}%</div></div>",
+            unsafe_allow_html=True)
+    with _v4:
+        st.markdown(
+            f"<div class='card'><div class='lbl'>DTE → sell strike</div>"
+            f"<div class='val-big'>{_days_to_exp}d</div>"
+            f"<div class='lbl'>{near_exp}</div></div>",
+            unsafe_allow_html=True)
+
+    # ── Strike selector slider (VIX-defaulted, user-adjustable) ────────────
+    _sl_col1, _sl_col2 = st.columns([3, 1])
+    with _sl_col1:
+        short_steps = st.slider(
+            f"OTM Steps for Sell Leg  ·  VIX suggests {_steps_1s} steps ({_steps_1s * STEP} pts)  ·  2σ = {_steps_2s} steps",
+            min_value=1, max_value=20,
+            value=st.session_state.get("short_steps_val", _vix_default),
+            key="short_steps_slider",
+            help="Default = VIX 1σ range. Drag right → safer (less premium). Drag left → more premium (higher risk).",
+        )
+        st.session_state["short_steps_val"] = short_steps
+    with _sl_col2:
+        if st.button("↺ Reset to VIX", help="Reset to VIX-implied 1σ steps"):
+            st.session_state["short_steps_val"]   = _vix_default
+            st.session_state["_last_vix_default"] = _vix_default
+            st.rerun()
+
+    # Recalculate strikes with user-chosen short_steps
+    sell_ce_strike = atm + short_steps * STEP
+    sell_pe_strike = atm - short_steps * STEP
+    sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
+    sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
+
+    # ── Row 2: Expected move + auto strike ──────
+    _m1, _m2 = st.columns(2)
+    with _m1:
+        _vs_vix = ("✅ at VIX 1σ" if short_steps == _steps_1s
+                   else (f"↗ {short_steps - _steps_1s} steps wider than 1σ" if short_steps > _steps_1s
+                         else f"↙ {_steps_1s - short_steps} steps tighter than 1σ"))
+        st.markdown(
+            f"<div class='card card-bull'>"
+            f"<div class='lbl'>1σ Expected Move — {_days_to_exp} days to expiry</div>"
+            f"<div class='val-big val-bull'>± {_exp_1s:,.0f} pts</div>"
+            f"<div class='lbl'>"
+            f"Upper: <b style='color:var(--ce);'>{_upper_1s:,}</b> &nbsp;·&nbsp; "
+            f"Lower: <b style='color:var(--pe);'>{_lower_1s:,}</b><br>"
+            f"<b style='color:white;'>Selling at {short_steps} steps → {_vs_vix}</b><br>"
+            f"CE {sell_ce_strike} / PE {sell_pe_strike}"
+            f"</div></div>",
+            unsafe_allow_html=True)
+    with _m2:
+        st.markdown(
+            f"<div class='card' style='border-left:3px solid var(--bear);'>"
+            f"<div class='lbl'>2σ Move — tail / danger zone</div>"
+            f"<div class='val-big val-bear'>± {_exp_2s:,.0f} pts</div>"
+            f"<div class='lbl'>"
+            f"Upper: <b style='color:var(--ce);'>{_upper_2s:,}</b> &nbsp;·&nbsp; "
+            f"Lower: <b style='color:var(--pe);'>{_lower_2s:,}</b><br>"
+            f"<b style='color:var(--bear);'>{_steps_2s} steps OTM</b> &nbsp;·&nbsp; "
+            f"Your sell is {'✅ beyond 2σ' if short_steps >= _steps_2s else ('⚠️ between 1σ–2σ' if short_steps >= _steps_1s else '🔴 inside 1σ')}"
+            f"</div></div>",
+            unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # COMBINED OPTION CHAIN — near + far side by side
@@ -846,7 +1001,9 @@ st.markdown(
     f"CE ratio {ratio_ce_actual:.0f}% &nbsp;·&nbsp; PE ratio {ratio_pe_actual:.0f}%<br>"
     f"• Ideal: near leg expires worthless every week → roll the short to next expiry &nbsp;·&nbsp; "
     f"far longs act as long-dated tail protection<br>"
-    f"• Adjust <b>OTM Steps</b> or <b>Long LTP target %</b> to fine-tune strikes"
+    f"• Short at <b>{short_steps} steps ({short_steps*STEP} pts OTM)</b>"
+    f"{' = VIX 1σ default' if _vix_ok and short_steps == _steps_1s else f' — VIX 1σ default is {_steps_1s} steps' if _vix_ok else ''}"
+    f" &nbsp;·&nbsp; Use the OTM steps slider in the VIX section to adjust"
     f"</span></div>",
     unsafe_allow_html=True,
 )
@@ -866,6 +1023,11 @@ with st.sidebar:
     st.metric("Long PE", f"{buy_pe_strike}  @₹{buy_pe_ltp:.2f} ({ratio_pe_actual:.0f}%)")
     st.metric("BE ↑", f"{int(be_up):,}")
     st.metric("BE ↓", f"{int(be_dn):,}")
+    st.divider()
+    if _open_vix and _curr_vix:
+        st.metric("VIX (eff)", f"{_eff_vix:.2f}",
+                  f"{'↑' if _curr_vix > _open_vix else '↓'} open {_open_vix:.2f}")
+        st.metric("1σ move", f"±{_exp_1s:,.0f} pts", f"{_steps_1s} steps OTM")
     st.divider()
     refresh_secs = st.slider("🔄 Auto-refresh (sec)", min_value=15, max_value=120, value=30, step=5)
     st.caption(f"Updated {now.strftime('%H:%M:%S IST')}")
