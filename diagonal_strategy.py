@@ -232,7 +232,7 @@ def fetch_chain(tok, expiry):
 
 
 def parse_chain(data):
-    ce_map, pe_map = {}, {}
+    ce_map, pe_map, ce_oi, pe_oi = {}, {}, {}, {}
     spot = None
     for row in data:
         s = float(row.get("strike_price", 0))
@@ -244,12 +244,35 @@ def parse_chain(data):
         p = (row.get("put_options")  or {}).get("market_data") or {}
         ce_map[s] = float(c.get("ltp") or 0)
         pe_map[s] = float(p.get("ltp") or 0)
+        ce_oi[s]  = float(c.get("oi")  or 0)
+        pe_oi[s]  = float(p.get("oi")  or 0)
     if spot is None:
         common = set(ce_map) & set(pe_map)
         if common:
             spot = float(min(common, key=lambda s: abs(ce_map[s] - pe_map[s])))
     atm = int(round(spot / STEP) * STEP) if spot else 0
-    return spot, atm, ce_map, pe_map
+    return spot, atm, ce_map, pe_map, ce_oi, pe_oi
+
+
+def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, atm, n_strikes=10):
+    """
+    PCR  = sum(PE OI) / sum(CE OI)  within ATM ± n_strikes.
+    SPCL = ATM CE LTP + ATM PE LTP  (near-expiry straddle value).
+    Returns (pcr, total_ce_oi, total_pe_oi, spcl_val, sentiment_label).
+    """
+    strikes = [atm + i * STEP for i in range(-n_strikes, n_strikes + 1)]
+    tot_ce  = sum(ce_oi.get(float(s), 0) for s in strikes)
+    tot_pe  = sum(pe_oi.get(float(s), 0) for s in strikes)
+    pcr     = (tot_pe / tot_ce) if tot_ce > 0 else 0.0
+    spcl    = ce_map.get(float(atm), 0) + pe_map.get(float(atm), 0)
+
+    if   pcr >= 1.3: sentiment = ("VERY BULLISH", "var(--bull)")
+    elif pcr >= 1.1: sentiment = ("BULLISH",      "var(--bull)")
+    elif pcr >= 0.9: sentiment = ("NEUTRAL",       "var(--gold)")
+    elif pcr >= 0.7: sentiment = ("BEARISH",       "var(--bear)")
+    else:            sentiment = ("VERY BEARISH",  "var(--bear)")
+
+    return pcr, tot_ce, tot_pe, spcl, sentiment
 
 
 def fetch_vix(tok):
@@ -551,8 +574,8 @@ if ne or not near_raw:
 if fe or not far_raw:
     st.error(f"Far chain error: {fe}"); st.stop()
 
-spot, atm, near_ce, near_pe = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe  = parse_chain(far_raw)
+spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi = parse_chain(near_raw)
+_,    _,   far_ce,  far_pe,  _far_ce_oi, _far_pe_oi  = parse_chain(far_raw)
 
 # ── VIX fetch (needed before strike selection) ──────────────────────────────
 _open_vix, _curr_vix, _vix_err = fetch_vix(token)
@@ -612,6 +635,65 @@ with r1c1:
 with r1c2:
     st.markdown(f"<div class='card card-gold'><div class='lbl'>ATM Strike</div>"
                 f"<div class='val-big val-gold'>{atm}</div></div>", unsafe_allow_html=True)
+
+# Row 1b — PCR + SPCL (near chain)
+_pcr, _tot_ce_oi, _tot_pe_oi, _spcl, (_sent_lbl, _sent_col) = \
+    calc_pcr_spcl(near_ce, near_pe, near_ce_oi, near_pe_oi, atm)
+_prev_pcr  = st.session_state.get("prev_pcr", _pcr)
+st.session_state["prev_pcr"] = _pcr
+_pcr_delta = _pcr - _prev_pcr
+_pcr_arrow = (f"<span style='color:var(--bull);'>↑{_pcr:.2f}</span>" if _pcr_delta > 0.01
+              else (f"<span style='color:var(--bear);'>↓{_pcr:.2f}</span>" if _pcr_delta < -0.01
+                    else f"<span style='color:var(--muted);'>→{_pcr:.2f}</span>"))
+_pcr_has_oi = _tot_ce_oi > 0
+
+pb1, pb2, pb3 = st.columns(3)
+with pb1:
+    if _pcr_has_oi:
+        st.markdown(
+            f"<div class='card' style='border-left:4px solid {_sent_col};'>"
+            f"<div class='lbl'>PCR OI &nbsp;·&nbsp; ATM±10 strikes</div>"
+            f"<div style='display:flex;align-items:baseline;gap:10px;'>"
+            f"<span class='val-big' style='color:{_sent_col};'>{_pcr:.2f}</span>"
+            f"<span style='font-family:var(--mono);font-size:11px;font-weight:700;"
+            f"background:{_sent_col};color:var(--text-inv);border-radius:3px;padding:1px 6px;'>"
+            f"{_sent_lbl}</span></div>"
+            f"<div class='lbl' style='margin-top:4px;'>"
+            f"prev {_prev_pcr:.2f} {_pcr_arrow} &nbsp;·&nbsp; "
+            f"CE OI {_tot_ce_oi/1e5:.1f}L &nbsp;·&nbsp; PE OI {_tot_pe_oi/1e5:.1f}L"
+            f"</div></div>",
+            unsafe_allow_html=True)
+    else:
+        st.markdown(
+            f"<div class='card'><div class='lbl'>PCR OI</div>"
+            f"<div class='val-big val-muted' style='color:var(--muted);'>N/A</div>"
+            f"<div class='lbl'>OI not in feed</div></div>",
+            unsafe_allow_html=True)
+with pb2:
+    _atm_ce = near_ce.get(float(atm), 0)
+    _atm_pe = near_pe.get(float(atm), 0)
+    st.markdown(
+        f"<div class='card card-gold'>"
+        f"<div class='lbl'>SPCL VAL &nbsp;·&nbsp; ATM Straddle ({near_exp})</div>"
+        f"<div class='val-big val-gold'>{_spcl:.2f}</div>"
+        f"<div class='lbl'>"
+        f"CE {atm}: <b style='color:var(--ce);'>₹{_atm_ce:.2f}</b> &nbsp;+&nbsp; "
+        f"PE {atm}: <b style='color:var(--pe);'>₹{_atm_pe:.2f}</b>"
+        f"</div></div>",
+        unsafe_allow_html=True)
+with pb3:
+    _atm_ce_sell = near_ce.get(float(sell_ce_strike), 0)
+    _atm_pe_sell = near_pe.get(float(sell_pe_strike), 0)
+    _strangle_val = _atm_ce_sell + _atm_pe_sell
+    st.markdown(
+        f"<div class='card' style='border-left:4px solid var(--bear);'>"
+        f"<div class='lbl'>Sell Strangle Premium</div>"
+        f"<div class='val-big val-bear'>₹{_strangle_val:.2f}</div>"
+        f"<div class='lbl'>"
+        f"CE <span class='strike-pill-ce'>{sell_ce_strike}</span> ₹{_atm_ce_sell:.2f} &nbsp;+&nbsp; "
+        f"PE <span class='strike-pill'>{sell_pe_strike}</span> ₹{_atm_pe_sell:.2f}"
+        f"</div></div>",
+        unsafe_allow_html=True)
 
 # Row 2 — CE legs
 r2c1, r2c2 = st.columns(2)
