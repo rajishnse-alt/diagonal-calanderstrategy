@@ -153,8 +153,8 @@ INSTRUMENT_KEY  = "NSE_INDEX|Nifty 50"
 UPSTOX_AUTH_URL = "https://api.upstox.com/v2/login/authorization/dialog"
 UPSTOX_TOKEN_URL= "https://api.upstox.com/v2/login/authorization/token"
 UPSTOX_OC_URLS  = [
-    "https://api.upstox.com/v3/option/chain",
-    "https://api.upstox.com/v2/option/chain",
+    "https://api.upstox.com/v2/option/chain",   # v2 returns OI in market_data
+    "https://api.upstox.com/v3/option/chain",   # v3 fallback (OI may differ)
 ]
 UPSTOX_CONTRACT_URL = "https://api.upstox.com/v2/option/contract"
 
@@ -710,12 +710,6 @@ with pb1:
             f"<div class='val-big' style='color:var(--muted);'>N/A</div>"
             f"<div class='lbl'>OI not available in feed</div></div>",
             unsafe_allow_html=True)
-        # Debug: show raw market_data keys for ATM strike to diagnose field names
-        _dbg_row = next((r for r in near_raw if abs(float(r.get("strike_price",0)) - atm) < 1), None)
-        if _dbg_row:
-            _dbg_c = (_dbg_row.get("call_options") or {}).get("market_data") or {}
-            with st.expander("🔍 Debug: raw market_data keys (ATM CE)", expanded=False):
-                st.json({k: v for k, v in _dbg_c.items()})
 with pb2:
     if _spcl is not None:
         _spcl_col   = "var(--bull)" if _spcl > 0 else "var(--muted)"
