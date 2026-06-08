@@ -231,6 +231,17 @@ def fetch_chain(tok, expiry):
     return None, "Chain fetch failed"
 
 
+def _get_oi(md):
+    """Try every known Upstox field name for open interest."""
+    for key in ("oi", "open_interest", "openInterest", "open_int", "OI"):
+        v = md.get(key)
+        if v is not None:
+            try:
+                return float(v)
+            except Exception:
+                pass
+    return 0.0
+
 def _get_oi_chg(md):
     """Try every known Upstox field name for intraday OI change."""
     for key in ("oi_day_change", "change_oi", "day_change_oi", "oi_change", "oiChange", "changeOi"):
@@ -256,8 +267,8 @@ def parse_chain(data):
         p = (row.get("put_options")  or {}).get("market_data") or {}
         ce_map[s]     = float(c.get("ltp") or 0)
         pe_map[s]     = float(p.get("ltp") or 0)
-        ce_oi[s]      = float(c.get("oi")  or 0)
-        pe_oi[s]      = float(p.get("oi")  or 0)
+        ce_oi[s]      = _get_oi(c)
+        pe_oi[s]      = _get_oi(p)
         ce_oi_chg[s]  = _get_oi_chg(c)
         pe_oi_chg[s]  = _get_oi_chg(p)
     if spot is None:
@@ -699,6 +710,12 @@ with pb1:
             f"<div class='val-big' style='color:var(--muted);'>N/A</div>"
             f"<div class='lbl'>OI not available in feed</div></div>",
             unsafe_allow_html=True)
+        # Debug: show raw market_data keys for ATM strike to diagnose field names
+        _dbg_row = next((r for r in near_raw if abs(float(r.get("strike_price",0)) - atm) < 1), None)
+        if _dbg_row:
+            _dbg_c = (_dbg_row.get("call_options") or {}).get("market_data") or {}
+            with st.expander("🔍 Debug: raw market_data keys (ATM CE)", expanded=False):
+                st.json({k: v for k, v in _dbg_c.items()})
 with pb2:
     if _spcl is not None:
         _spcl_col   = "var(--bull)" if _spcl > 0 else "var(--muted)"
