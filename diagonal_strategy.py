@@ -328,9 +328,11 @@ def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ra
         if sell_ltp <= 0:
             continue
         cands = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n)
-        if cands and cands[0]["ltp"] <= sell_ltp:
+        # Sell LTP must be at least (100/ltp_ratio_pct)× the long LTP
+        # e.g. ratio=50% → sell must be ≥ 2× long
+        if cands and cands[0]["ltp"] <= sell_ltp * ltp_ratio_pct / 100:
             return steps, int(sell_strike), sell_ltp, cands, (steps != base_steps)
-    # Fallback — return base even if still inverted
+    # Fallback — return base even if ratio still not met
     sell_strike = (atm + base_steps * STEP) if opt_type == "CE" else (atm - base_steps * STEP)
     sell_ltp    = near_map.get(float(sell_strike), 0)
     cands       = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n)
