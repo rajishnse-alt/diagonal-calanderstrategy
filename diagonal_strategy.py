@@ -231,8 +231,20 @@ def fetch_chain(tok, expiry):
     return None, "Chain fetch failed"
 
 
+def _get_oi_chg(md):
+    """Try every known Upstox field name for intraday OI change."""
+    for key in ("oi_day_change", "change_oi", "day_change_oi", "oi_change", "oiChange", "changeOi"):
+        v = md.get(key)
+        if v is not None:
+            try:
+                return float(v)
+            except Exception:
+                pass
+    return 0.0
+
+
 def parse_chain(data):
-    ce_map, pe_map, ce_oi, pe_oi = {}, {}, {}, {}
+    ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg = {}, {}, {}, {}, {}, {}
     spot = None
     for row in data:
         s = float(row.get("strike_price", 0))
@@ -242,29 +254,45 @@ def parse_chain(data):
                 spot = float(sp)
         c = (row.get("call_options") or {}).get("market_data") or {}
         p = (row.get("put_options")  or {}).get("market_data") or {}
-        ce_map[s] = float(c.get("ltp") or 0)
-        pe_map[s] = float(p.get("ltp") or 0)
-        ce_oi[s]  = float(c.get("oi")  or 0)
-        pe_oi[s]  = float(p.get("oi")  or 0)
+        ce_map[s]     = float(c.get("ltp") or 0)
+        pe_map[s]     = float(p.get("ltp") or 0)
+        ce_oi[s]      = float(c.get("oi")  or 0)
+        pe_oi[s]      = float(p.get("oi")  or 0)
+        ce_oi_chg[s]  = _get_oi_chg(c)
+        pe_oi_chg[s]  = _get_oi_chg(p)
     if spot is None:
         common = set(ce_map) & set(pe_map)
         if common:
             spot = float(min(common, key=lambda s: abs(ce_map[s] - pe_map[s])))
     atm = int(round(spot / STEP) * STEP) if spot else 0
-    return spot, atm, ce_map, pe_map, ce_oi, pe_oi
+    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg
 
 
-def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, atm, n_strikes=10):
+def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=10):
     """
-    PCR  = sum(PE OI) / sum(CE OI)  within ATM ± n_strikes.
-    SPCL = ATM CE LTP + ATM PE LTP  (near-expiry straddle value).
-    Returns (pcr, total_ce_oi, total_pe_oi, spcl_val, sentiment_label).
+    PCR      = sum(PE OI) / sum(CE OI)  within ATM ± n_strikes.
+    PCR_CHG  = sum(PE OI change) / sum(CE OI change)  — shows intraday build-up direction.
+    SPCL VAL = (base + (base - sqrt(vix_open))) / 2
+               where base = sqrt(ce_atm + pe_atm) * π / 2
+    Sentiment uses contrarian scale: high PCR → more puts → bullish contrarian signal.
     """
-    strikes = [atm + i * STEP for i in range(-n_strikes, n_strikes + 1)]
-    tot_ce  = sum(ce_oi.get(float(s), 0) for s in strikes)
-    tot_pe  = sum(pe_oi.get(float(s), 0) for s in strikes)
-    pcr     = (tot_pe / tot_ce) if tot_ce > 0 else 0.0
-    spcl    = ce_map.get(float(atm), 0) + pe_map.get(float(atm), 0)
+    strikes     = [atm + i * STEP for i in range(-n_strikes, n_strikes + 1)]
+    tot_ce      = sum(ce_oi.get(float(s), 0)     for s in strikes)
+    tot_pe      = sum(pe_oi.get(float(s), 0)     for s in strikes)
+    tot_ce_chg  = sum(max(ce_oi_chg.get(float(s), 0), 0) for s in strikes)
+    tot_pe_chg  = sum(max(pe_oi_chg.get(float(s), 0), 0) for s in strikes)
+
+    pcr     = (tot_pe / tot_ce)         if tot_ce     > 0 else 0.0
+    pcr_chg = (tot_pe_chg / tot_ce_chg) if tot_ce_chg > 0 else 0.0
+
+    # SPCL VAL — exact formula from atm_tracker
+    ce_atm  = ce_map.get(float(atm), 0)
+    pe_atm  = pe_map.get(float(atm), 0)
+    spcl    = None
+    if ce_atm and pe_atm and vix_day_open:
+        base_spcl = (math.sqrt(ce_atm + pe_atm) * math.pi) / 2
+        vix_sqrt  = math.sqrt(vix_day_open)
+        spcl      = (base_spcl + (base_spcl - vix_sqrt)) / 2
 
     if   pcr >= 1.3: sentiment = ("VERY BULLISH", "var(--bull)")
     elif pcr >= 1.1: sentiment = ("BULLISH",      "var(--bull)")
@@ -272,7 +300,7 @@ def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, atm, n_strikes=10):
     elif pcr >= 0.7: sentiment = ("BEARISH",       "var(--bear)")
     else:            sentiment = ("VERY BEARISH",  "var(--bear)")
 
-    return pcr, tot_ce, tot_pe, spcl, sentiment
+    return pcr, pcr_chg, tot_ce, tot_pe, spcl, ce_atm, pe_atm, sentiment
 
 
 def fetch_vix(tok):
@@ -574,8 +602,8 @@ if ne or not near_raw:
 if fe or not far_raw:
     st.error(f"Far chain error: {fe}"); st.stop()
 
-spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe,  _far_ce_oi, _far_pe_oi  = parse_chain(far_raw)
+spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg = parse_chain(near_raw)
+_,    _,   far_ce,  far_pe,  _,          _,           _,              _               = parse_chain(far_raw)
 
 # ── VIX fetch (needed before strike selection) ──────────────────────────────
 _open_vix, _curr_vix, _vix_err = fetch_vix(token)
@@ -636,62 +664,75 @@ with r1c2:
     st.markdown(f"<div class='card card-gold'><div class='lbl'>ATM Strike</div>"
                 f"<div class='val-big val-gold'>{atm}</div></div>", unsafe_allow_html=True)
 
-# Row 1b — PCR + SPCL (near chain)
-_pcr, _tot_ce_oi, _tot_pe_oi, _spcl, (_sent_lbl, _sent_col) = \
-    calc_pcr_spcl(near_ce, near_pe, near_ce_oi, near_pe_oi, atm)
-_prev_pcr  = st.session_state.get("prev_pcr", _pcr)
+# Row 1b — PCR + SPCL (near chain, using exact atm_tracker formulas)
+_pcr, _pcr_chg, _tot_ce_oi, _tot_pe_oi, _spcl, _atm_ce, _atm_pe, (_sent_lbl, _sent_col) = \
+    calc_pcr_spcl(near_ce, near_pe, near_ce_oi, near_pe_oi,
+                  near_ce_oi_chg, near_pe_oi_chg, atm,
+                  vix_day_open=_open_vix if _vix_ok else None)
+_prev_pcr = st.session_state.get("prev_pcr", _pcr)
 st.session_state["prev_pcr"] = _pcr
 _pcr_delta = _pcr - _prev_pcr
-_pcr_arrow = (f"<span style='color:var(--bull);'>↑{_pcr:.2f}</span>" if _pcr_delta > 0.01
-              else (f"<span style='color:var(--bear);'>↓{_pcr:.2f}</span>" if _pcr_delta < -0.01
-                    else f"<span style='color:var(--muted);'>→{_pcr:.2f}</span>"))
 _pcr_has_oi = _tot_ce_oi > 0
 
 pb1, pb2, pb3 = st.columns(3)
 with pb1:
     if _pcr_has_oi:
+        _pcr_dir_col = "var(--bull)" if _pcr_delta > 0.01 else ("var(--bear)" if _pcr_delta < -0.01 else "var(--muted)")
+        _pcr_dir_sym = "↑" if _pcr_delta > 0.01 else ("↓" if _pcr_delta < -0.01 else "→")
         st.markdown(
             f"<div class='card' style='border-left:4px solid {_sent_col};'>"
             f"<div class='lbl'>PCR OI &nbsp;·&nbsp; ATM±10 strikes</div>"
-            f"<div style='display:flex;align-items:baseline;gap:10px;'>"
+            f"<div style='display:flex;align-items:baseline;gap:10px;margin:.25rem 0;'>"
             f"<span class='val-big' style='color:{_sent_col};'>{_pcr:.2f}</span>"
             f"<span style='font-family:var(--mono);font-size:11px;font-weight:700;"
-            f"background:{_sent_col};color:var(--text-inv);border-radius:3px;padding:1px 6px;'>"
-            f"{_sent_lbl}</span></div>"
-            f"<div class='lbl' style='margin-top:4px;'>"
-            f"prev {_prev_pcr:.2f} {_pcr_arrow} &nbsp;·&nbsp; "
-            f"CE OI {_tot_ce_oi/1e5:.1f}L &nbsp;·&nbsp; PE OI {_tot_pe_oi/1e5:.1f}L"
+            f"background:{_sent_col};color:var(--text-inv);border-radius:3px;padding:2px 7px;'>{_sent_lbl}</span>"
+            f"</div>"
+            f"<div class='lbl'>"
+            f"<span style='color:{_pcr_dir_col};font-weight:700;'>{_pcr_chg:.2f}{_pcr_dir_sym}{_pcr:.2f}</span>"
+            f" &nbsp;·&nbsp; CE:ATM+10 | PE:ATM-10<br>"
+            f"CE OI <b>{_tot_ce_oi/1e5:.1f}L</b> &nbsp;·&nbsp; PE OI <b>{_tot_pe_oi/1e5:.1f}L</b>"
             f"</div></div>",
             unsafe_allow_html=True)
     else:
         st.markdown(
             f"<div class='card'><div class='lbl'>PCR OI</div>"
-            f"<div class='val-big val-muted' style='color:var(--muted);'>N/A</div>"
-            f"<div class='lbl'>OI not in feed</div></div>",
+            f"<div class='val-big' style='color:var(--muted);'>N/A</div>"
+            f"<div class='lbl'>OI not available in feed</div></div>",
             unsafe_allow_html=True)
 with pb2:
-    _atm_ce = near_ce.get(float(atm), 0)
-    _atm_pe = near_pe.get(float(atm), 0)
-    st.markdown(
-        f"<div class='card card-gold'>"
-        f"<div class='lbl'>SPCL VAL &nbsp;·&nbsp; ATM Straddle ({near_exp})</div>"
-        f"<div class='val-big val-gold'>{_spcl:.2f}</div>"
-        f"<div class='lbl'>"
-        f"CE {atm}: <b style='color:var(--ce);'>₹{_atm_ce:.2f}</b> &nbsp;+&nbsp; "
-        f"PE {atm}: <b style='color:var(--pe);'>₹{_atm_pe:.2f}</b>"
-        f"</div></div>",
-        unsafe_allow_html=True)
+    if _spcl is not None:
+        _spcl_col   = "var(--bull)" if _spcl > 0 else "var(--muted)"
+        st.markdown(
+            f"<div class='card card-gold'>"
+            f"<div class='lbl'>SPCL VAL &nbsp;·&nbsp; (√(CE+PE)×π/2 adj VIX)</div>"
+            f"<div class='val-big val-gold'>{_spcl:.2f}</div>"
+            f"<div class='lbl'>"
+            f"ATM CE <b style='color:var(--ce);'>₹{_atm_ce:.2f}</b> &nbsp;+&nbsp; "
+            f"ATM PE <b style='color:var(--pe);'>₹{_atm_pe:.2f}</b> &nbsp;·&nbsp; "
+            f"<span class='strike-pill-ce'>{atm}</span>"
+            f"</div></div>",
+            unsafe_allow_html=True)
+    else:
+        _straddle = _atm_ce + _atm_pe
+        st.markdown(
+            f"<div class='card card-gold'>"
+            f"<div class='lbl'>ATM Straddle (VIX unavailable for SPCL)</div>"
+            f"<div class='val-big val-gold'>{_straddle:.2f}</div>"
+            f"<div class='lbl'>"
+            f"CE <b style='color:var(--ce);'>₹{_atm_ce:.2f}</b> + PE <b style='color:var(--pe);'>₹{_atm_pe:.2f}</b>"
+            f"</div></div>",
+            unsafe_allow_html=True)
 with pb3:
-    _atm_ce_sell = near_ce.get(float(sell_ce_strike), 0)
-    _atm_pe_sell = near_pe.get(float(sell_pe_strike), 0)
-    _strangle_val = _atm_ce_sell + _atm_pe_sell
+    _sell_ce_ltp2 = near_ce.get(float(sell_ce_strike), 0)
+    _sell_pe_ltp2 = near_pe.get(float(sell_pe_strike), 0)
+    _strangle_val = _sell_ce_ltp2 + _sell_pe_ltp2
     st.markdown(
         f"<div class='card' style='border-left:4px solid var(--bear);'>"
         f"<div class='lbl'>Sell Strangle Premium</div>"
         f"<div class='val-big val-bear'>₹{_strangle_val:.2f}</div>"
         f"<div class='lbl'>"
-        f"CE <span class='strike-pill-ce'>{sell_ce_strike}</span> ₹{_atm_ce_sell:.2f} &nbsp;+&nbsp; "
-        f"PE <span class='strike-pill'>{sell_pe_strike}</span> ₹{_atm_pe_sell:.2f}"
+        f"CE <span class='strike-pill-ce'>{sell_ce_strike}</span> ₹{_sell_ce_ltp2:.2f} &nbsp;+&nbsp; "
+        f"PE <span class='strike-pill'>{sell_pe_strike}</span> ₹{_sell_pe_ltp2:.2f}"
         f"</div></div>",
         unsafe_allow_html=True)
 
