@@ -14,6 +14,9 @@ import streamlit as st
 import requests
 import math
 import time
+import base64
+import csv
+import io
 from datetime import datetime, timedelta
 import pytz
 
@@ -157,6 +160,113 @@ UPSTOX_OC_URLS  = [
     "https://api.upstox.com/v3/option/chain",   # v3 fallback (OI may differ)
 ]
 UPSTOX_CONTRACT_URL = "https://api.upstox.com/v2/option/contract"
+
+# ── GitHub PCR log ──────────────────────────────────────────────────────────
+GITHUB_OWNER    = "rajishnse-alt"
+GITHUB_REPO     = "diagonal-calanderstrategy"
+GITHUB_BRANCH   = "main"
+PCR_CSV_PATH    = "pcr_data/pcr_log.csv"
+PCR_RETENTION   = 35   # days to keep
+PCR_LOG_INTERVAL= 300  # seconds between writes (5 min)
+PCR_COLUMNS     = [
+    "timestamp","date","expiry_type","expiry","spot","atm",
+    "pcr_range","pcr_atm","ce_oi_L","pe_oi_L","atm_ce_oi_L","atm_pe_oi_L",
+    "pcr_chg","vix_open","vix_curr","spcl",
+]
+
+
+def _gh_hdr(tok):
+    return {"Authorization": f"token {tok}",
+            "Accept": "application/vnd.github.v3+json"}
+
+
+def gh_get_csv(gh_tok):
+    """Fetch PCR CSV from GitHub. Returns (csv_text, sha) or (None, None) on error."""
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+            f"/contents/{PCR_CSV_PATH}",
+            headers=_gh_hdr(gh_tok),
+            params={"ref": GITHUB_BRANCH},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            d = r.json()
+            text = base64.b64decode(d["content"]).decode("utf-8")
+            return text, d["sha"]
+        if r.status_code == 404:
+            return "", None          # file doesn't exist yet — create it
+    except Exception:
+        pass
+    return None, None                # network / auth error
+
+
+def gh_put_csv(gh_tok, content, sha, msg):
+    """Write CSV to GitHub. sha=None creates the file."""
+    try:
+        payload = {
+            "message": msg,
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+            f"/contents/{PCR_CSV_PATH}",
+            json=payload,
+            headers=_gh_hdr(gh_tok),
+            timeout=30,
+        )
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
+def append_pcr_log(gh_tok, new_rows):
+    """
+    Append new_rows (list of dicts) to the GitHub PCR CSV.
+    Prunes entries older than PCR_RETENTION days.
+    Returns True on success.
+    """
+    existing, sha = gh_get_csv(gh_tok)
+    if existing is None:
+        return False            # API error; skip silently
+
+    cutoff = datetime.now(IST).date() - timedelta(days=PCR_RETENTION)
+    kept   = []
+    if existing.strip():
+        for row in csv.DictReader(io.StringIO(existing)):
+            try:
+                if datetime.strptime(row["date"], "%Y-%m-%d").date() >= cutoff:
+                    kept.append(row)
+            except Exception:
+                pass
+
+    # Deduplicate: skip rows whose (timestamp, expiry) already exist
+    seen = {(r["timestamp"], r["expiry"]) for r in kept}
+    for row in new_rows:
+        if (row["timestamp"], row["expiry"]) not in seen:
+            kept.append(row)
+
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=PCR_COLUMNS, extrasaction="ignore")
+    w.writeheader()
+    w.writerows(kept)
+
+    ts_label = datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
+    return gh_put_csv(gh_tok, buf.getvalue(), sha, f"PCR log {ts_label}")
+
+
+def load_pcr_history(gh_tok):
+    """Return list-of-dicts from the GitHub PCR CSV, or [] on error."""
+    text, _ = gh_get_csv(gh_tok)
+    if not text:
+        return []
+    try:
+        return list(csv.DictReader(io.StringIO(text)))
+    except Exception:
+        return []
 
 
 # ─────────────────────────────────────────────
@@ -614,7 +724,7 @@ if fe or not far_raw:
     st.error(f"Far chain error: {fe}"); st.stop()
 
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe,  _,          _,           _,              _               = parse_chain(far_raw)
+_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg  = parse_chain(far_raw)
 
 # ── VIX fetch (needed before strike selection) ──────────────────────────────
 _open_vix, _curr_vix, _vix_err = fetch_vix(token)
@@ -687,16 +797,85 @@ except Exception as _pcr_ex:
     _spcl = None
     _sent_lbl, _sent_col = "N/A", "var(--muted)"
 
+# Far chain PCR (no SPCL/VIX adjustment needed)
+try:
+    _far_pcr, _far_pcr_chg, _far_tot_ce_oi, _far_tot_pe_oi, _, _far_atm_ce, _far_atm_pe, (_far_sent_lbl, _far_sent_col) = \
+        calc_pcr_spcl(far_ce, far_pe, far_ce_oi, far_pe_oi,
+                      far_ce_oi_chg, far_pe_oi_chg, atm)
+except Exception:
+    _far_pcr = _far_pcr_chg = _far_tot_ce_oi = _far_tot_pe_oi = _far_atm_ce = _far_atm_pe = 0.0
+    _far_sent_lbl, _far_sent_col = "N/A", "var(--muted)"
+
 _prev_pcr = st.session_state.get("prev_pcr", _pcr)
 st.session_state["prev_pcr"] = _pcr
 _pcr_delta = _pcr - _prev_pcr
 _pcr_has_oi = _tot_ce_oi > 0
 
 # ATM-specific OI (single strike)
-_atm_ce_oi = near_ce_oi.get(float(atm), 0)
-_atm_pe_oi = near_pe_oi.get(float(atm), 0)
-_atm_pcr   = (_atm_pe_oi / _atm_ce_oi) if _atm_ce_oi > 0 else 0.0
-_atm_has_oi = _atm_ce_oi > 0
+_atm_ce_oi     = near_ce_oi.get(float(atm), 0)
+_atm_pe_oi     = near_pe_oi.get(float(atm), 0)
+_atm_pcr       = (_atm_pe_oi / _atm_ce_oi) if _atm_ce_oi > 0 else 0.0
+_atm_has_oi    = _atm_ce_oi > 0
+_far_atm_ce_oi = far_ce_oi.get(float(atm), 0)
+_far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
+_far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
+
+# ── PCR logging to GitHub CSV (throttled: market hours, once per 5 min) ─────
+_gh_tok = None
+try:
+    _gh_tok = st.secrets["github"]["token"]
+except Exception:
+    pass
+
+_pcr_log_ok = (
+    _gh_tok
+    and mkt_open
+    and _pcr_has_oi
+    and (time.time() - st.session_state.get("_pcr_last_write", 0) > PCR_LOG_INTERVAL)
+)
+if _pcr_log_ok:
+    _ts_str   = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+    _date_str = datetime.now(IST).strftime("%Y-%m-%d")
+    _pcr_rows = [
+        {
+            "timestamp":   _ts_str,
+            "date":        _date_str,
+            "expiry_type": "near",
+            "expiry":      near_exp,
+            "spot":        f"{spot:.2f}",
+            "atm":         atm,
+            "pcr_range":   f"{_pcr:.4f}",
+            "pcr_atm":     f"{_atm_pcr:.4f}",
+            "ce_oi_L":     f"{_tot_ce_oi/1e5:.3f}",
+            "pe_oi_L":     f"{_tot_pe_oi/1e5:.3f}",
+            "atm_ce_oi_L": f"{_atm_ce_oi/1e5:.3f}",
+            "atm_pe_oi_L": f"{_atm_pe_oi/1e5:.3f}",
+            "pcr_chg":     f"{_pcr_chg:.4f}",
+            "vix_open":    f"{_open_vix:.2f}" if _vix_ok else "",
+            "vix_curr":    f"{_curr_vix:.2f}" if _vix_ok else "",
+            "spcl":        f"{_spcl:.4f}" if _spcl else "",
+        },
+        {
+            "timestamp":   _ts_str,
+            "date":        _date_str,
+            "expiry_type": "far",
+            "expiry":      far_exp,
+            "spot":        f"{spot:.2f}",
+            "atm":         atm,
+            "pcr_range":   f"{_far_pcr:.4f}",
+            "pcr_atm":     f"{_far_atm_pcr:.4f}",
+            "ce_oi_L":     f"{_far_tot_ce_oi/1e5:.3f}",
+            "pe_oi_L":     f"{_far_tot_pe_oi/1e5:.3f}",
+            "atm_ce_oi_L": f"{_far_atm_ce_oi/1e5:.3f}",
+            "atm_pe_oi_L": f"{_far_atm_pe_oi/1e5:.3f}",
+            "pcr_chg":     f"{_far_pcr_chg:.4f}",
+            "vix_open":    f"{_open_vix:.2f}" if _vix_ok else "",
+            "vix_curr":    f"{_curr_vix:.2f}" if _vix_ok else "",
+            "spcl":        "",
+        },
+    ]
+    if append_pcr_log(_gh_tok, _pcr_rows):
+        st.session_state["_pcr_last_write"] = time.time()
 
 pb1, pb2, pb3 = st.columns(3)
 with pb1:
@@ -1255,6 +1434,188 @@ st.markdown(
     f"</span></div>",
     unsafe_allow_html=True,
 )
+
+# ─────────────────────────────────────────────
+# PCR HISTORY
+# ─────────────────────────────────────────────
+st.markdown("<div class='sec-hdr'>📈 PCR History</div>", unsafe_allow_html=True)
+
+if not _gh_tok:
+    st.info("💡 Add `[github] token` to Streamlit secrets to enable PCR logging and history.")
+else:
+    # Load history (cached in session for the auto-refresh cycle — refresh from GitHub every 15 min)
+    _hist_age = time.time() - st.session_state.get("_pcr_hist_ts", 0)
+    if _hist_age > 900 or "pcr_hist_rows" not in st.session_state:
+        st.session_state["pcr_hist_rows"] = load_pcr_history(_gh_tok)
+        st.session_state["_pcr_hist_ts"]  = time.time()
+    _hist_rows = st.session_state.get("pcr_hist_rows", [])
+
+    _today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    _near_hist = [r for r in _hist_rows
+                  if r.get("date") == _today_str and r.get("expiry") == near_exp
+                  and r.get("expiry_type") == "near"]
+    _far_hist  = [r for r in _hist_rows
+                  if r.get("date") == _today_str and r.get("expiry") == far_exp
+                  and r.get("expiry_type") == "far"]
+
+    # ── Intraday SVG chart ────────────────────────────────────────────────
+    def _pcr_svg(near_rows, far_rows, width=900, height=200):
+        all_rows   = near_rows + far_rows
+        if not all_rows:
+            return None
+        times_str  = sorted(set(r["timestamp"] for r in all_rows))
+        # Map timestamps to x positions
+        n          = len(times_str)
+        if n == 0:
+            return None
+        t_idx      = {t: i for i, t in enumerate(times_str)}
+        mg         = {"l": 48, "r": 16, "t": 24, "b": 36}
+        pw         = width  - mg["l"] - mg["r"]
+        ph         = height - mg["t"] - mg["b"]
+
+        def safe_f(v):
+            try: return float(v)
+            except: return None
+
+        def _pts(rows):
+            pts = []
+            for r in sorted(rows, key=lambda x: x["timestamp"]):
+                v = safe_f(r.get("pcr_range"))
+                if v is not None:
+                    pts.append((r["timestamp"], v))
+            return pts
+
+        near_pts = _pts(near_rows)
+        far_pts  = _pts(far_rows)
+        all_vals = [v for _, v in near_pts + far_pts]
+        if not all_vals:
+            return None
+
+        ymin = max(0, min(all_vals) - 0.15)
+        ymax = max(all_vals) + 0.15
+
+        def tx(ts): return mg["l"] + (t_idx[ts] / max(n - 1, 1)) * pw
+        def ty(v):  return mg["t"] + ph - ((v - ymin) / max(ymax - ymin, 0.01)) * ph
+
+        svg = [f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+               f'style="width:100%;height:{height}px;background:#0a0e1a;border-radius:8px;'
+               f'border:1px solid #1c2840;">']
+
+        # Grid lines at PCR 1.0 and 1.3
+        for ref_v, ref_col, ref_lbl in [(1.0, "#ffc940", "1.0"), (1.3, "#00e676", "1.3")]:
+            if ymin <= ref_v <= ymax:
+                ry = ty(ref_v)
+                svg.append(f'<line x1="{mg["l"]}" y1="{ry}" x2="{width-mg["r"]}" y2="{ry}" '
+                           f'stroke="{ref_col}" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>')
+                svg.append(f'<text x="{mg["l"]-4}" y="{ry+4}" font-size="9" fill="{ref_col}" '
+                           f'text-anchor="end">{ref_lbl}</text>')
+
+        # Y-axis label
+        svg.append(f'<text x="12" y="{mg["t"] + ph//2}" font-size="9" fill="#5a7090" '
+                   f'text-anchor="middle" transform="rotate(-90,12,{mg["t"]+ph//2})">PCR</text>')
+
+        # X-axis ticks (every ~5th label to avoid crowding)
+        step = max(1, n // 8)
+        for i, t in enumerate(times_str):
+            if i % step == 0:
+                x = mg["l"] + (i / max(n - 1, 1)) * pw
+                lbl = t[11:16] if len(t) > 11 else t
+                svg.append(f'<text x="{x}" y="{height - 6}" font-size="8" fill="#4a6080" '
+                           f'text-anchor="middle">{lbl}</text>')
+
+        def _draw_line(pts, col, label):
+            if len(pts) < 2:
+                return
+            coords = " ".join(f"{tx(t)},{ty(v)}" for t, v in pts)
+            svg.append(f'<polyline points="{coords}" fill="none" stroke="{col}" '
+                       f'stroke-width="2" opacity="0.9"/>')
+            # Last point dot + label
+            last_t, last_v = pts[-1]
+            lx, ly = tx(last_t), ty(last_v)
+            svg.append(f'<circle cx="{lx}" cy="{ly}" r="3" fill="{col}"/>')
+            svg.append(f'<text x="{lx+5}" y="{ly+4}" font-size="9" fill="{col}" '
+                       f'font-weight="700">{last_v:.2f}</text>')
+
+        _draw_line(near_pts, "#4d9fff", f"Near {near_exp}")
+        _draw_line(far_pts,  "#cc66ff", f"Far  {far_exp}")
+
+        # Legend
+        svg.append(f'<circle cx="{mg["l"]+10}" cy="{mg["t"]+8}" r="4" fill="#4d9fff"/>')
+        svg.append(f'<text x="{mg["l"]+18}" y="{mg["t"]+12}" font-size="9" fill="#4d9fff">Near {near_exp}</text>')
+        svg.append(f'<circle cx="{mg["l"]+130}" cy="{mg["t"]+8}" r="4" fill="#cc66ff"/>')
+        svg.append(f'<text x="{mg["l"]+138}" y="{mg["t"]+12}" font-size="9" fill="#cc66ff">Far {far_exp}</text>')
+
+        svg.append("</svg>")
+        return "\n".join(svg)
+
+    _chart = _pcr_svg(_near_hist, _far_hist)
+    if _chart:
+        st.markdown(_chart, unsafe_allow_html=True)
+    else:
+        st.caption("No intraday data yet — PCR is recorded every 5 min during market hours.")
+
+    # ── Recent readings table (last 20 near + last 20 far) ────────────────
+    _ph1, _ph2 = st.columns(2)
+    def _pcr_col(v):
+        if v >= 1.1: return "var(--bull)"
+        if v < 0.9:  return "var(--bear)"
+        return "var(--gold)"
+
+    def _hist_table(rows, title, expiry, sent_col):
+        last20 = sorted(rows, key=lambda r: r.get("timestamp", ""), reverse=True)[:20]
+        if not last20:
+            return f"<div class='card'><div class='lbl'>{title}</div><div class='lbl'>No data</div></div>"
+        row_parts = []
+        for r in last20:
+            t_lbl   = r.get("timestamp", "")[-5:] if len(r.get("timestamp","")) >= 5 else r.get("timestamp","")
+            pcr_v   = float(r.get("pcr_range", 0) or 0)
+            atm_v   = float(r.get("pcr_atm",   0) or 0)
+            ce_v    = float(r.get("ce_oi_L",    0) or 0)
+            pe_v    = float(r.get("pe_oi_L",    0) or 0)
+            pcr_c   = _pcr_col(pcr_v)
+            row_parts.append(
+                f"<tr>"
+                f"<td style='padding:2px 6px;font-family:var(--mono);font-size:11px;color:var(--muted);'>{t_lbl}</td>"
+                f"<td style='padding:2px 6px;font-family:var(--mono);font-size:12px;font-weight:700;color:{pcr_c};'>{pcr_v:.2f}</td>"
+                f"<td style='padding:2px 6px;font-family:var(--mono);font-size:11px;color:var(--ce);'>{atm_v:.2f}</td>"
+                f"<td style='padding:2px 6px;font-family:var(--mono);font-size:10px;color:var(--muted);'>{ce_v:.1f}L</td>"
+                f"<td style='padding:2px 6px;font-family:var(--mono);font-size:10px;color:var(--pe);'>{pe_v:.1f}L</td>"
+                f"</tr>"
+            )
+        rows_html = "".join(row_parts)
+        return (
+            f"<div class='card' style='border-left:4px solid {sent_col};'>"
+            f"<div class='lbl'>{title} · <span class='date-pill'>{expiry}</span></div>"
+            f"<table style='width:100%;border-collapse:collapse;margin-top:.4rem;'>"
+            f"<tr>"
+            f"<th style='font-size:9px;color:var(--muted);text-align:left;padding:2px 6px;'>TIME</th>"
+            f"<th style='font-size:9px;color:var(--muted);text-align:left;padding:2px 6px;'>PCR±10</th>"
+            f"<th style='font-size:9px;color:var(--muted);text-align:left;padding:2px 6px;'>ATM PCR</th>"
+            f"<th style='font-size:9px;color:var(--muted);text-align:left;padding:2px 6px;'>CE OI</th>"
+            f"<th style='font-size:9px;color:var(--muted);text-align:left;padding:2px 6px;'>PE OI</th>"
+            f"</tr>"
+            f"{rows_html}"
+            f"</table></div>"
+        )
+
+    with _ph1:
+        st.markdown(_hist_table(_near_hist, "NEAR EXPIRY", near_exp, "var(--ce)"),
+                    unsafe_allow_html=True)
+    with _ph2:
+        st.markdown(_hist_table(_far_hist, "FAR EXPIRY", far_exp, "var(--pe)"),
+                    unsafe_allow_html=True)
+
+    # Multi-day historical chart (last 5 days)
+    with st.expander("📅 Historical PCR (last 5 days)", expanded=False):
+        _hist5_near = [r for r in _hist_rows
+                       if r.get("expiry_type") == "near" and r.get("expiry") == near_exp]
+        _hist5_far  = [r for r in _hist_rows
+                       if r.get("expiry_type") == "far"  and r.get("expiry") == far_exp]
+        _hist5_chart = _pcr_svg(_hist5_near[-200:], _hist5_far[-200:], width=900, height=240)
+        if _hist5_chart:
+            st.markdown(_hist5_chart, unsafe_allow_html=True)
+        else:
+            st.caption("No historical data available yet.")
 
 # ─────────────────────────────────────────────
 # SIDEBAR
