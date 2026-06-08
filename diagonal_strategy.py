@@ -22,72 +22,120 @@ import pytz
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="NIFTY Diagonal Builder", page_icon="📐", layout="wide")
 
-st.markdown("""
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@700;800&display=swap');
-  :root {
+# ── Theme toggle (read before injecting CSS) ───────────────────────────────
+_light_mode = st.session_state.get("light_mode", False)
+
+_dark_vars = """
     --bg:       #080c14; --surface: #0d1321; --border: #1c2840; --border2: #253352;
-    --text:     #c8d8f0; --muted:   #4a6080;
-    --ce:       #2979ff; --pe:      #ab47bc;
+    --text:     #c8d8f0; --muted:   #5a7090; --text-inv:#080c14;
+    --ce:       #4d9fff; --pe:      #cc66ff;
     --bull:     #00e676; --bull-dim:#003318;
     --bear:     #ff5252; --bear-dim:#2a0808;
     --gold:     #ffc940; --gold-dim:#2a1e00;
-    --mono: 'JetBrains Mono', monospace;
-    --hdr:  'Syne', sans-serif;
-  }
-  html,body,.stApp { background:var(--bg)!important; color:var(--text); }
-  .block-container  { padding:.75rem 1.2rem 1rem!important; }
-  h1,h2,h3          { font-family:var(--hdr); color:white; }
-  .sec-hdr {
+    --date-bg:  #0d1a2e; --date-text:#7eb8ff;
+    --strike-bg:#1a0a28; --strike-text:#cc66ff;
+"""
+_light_vars = """
+    --bg:       #f0f4fb; --surface: #ffffff; --border: #d0daea; --border2: #b0c4de;
+    --text:     #1a2540; --muted:   #6a80a0; --text-inv:#ffffff;
+    --ce:       #1565c0; --pe:      #7b1fa2;
+    --bull:     #1b7e42; --bull-dim:#d4f5e2;
+    --bear:     #c62828; --bear-dim:#fde8e8;
+    --gold:     #e65100; --gold-dim:#fff3e0;
+    --date-bg:  #ddeeff; --date-text:#1565c0;
+    --strike-bg:#f3e5f5; --strike-text:#7b1fa2;
+"""
+_theme_vars = _light_vars if _light_mode else _dark_vars
+
+_chain_atm  = "#fdf8e1" if _light_mode else "#1a1400"
+_chain_sell = "#fdecea" if _light_mode else "#1a0808"
+_chain_buy  = "#e8f5e9" if _light_mode else "#003318"
+
+st.markdown(f"""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@700;800&display=swap');
+  :root {{ {_theme_vars} --mono:'JetBrains Mono',monospace; --hdr:'Syne',sans-serif; }}
+  html,body,.stApp {{ background:var(--bg)!important; color:var(--text); }}
+  .block-container  {{ padding:.75rem 1.2rem 1rem!important; }}
+  h1,h2,h3          {{ font-family:var(--hdr); color:var(--text); }}
+  .sec-hdr {{
     font-family:var(--hdr); font-size:11px; font-weight:700;
     color:var(--muted); letter-spacing:2px; text-transform:uppercase;
     margin:1.1rem 0 .45rem; padding-bottom:5px; border-bottom:1px solid var(--border);
-  }
-  .card { background:var(--surface); border:1px solid var(--border);
-          border-radius:10px; padding:.75rem 1rem; margin-bottom:.5rem; }
-  .card-ce   { border-left:3px solid var(--ce); }
-  .card-pe   { border-left:3px solid var(--pe); }
-  .card-bull { border-left:3px solid var(--bull); }
-  .card-gold { border-left:3px solid var(--gold); }
-  .mono { font-family:var(--mono); }
-  .lbl  { color:var(--muted); font-size:10px; letter-spacing:1px; text-transform:uppercase; }
-  .val-big  { font-family:var(--mono); font-size:20px; font-weight:700; color:white; }
-  .val-ce   { color:var(--ce);   font-weight:600; }
-  .val-pe   { color:var(--pe);   font-weight:600; }
-  .val-bull { color:var(--bull); font-weight:700; }
-  .val-bear { color:var(--bear); font-weight:700; }
-  .val-gold { color:var(--gold); font-weight:600; }
-  .tag { display:inline-block; font-size:9px; font-weight:700;
-         padding:2px 7px; border-radius:3px; letter-spacing:.5px; }
-  .tag-sell { background:var(--bear-dim); color:var(--bear); border:1px solid var(--bear); }
-  .tag-buy  { background:var(--bull-dim); color:var(--bull); border:1px solid var(--bull); }
-  .tag-ce   { background:#0d1e40; color:var(--ce); border:1px solid #1a3060; }
-  .tag-pe   { background:#1e0a28; color:var(--pe); border:1px solid #3a1a50; }
-  .chain-table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:11px; }
-  .chain-table th { color:var(--muted); font-size:9px; letter-spacing:1.5px; text-transform:uppercase;
-                    padding:4px 8px; border-bottom:1px solid var(--border); text-align:center; }
-  .chain-table td { padding:5px 8px; border-bottom:1px solid var(--border); text-align:center; }
-  .chain-table .atm-row { background:#1a1400; font-weight:700; }
-  .chain-table .sell-row { background:#1a0808; }
-  .chain-table .buy-row  { background:#003318; }
-  .strike-col { color:var(--muted); }
-  .atm-tag { display:inline-block; background:var(--gold-dim); color:var(--gold);
-             font-size:8px; padding:1px 4px; border-radius:2px; margin-left:4px;
-             font-family:var(--mono); border:1px solid var(--gold); }
-  .sell-tag { display:inline-block; background:var(--bear-dim); color:var(--bear);
-              font-size:8px; padding:1px 4px; border-radius:2px; margin-left:4px;
-              font-family:var(--mono); border:1px solid var(--bear); }
-  .buy-tag  { display:inline-block; background:var(--bull-dim); color:var(--bull);
-              font-size:8px; padding:1px 4px; border-radius:2px; margin-left:4px;
-              font-family:var(--mono); border:1px solid var(--bull); }
-  .login-box { background:var(--surface); border:1px solid var(--border2);
-               border-radius:14px; padding:2.5rem 2rem; text-align:center;
-               max-width:460px; margin:3rem auto; }
-  .err-box { background:#1a0808; border:1px solid #5a1a1a; border-radius:8px;
-             padding:.6rem .9rem; color:#fc8181; font-family:var(--mono); font-size:12px; }
-  #MainMenu,footer,header { visibility:hidden; }
-  div[data-testid="stSelectbox"] label {
-    font-family:var(--mono)!important; font-size:11px!important; color:var(--muted)!important; }
+  }}
+  .card {{ background:var(--surface); border:1px solid var(--border);
+           border-radius:10px; padding:.75rem 1rem; margin-bottom:.5rem; }}
+  .card-ce   {{ border-left:4px solid var(--ce); }}
+  .card-pe   {{ border-left:4px solid var(--pe); }}
+  .card-bull {{ border-left:4px solid var(--bull); }}
+  .card-gold {{ border-left:4px solid var(--gold); }}
+  .mono {{ font-family:var(--mono); }}
+  .lbl  {{ color:var(--muted); font-size:10px; letter-spacing:1px; text-transform:uppercase; }}
+  .val-big  {{ font-family:var(--mono); font-size:20px; font-weight:700; color:var(--text); }}
+  .val-ce   {{ color:var(--ce);   font-weight:700; }}
+  .val-pe   {{ color:var(--pe);   font-weight:700; }}
+  .val-bull {{ color:var(--bull); font-weight:700; }}
+  .val-bear {{ color:var(--bear); font-weight:700; }}
+  .val-gold {{ color:var(--gold); font-weight:700; }}
+
+  /* ── Date & Strike pills ── */
+  .date-pill {{
+    display:inline-block; font-family:var(--mono); font-size:11px; font-weight:700;
+    background:var(--date-bg); color:var(--date-text);
+    border:1px solid var(--ce); border-radius:4px;
+    padding:1px 7px; letter-spacing:.5px;
+  }}
+  .strike-pill {{
+    display:inline-block; font-family:var(--mono); font-size:13px; font-weight:800;
+    background:var(--strike-bg); color:var(--strike-text);
+    border:1px solid var(--pe); border-radius:4px;
+    padding:2px 9px; letter-spacing:.5px;
+  }}
+  .strike-pill-ce {{
+    display:inline-block; font-family:var(--mono); font-size:13px; font-weight:800;
+    background:var(--date-bg); color:var(--ce);
+    border:1px solid var(--ce); border-radius:4px;
+    padding:2px 9px; letter-spacing:.5px;
+  }}
+  .strike-pill-buy {{
+    display:inline-block; font-family:var(--mono); font-size:13px; font-weight:800;
+    background:var(--bull-dim); color:var(--bull);
+    border:1px solid var(--bull); border-radius:4px;
+    padding:2px 9px; letter-spacing:.5px;
+  }}
+
+  .tag {{ display:inline-block; font-size:9px; font-weight:700;
+          padding:2px 7px; border-radius:3px; letter-spacing:.5px; }}
+  .tag-sell {{ background:var(--bear-dim); color:var(--bear); border:1px solid var(--bear); }}
+  .tag-buy  {{ background:var(--bull-dim); color:var(--bull); border:1px solid var(--bull); }}
+  .tag-ce   {{ background:var(--date-bg);  color:var(--ce);   border:1px solid var(--ce); }}
+  .tag-pe   {{ background:var(--strike-bg);color:var(--pe);   border:1px solid var(--pe); }}
+  .chain-table {{ width:100%; border-collapse:collapse; font-family:var(--mono); font-size:11px; }}
+  .chain-table th {{ color:var(--muted); font-size:9px; letter-spacing:1.5px; text-transform:uppercase;
+                     padding:4px 8px; border-bottom:1px solid var(--border); text-align:center; }}
+  .chain-table td {{ padding:5px 8px; border-bottom:1px solid var(--border); text-align:center;
+                     color:var(--text); }}
+  .chain-table .atm-row  {{ background:{_chain_atm};  font-weight:700; }}
+  .chain-table .sell-row {{ background:{_chain_sell}; }}
+  .chain-table .buy-row  {{ background:{_chain_buy};  }}
+  .strike-col {{ color:var(--muted); }}
+  .atm-tag  {{ display:inline-block; background:var(--gold-dim); color:var(--gold);
+               font-size:8px; padding:1px 4px; border-radius:2px; margin-left:4px;
+               font-family:var(--mono); border:1px solid var(--gold); }}
+  .sell-tag {{ display:inline-block; background:var(--bear-dim); color:var(--bear);
+               font-size:8px; padding:1px 4px; border-radius:2px; margin-left:4px;
+               font-family:var(--mono); border:1px solid var(--bear); }}
+  .buy-tag  {{ display:inline-block; background:var(--bull-dim); color:var(--bull);
+               font-size:8px; padding:1px 4px; border-radius:2px; margin-left:4px;
+               font-family:var(--mono); border:1px solid var(--bull); }}
+  .login-box {{ background:var(--surface); border:1px solid var(--border2);
+                border-radius:14px; padding:2.5rem 2rem; text-align:center;
+                max-width:460px; margin:3rem auto; }}
+  .err-box {{ background:var(--bear-dim); border:1px solid var(--bear); border-radius:8px;
+              padding:.6rem .9rem; color:var(--bear); font-family:var(--mono); font-size:12px; }}
+  #MainMenu,footer,header {{ visibility:hidden; }}
+  div[data-testid="stSelectbox"] label {{
+    font-family:var(--mono)!important; font-size:11px!important; color:var(--muted)!important; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -265,6 +313,28 @@ def find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n=8):
                       "target": target, "diff_abs": diff_abs, "diff_pct": diff_pct})
     cands.sort(key=lambda x: x["diff_abs"])
     return cands[:n]
+
+
+def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ratio_pct, n=8):
+    """
+    Walk sell strike toward ATM from base_steps until the best long-leg LTP
+    is <= sell LTP (prevents paying more for the hedge than you collect).
+    CE and PE are adjusted independently.
+    Returns: (final_steps, sell_strike, sell_ltp, candidates, was_adjusted)
+    """
+    for steps in range(base_steps, 0, -1):
+        sell_strike = (atm + steps * STEP) if opt_type == "CE" else (atm - steps * STEP)
+        sell_ltp    = near_map.get(float(sell_strike), 0)
+        if sell_ltp <= 0:
+            continue
+        cands = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n)
+        if cands and cands[0]["ltp"] <= sell_ltp:
+            return steps, int(sell_strike), sell_ltp, cands, (steps != base_steps)
+    # Fallback — return base even if still inverted
+    sell_strike = (atm + base_steps * STEP) if opt_type == "CE" else (atm - base_steps * STEP)
+    sell_ltp    = near_map.get(float(sell_strike), 0)
+    cands       = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n)
+    return base_steps, int(sell_strike), sell_ltp, cands, False
 
 
 def payoff_near_expiry(legs, spot_val, lot_size):
@@ -515,19 +585,17 @@ if st.session_state.get("_last_vix_default") != _vix_default:
 # read the current value from session_state here so strike calc uses it
 short_steps = st.session_state.get("short_steps_val", _vix_default)
 
-# ATM ± short_steps strikes
-sell_ce_strike = atm + short_steps * STEP
-sell_pe_strike = atm - short_steps * STEP
-sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
-sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
+# ─────────────────────────────────────────────
+# AUTO-ADJUST SELL STRIKES — CE and PE independently
+# Walk toward ATM until long LTP <= sell LTP (ratio makes sense)
+# ─────────────────────────────────────────────
+ce_steps, sell_ce_strike, sell_ce_ltp, ce_cands, ce_adjusted = \
+    auto_adjust_sell_strike(short_steps, atm, near_ce, far_ce, "CE", ltp_ratio)
+pe_steps, sell_pe_strike, sell_pe_ltp, pe_cands, pe_adjusted = \
+    auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio)
 
-# ─────────────────────────────────────────────
-# PRE-COMPUTE LONG CANDIDATES (needed for snapshot)
-# ─────────────────────────────────────────────
-ce_cands = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
-pe_cands = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
-best_ce  = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
-best_pe  = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
+best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
+best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
 
 # ─────────────────────────────────────────────
 # MARKET SNAPSHOT
@@ -546,42 +614,67 @@ with r1c2:
 # Row 2 — CE legs
 r2c1, r2c2 = st.columns(2)
 ce_buy_pct = f"{best_ce['ltp']/sell_ce_ltp*100:.0f}% of sell LTP" if sell_ce_ltp > 0 and best_ce['ltp'] > 0 else ""
+_ce_adj_note = f" &nbsp;<span style='color:var(--gold);font-size:9px;'>⚙️ adj from {short_steps}</span>" if ce_adjusted else ""
 with r2c1:
     st.markdown(
         f"<div class='card card-ce'>"
-        f"<div class='lbl'>📅 {near_exp} &nbsp;|&nbsp; CE SELL — ATM+{short_steps}</div>"
+        f"<div class='lbl'>"
+        f"<span class='date-pill'>📅 {near_exp}</span>"
+        f"&nbsp; CE SELL — ATM+{ce_steps}{_ce_adj_note}"
+        f"</div>"
         f"<div class='val-big val-ce'>₹{sell_ce_ltp:.2f}</div>"
-        f"<div class='lbl'>Strike {sell_ce_strike}</div>"
+        f"<div style='margin-top:4px;'><span class='strike-pill-ce'>{sell_ce_strike}</span></div>"
         f"</div>", unsafe_allow_html=True)
 with r2c2:
+    _ce_ratio_ok = best_ce['ltp'] <= sell_ce_ltp
+    _ce_ratio_icon = "✅" if _ce_ratio_ok else "⚠️"
     st.markdown(
-        f"<div class='card' style='border-left:3px solid var(--bull);'>"
-        f"<div class='lbl'>📅 {far_exp} &nbsp;|&nbsp; CE BUY (far) — best match</div>"
-        f"<div class='val-big' style='color:var(--bull);'>₹{best_ce['ltp']:.2f}</div>"
-        f"<div class='lbl'>Strike {int(best_ce['strike'])} &nbsp;·&nbsp; {ce_buy_pct}</div>"
+        f"<div class='card card-bull'>"
+        f"<div class='lbl'>"
+        f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {far_exp}</span>"
+        f"&nbsp; CE BUY (far) — best match"
+        f"</div>"
+        f"<div class='val-big val-bull'>₹{best_ce['ltp']:.2f}</div>"
+        f"<div style='margin-top:4px;'><span class='strike-pill-buy'>{int(best_ce['strike'])}</span>"
+        f"&nbsp;<span class='lbl'>{ce_buy_pct} {_ce_ratio_icon}</span></div>"
         f"</div>", unsafe_allow_html=True)
 
 # Row 3 — PE legs
 r3c1, r3c2 = st.columns(2)
 pe_buy_pct = f"{best_pe['ltp']/sell_pe_ltp*100:.0f}% of sell LTP" if sell_pe_ltp > 0 and best_pe['ltp'] > 0 else ""
+_pe_adj_note = f" &nbsp;<span style='color:var(--gold);font-size:9px;'>⚙️ adj from {short_steps}</span>" if pe_adjusted else ""
 with r3c1:
     st.markdown(
         f"<div class='card card-pe'>"
-        f"<div class='lbl'>📅 {near_exp} &nbsp;|&nbsp; PE SELL — ATM-{short_steps}</div>"
+        f"<div class='lbl'>"
+        f"<span class='date-pill' style='border-color:var(--pe);color:var(--pe);'>📅 {near_exp}</span>"
+        f"&nbsp; PE SELL — ATM-{pe_steps}{_pe_adj_note}"
+        f"</div>"
         f"<div class='val-big val-pe'>₹{sell_pe_ltp:.2f}</div>"
-        f"<div class='lbl'>Strike {sell_pe_strike}</div>"
+        f"<div style='margin-top:4px;'><span class='strike-pill'>{sell_pe_strike}</span></div>"
         f"</div>", unsafe_allow_html=True)
 with r3c2:
+    _pe_ratio_ok = best_pe['ltp'] <= sell_pe_ltp
+    _pe_ratio_icon = "✅" if _pe_ratio_ok else "⚠️"
     st.markdown(
-        f"<div class='card' style='border-left:3px solid var(--bull);'>"
-        f"<div class='lbl'>📅 {far_exp} &nbsp;|&nbsp; PE BUY (far) — best match</div>"
-        f"<div class='val-big' style='color:var(--bull);'>₹{best_pe['ltp']:.2f}</div>"
-        f"<div class='lbl'>Strike {int(best_pe['strike'])} &nbsp;·&nbsp; {pe_buy_pct}</div>"
+        f"<div class='card card-bull'>"
+        f"<div class='lbl'>"
+        f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {far_exp}</span>"
+        f"&nbsp; PE BUY (far) — best match"
+        f"</div>"
+        f"<div class='val-big val-bull'>₹{best_pe['ltp']:.2f}</div>"
+        f"<div style='margin-top:4px;'><span class='strike-pill-buy'>{int(best_pe['strike'])}</span>"
+        f"&nbsp;<span class='lbl'>{pe_buy_pct} {_pe_ratio_icon}</span></div>"
         f"</div>", unsafe_allow_html=True)
 
 if sell_ce_ltp == 0 or sell_pe_ltp == 0:
-    st.warning(f"⚠️ ATM±{short_steps} ({sell_ce_strike}/{sell_pe_strike}) has zero LTP — "
+    st.warning(f"⚠️ Sell strikes ({sell_ce_strike}/{sell_pe_strike}) have zero LTP — "
                f"try a smaller steps value or check market hours.")
+if ce_adjusted or pe_adjusted:
+    _adj_parts = []
+    if ce_adjusted: _adj_parts.append(f"CE moved to {ce_steps} steps (was {short_steps})")
+    if pe_adjusted: _adj_parts.append(f"PE moved to {pe_steps} steps (was {short_steps})")
+    st.info(f"⚙️ Sell strikes auto-adjusted: {' · '.join(_adj_parts)} — long leg was more expensive than short at requested distance.")
 
 # ─────────────────────────────────────────────
 # VIX ANALYSIS — expected move & auto-derived strikes
@@ -644,18 +737,15 @@ else:
             st.session_state["_last_vix_default"] = _vix_default
             st.rerun()
 
-    # Recalculate strikes with user-chosen short_steps
-    sell_ce_strike = atm + short_steps * STEP
-    sell_pe_strike = atm - short_steps * STEP
-    sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
-    sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
-
-    # ── Row 2: Expected move + auto strike ──────
+    # ── Row 2: Expected move + actual strike positions ──────────────────────
     _m1, _m2 = st.columns(2)
     with _m1:
-        _vs_vix = ("✅ at VIX 1σ" if short_steps == _steps_1s
-                   else (f"↗ {short_steps - _steps_1s} steps wider than 1σ" if short_steps > _steps_1s
-                         else f"↙ {_steps_1s - short_steps} steps tighter than 1σ"))
+        def _vs_vix_label(steps, opt):
+            if steps == _steps_1s: return "✅ at VIX 1σ"
+            if steps > _steps_1s:  return f"↗ {steps - _steps_1s} steps wider than 1σ"
+            return f"↙ {_steps_1s - steps} steps tighter than 1σ (auto-adjusted)"
+        _ce_pos = _vs_vix_label(ce_steps, "CE")
+        _pe_pos = _vs_vix_label(pe_steps, "PE")
         st.markdown(
             f"<div class='card card-bull'>"
             f"<div class='lbl'>1σ Expected Move — {_days_to_exp} days to expiry</div>"
@@ -663,8 +753,8 @@ else:
             f"<div class='lbl'>"
             f"Upper: <b style='color:var(--ce);'>{_upper_1s:,}</b> &nbsp;·&nbsp; "
             f"Lower: <b style='color:var(--pe);'>{_lower_1s:,}</b><br>"
-            f"<b style='color:white;'>Selling at {short_steps} steps → {_vs_vix}</b><br>"
-            f"CE {sell_ce_strike} / PE {sell_pe_strike}"
+            f"CE: {sell_ce_strike} ({ce_steps} steps) → {_ce_pos}<br>"
+            f"PE: {sell_pe_strike} ({pe_steps} steps) → {_pe_pos}"
             f"</div></div>",
             unsafe_allow_html=True)
     with _m2:
@@ -675,8 +765,9 @@ else:
             f"<div class='lbl'>"
             f"Upper: <b style='color:var(--ce);'>{_upper_2s:,}</b> &nbsp;·&nbsp; "
             f"Lower: <b style='color:var(--pe);'>{_lower_2s:,}</b><br>"
-            f"<b style='color:var(--bear);'>{_steps_2s} steps OTM</b> &nbsp;·&nbsp; "
-            f"Your sell is {'✅ beyond 2σ' if short_steps >= _steps_2s else ('⚠️ between 1σ–2σ' if short_steps >= _steps_1s else '🔴 inside 1σ')}"
+            f"<b style='color:var(--bear);'>{_steps_2s} steps OTM</b><br>"
+            f"CE sell: {'✅ beyond 2σ' if ce_steps >= _steps_2s else ('⚠️ 1–2σ zone' if ce_steps >= _steps_1s else '🔴 inside 1σ')} &nbsp;·&nbsp; "
+            f"PE sell: {'✅ beyond 2σ' if pe_steps >= _steps_2s else ('⚠️ 1–2σ zone' if pe_steps >= _steps_1s else '🔴 inside 1σ')}"
             f"</div></div>",
             unsafe_allow_html=True)
 
@@ -1001,9 +1092,9 @@ st.markdown(
     f"CE ratio {ratio_ce_actual:.0f}% &nbsp;·&nbsp; PE ratio {ratio_pe_actual:.0f}%<br>"
     f"• Ideal: near leg expires worthless every week → roll the short to next expiry &nbsp;·&nbsp; "
     f"far longs act as long-dated tail protection<br>"
-    f"• Short at <b>{short_steps} steps ({short_steps*STEP} pts OTM)</b>"
-    f"{' = VIX 1σ default' if _vix_ok and short_steps == _steps_1s else f' — VIX 1σ default is {_steps_1s} steps' if _vix_ok else ''}"
-    f" &nbsp;·&nbsp; Use the OTM steps slider in the VIX section to adjust"
+    f"• CE sell at <b>{ce_steps} steps</b> ({sell_ce_strike}) · PE sell at <b>{pe_steps} steps</b> ({sell_pe_strike})"
+    f"{' · auto-adjusted to ensure long < short LTP' if (ce_adjusted or pe_adjusted) else ''}"
+    f" &nbsp;·&nbsp; VIX 1σ default = {_steps_1s if _vix_ok else 'N/A'} steps · use slider to override"
     f"</span></div>",
     unsafe_allow_html=True,
 )
@@ -1013,6 +1104,16 @@ st.markdown(
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 📐 NIFTY Diagonal")
+    _theme_label = "☀️ Light mode" if not _light_mode else "🌙 Dark mode"
+    if st.toggle(_theme_label, value=_light_mode, key="theme_toggle"):
+        if not st.session_state.get("light_mode", False):
+            st.session_state["light_mode"] = True
+            st.rerun()
+    else:
+        if st.session_state.get("light_mode", False):
+            st.session_state["light_mode"] = False
+            st.rerun()
+    st.divider()
     st.markdown(f"Spot **₹{spot:,.2f}** · ATM **{atm}**")
     st.markdown(f"Near `{near_exp}` · Far `{far_exp}`")
     st.divider()
