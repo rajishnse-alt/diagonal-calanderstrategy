@@ -736,7 +736,7 @@ _days_to_exp = max(
 )
 
 if _open_vix and _curr_vix and spot:
-    _eff_vix   = max(_open_vix, _curr_vix)
+    _eff_vix   = (_open_vix + _curr_vix) / 2
     _daily_vix = _eff_vix / math.sqrt(252)
     _exp_1s    = spot * (_eff_vix / 100) * math.sqrt(_days_to_exp / 252)
     _exp_2s    = _exp_1s * 2
@@ -1045,7 +1045,7 @@ else:
             unsafe_allow_html=True)
     with _v3:
         st.markdown(
-            f"<div class='card card-gold'><div class='lbl'>Effective VIX (higher of two)</div>"
+            f"<div class='card card-gold'><div class='lbl'>Effective VIX (avg of open + current)</div>"
             f"<div class='val-big val-gold'>{_eff_vix:.2f}</div>"
             f"<div class='lbl'>Daily σ: {_daily_vix:.2f}%</div></div>",
             unsafe_allow_html=True)
@@ -1644,8 +1644,8 @@ with st.sidebar:
     st.metric("BE ↓", f"{int(be_dn):,}")
     st.divider()
     if _open_vix and _curr_vix:
-        st.metric("VIX (eff)", f"{_eff_vix:.2f}",
-                  f"{'↑' if _curr_vix > _open_vix else '↓'} open {_open_vix:.2f}")
+        st.metric("VIX (avg)", f"{_eff_vix:.2f}",
+                  f"open {_open_vix:.2f} · cur {_curr_vix:.2f}")
         st.metric("1σ move", f"±{_exp_1s:,.0f} pts", f"{_steps_1s} steps OTM")
     st.divider()
     refresh_secs = st.slider("🔄 Auto-refresh (sec)", min_value=15, max_value=120, value=30, step=5)
