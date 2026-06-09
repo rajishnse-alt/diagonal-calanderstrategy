@@ -171,8 +171,8 @@ STRATEGY_REGISTRY = [
         "color":     "#ff5252",
         "regime":    "High Volatility",
         "trigger":   "VIX > 15",
-        "structure": "Sell δ 12–18 (2L) + extra OTM ±300 (1L) near expiry · "
-                     "Buy same strike far monthly (DTE ≥ 2× near) as backstop",
+        "structure": "Sell δ 12–18 (2L, DTE>5 expiry) · BUY ±300 OTM hedge (1L same expiry) · "
+                     "BUY same sell strike far monthly (DTE ≥ 2× sell DTE) as backstop",
         "why":       "Elevated IV makes OTM options expensive → collect premium at delta-defined "
                      "distance. Extra OTM short adds income. Far-month long caps unlimited risk.",
         "best_for":  "VIX > 15, event-driven spikes, range-bound post-spike",
@@ -1562,11 +1562,36 @@ if _vix_ok and _eff_vix >= 15.0:
         unsafe_allow_html=True,
     )
 
-    _T_near  = max(_days_to_exp, 1) / 365.0
+    # Auto-select sell expiry: must have DTE > 5
+    _hv_sell_exp = None
+    for _exp in sorted(all_exp):
+        _exp_dte = (datetime.strptime(_exp, "%Y-%m-%d").date() - now.date()).days
+        if _exp_dte > 5:
+            _hv_sell_exp = _exp
+            _hv_sell_dte = _exp_dte
+            break
+    if _hv_sell_exp is None:
+        st.warning("⚠️ No expiry with DTE > 5 found. Cannot build High-VIX strategy.")
+        _hv_sell_exp = near_exp
+        _hv_sell_dte = _days_to_exp
+
+    # Fetch chain for sell expiry (reuse near chain if same)
+    if _hv_sell_exp == near_exp:
+        _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+    else:
+        with st.spinner(f"Loading sell chain {_hv_sell_exp}…"):
+            _hv_sell_raw, _hv_sell_err = fetch_chain(token, _hv_sell_exp)
+        if _hv_sell_raw:
+            _, _, _hv_sell_ce, _hv_sell_pe, _, _, _, _ = parse_chain(_hv_sell_raw)
+        else:
+            st.warning(f"⚠️ Could not load chain for {_hv_sell_exp}: {_hv_sell_err}")
+            _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+
+    _T_near  = max(_hv_sell_dte, 1) / 365.0
     _sigma   = _eff_vix / 100.0
 
-    _hv_ce_cands = find_delta_strikes(near_ce, spot, _T_near, _sigma, "CE", 0.12, 0.18)
-    _hv_pe_cands = find_delta_strikes(near_pe, spot, _T_near, _sigma, "PE", 0.12, 0.18)
+    _hv_ce_cands = find_delta_strikes(_hv_sell_ce, spot, _T_near, _sigma, "CE", 0.12, 0.18)
+    _hv_pe_cands = find_delta_strikes(_hv_sell_pe, spot, _T_near, _sigma, "PE", 0.12, 0.18)
 
     if not _hv_ce_cands or not _hv_pe_cands:
         st.warning(
@@ -1577,14 +1602,14 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce  = _hv_ce_cands[0]   # primary CE sell
         _hv_pe  = _hv_pe_cands[0]   # primary PE sell
 
-        # Secondary (extra OTM) sell strikes  +300 / -300
+        # Extra OTM BUY legs  +300 / -300
         _hv_ce2_strike = int(round((_hv_ce["strike"] + 300) / STEP) * STEP)
         _hv_pe2_strike = int(round((_hv_pe["strike"] - 300) / STEP) * STEP)
-        _hv_ce2_ltp    = near_ce.get(float(_hv_ce2_strike), 0)
-        _hv_pe2_ltp    = near_pe.get(float(_hv_pe2_strike), 0)
+        _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
+        _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
 
-        # Far expiry selection: DTE >= 2 × near_DTE
-        _hv_far_exp = select_hv_far_expiry(all_exp, near_exp, _days_to_exp)
+        # Far expiry selection: DTE >= 2 × sell_DTE
+        _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
         _hv_far_dte = (
             (datetime.strptime(_hv_far_exp, "%Y-%m-%d").date() - now.date()).days
             if _hv_far_exp else 0
@@ -1607,11 +1632,11 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
         _hv_pe_buy_ltp = _hv_far_pe.get(float(_hv_pe["strike"]), 0)
 
-        # Net premium: collect from 3 sells, pay for 2 buys (1 lot each)
-        # CE: sell 2L primary + sell 1L +300; buy 1L far
-        # PE: sell 2L primary + sell 1L -300; buy 1L far
-        _hv_ce_collect = (_hv_ce["ltp"] * 2 + _hv_ce2_ltp * 1 - _hv_ce_buy_ltp * 1) * LOT_SIZE
-        _hv_pe_collect = (_hv_pe["ltp"] * 2 + _hv_pe2_ltp * 1 - _hv_pe_buy_ltp * 1) * LOT_SIZE
+        # Net premium: sell 2L primary; BUY 1L ±300 + BUY 1L far monthly (all buys are costs)
+        # CE: +collect(2L primary) - pay(1L +300 buy) - pay(1L far buy)
+        # PE: +collect(2L primary) - pay(1L -300 buy) - pay(1L far buy)
+        _hv_ce_collect = (_hv_ce["ltp"] * 2 - _hv_ce2_ltp * 1 - _hv_ce_buy_ltp * 1) * LOT_SIZE
+        _hv_pe_collect = (_hv_pe["ltp"] * 2 - _hv_pe2_ltp * 1 - _hv_pe_buy_ltp * 1) * LOT_SIZE
         _hv_net        = _hv_ce_collect + _hv_pe_collect
 
         # ── Display ────────────────────────────────────────────────────────
@@ -1620,7 +1645,7 @@ if _vix_ok and _eff_vix >= 15.0:
         with hv_c1:
             st.markdown(
                 f"<div class='card card-ce'>"
-                f"<div class='lbl'>📅 <span class='date-pill'>{near_exp}</span> &nbsp; CE SIDE</div>"
+                f"<div class='lbl'>📅 <span class='date-pill'>{_hv_sell_exp}</span> &nbsp; CE SIDE</div>"
                 f"<div style='margin-top:.5rem;'>"
                 # Primary sell
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
@@ -1628,10 +1653,10 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>₹{_hv_ce['ltp']:.2f}</span>"
                 f"<span style='font-size:10px;color:var(--muted);'>δ {_hv_ce['delta']:.3f}</span>"
                 f"</div>"
-                # Extra OTM sell
+                # Extra OTM buy (+300)
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
-                f"<span class='lbl'>SELL 1L &nbsp;<span class='strike-pill-ce'>{_hv_ce2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(+300)</span></span>"
-                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>₹{_hv_ce2_ltp:.2f}</span>"
+                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_ce2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(+300 hedge)</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce2_ltp:.2f}</span>"
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
@@ -1652,7 +1677,7 @@ if _vix_ok and _eff_vix >= 15.0:
         with hv_c2:
             st.markdown(
                 f"<div class='card card-pe'>"
-                f"<div class='lbl'>📅 <span class='date-pill' style='border-color:var(--pe);color:var(--pe);'>{near_exp}</span> &nbsp; PE SIDE</div>"
+                f"<div class='lbl'>📅 <span class='date-pill' style='border-color:var(--pe);color:var(--pe);'>{_hv_sell_exp}</span> &nbsp; PE SIDE</div>"
                 f"<div style='margin-top:.5rem;'>"
                 # Primary sell
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
@@ -1660,10 +1685,10 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>₹{_hv_pe['ltp']:.2f}</span>"
                 f"<span style='font-size:10px;color:var(--muted);'>δ {_hv_pe['delta']:.3f}</span>"
                 f"</div>"
-                # Extra OTM sell
+                # Extra OTM buy (-300)
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
-                f"<span class='lbl'>SELL 1L &nbsp;<span class='strike-pill'>{_hv_pe2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(-300)</span></span>"
-                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>₹{_hv_pe2_ltp:.2f}</span>"
+                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_pe2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(-300 hedge)</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe2_ltp:.2f}</span>"
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
@@ -1690,12 +1715,13 @@ if _vix_ok and _eff_vix >= 15.0:
             f"<div><span class='lbl'>Total Net Premium</span><br>"
             f"<span class='val-big' style='color:{'var(--bull)' if _hv_net>=0 else 'var(--bear)'};"
             f"'>{'Credit' if _hv_net>=0 else 'Debit'} ₹{abs(_hv_net):,.0f}</span></div>"
-            f"<div><span class='lbl'>Legs: CE {_hv_ce['strike']}×2 + {_hv_ce2_strike}×1 · "
-            f"PE {_hv_pe['strike']}×2 + {_hv_pe2_strike}×1 &nbsp;·&nbsp; "
-            f"Buy hedge: {_hv_ce['strike']} CE + {_hv_pe['strike']} PE @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_days_to_exp*2}d needed)</span><br>"
+            f"<div><span class='lbl'>"
+            f"SELL: CE {_hv_ce['strike']}×2L + PE {_hv_pe['strike']}×2L @ {_hv_sell_exp} (DTE {_hv_sell_dte}d)"
+            f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} + PE {_hv_pe2_strike} (±300) @ {_hv_sell_exp}"
+            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*2}d needed)</span><br>"
             f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
-            f"δ: CE primary {_hv_ce['delta']:.3f} · CE+300 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
-            f"PE primary {_hv_pe['delta']:.3f} · PE-300 {_hv_pe2_bs_delta:.3f}"
+            f"δ: CE sell {_hv_ce['delta']:.3f} · CE+300 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
+            f"PE sell {_hv_pe['delta']:.3f} · PE-300 {_hv_pe2_bs_delta:.3f}"
             f"</span></div>"
             f"</div></div>",
             unsafe_allow_html=True,
