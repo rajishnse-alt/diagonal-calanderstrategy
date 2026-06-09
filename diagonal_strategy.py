@@ -161,6 +161,37 @@ UPSTOX_OC_URLS  = [
 ]
 UPSTOX_CONTRACT_URL = "https://api.upstox.com/v2/option/contract"
 
+# ── Strategy registry ───────────────────────────────────────────────────────
+# Add new strategies here. Each entry: trigger condition is evaluated at runtime.
+STRATEGY_REGISTRY = [
+    {
+        "id":        "hv_ratio",
+        "name":      "High VIX Ratio Spread",
+        "emoji":     "⚡",
+        "color":     "#ff5252",
+        "regime":    "High Volatility",
+        "trigger":   "VIX > 15",
+        "structure": "Sell δ 12–18 (2L) + extra OTM ±300 (1L) near expiry · "
+                     "Buy same strike far monthly (DTE ≥ 2× near) as backstop",
+        "why":       "Elevated IV makes OTM options expensive → collect premium at delta-defined "
+                     "distance. Extra OTM short adds income. Far-month long caps unlimited risk.",
+        "best_for":  "VIX > 15, event-driven spikes, range-bound post-spike",
+    },
+    {
+        "id":        "diagonal",
+        "name":      "Diagonal Calendar Spread",
+        "emoji":     "📐",
+        "color":     "#4d9fff",
+        "regime":    "Normal Volatility",
+        "trigger":   "VIX ≤ 15 (default)",
+        "structure": "Sell ATM ± VIX-1σ steps near expiry · "
+                     "Buy matching strikes far expiry (≥ 5 wks) at ~50% of sold LTP",
+        "why":       "Low IV → exploit term structure decay; near-leg theta decays faster. "
+                     "Far long provides hedge and benefits if IV expands.",
+        "best_for":  "VIX < 15, trending/sideways market, low near-term event risk",
+    },
+]
+
 # ── GitHub PCR log ──────────────────────────────────────────────────────────
 GITHUB_OWNER    = "rajishnse-alt"
 GITHUB_REPO     = "diagonal-calanderstrategy"
@@ -511,6 +542,55 @@ def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ra
     return base_steps, int(sell_strike), sell_ltp, cands, False
 
 
+def bs_delta(S, K, T, sigma, opt_type="CE", r=0.065):
+    """
+    Black-Scholes delta.
+    Returns absolute delta (0–1 range) for both CE and PE.
+    """
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 1.0 if (opt_type == "CE" and S > K) else 0.0
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2)))
+    return nd1 if opt_type == "CE" else abs(nd1 - 1.0)
+
+
+def find_delta_strikes(strike_map, spot, T, sigma, opt_type, delta_lo=0.12, delta_hi=0.18, r=0.065):
+    """
+    Return list of {strike, ltp, delta} where abs(delta) ∈ [delta_lo, delta_hi],
+    sorted by closeness to mid-range delta target.
+    """
+    mid = (delta_lo + delta_hi) / 2
+    cands = []
+    for strike, ltp in strike_map.items():
+        if ltp <= 0:
+            continue
+        d = bs_delta(spot, strike, T, sigma, opt_type, r)
+        if delta_lo <= d <= delta_hi:
+            cands.append({"strike": int(strike), "ltp": float(ltp), "delta": d})
+    cands.sort(key=lambda x: abs(x["delta"] - mid))
+    return cands
+
+
+def select_hv_far_expiry(all_exp, near_exp, near_dte):
+    """
+    Pick the monthly expiry with DTE >= 2 × near_dte.
+    Falls back to the next expiry after near_exp if none qualifies.
+    """
+    needed_dte = near_dte * 2
+    for exp in sorted(all_exp):
+        if exp <= near_exp:
+            continue
+        dte = (datetime.strptime(exp, "%Y-%m-%d").date()
+               - datetime.now(IST).date()).days
+        if dte >= needed_dte:
+            return exp
+    # Fallback: first expiry after near
+    for exp in sorted(all_exp):
+        if exp > near_exp:
+            return exp
+    return None
+
+
 def payoff_near_expiry(legs, spot_val, lot_size):
     """P&L at near-expiry. Far legs estimated at 60% time value retained."""
     pnl = 0.0
@@ -608,13 +688,14 @@ dot      = "🟢" if mkt_open else "🔴"
 
 st.markdown(
     f"<h1 style='margin-bottom:2px;'>📐 NIFTY Diagonal Spread Builder</h1>"
-    f"<p class='mono' style='font-size:11px;color:var(--muted);margin-bottom:1rem;'>"
+    f"<p class='mono' style='font-size:11px;color:var(--muted);margin-bottom:.4rem;'>"
     f"{dot} {'OPEN' if mkt_open else 'CLOSED'} &nbsp;·&nbsp; "
-    f"{now.strftime('%d %b %Y %H:%M IST')} &nbsp;·&nbsp; "
-    f"Sell ATM±{SHORT_STEPS} ({SHORT_STEPS*STEP} pts OTM) current expiry &nbsp;·&nbsp; "
-    f"Buy 2L far expiry at ~50% LTP</p>",
+    f"{now.strftime('%d %b %Y %H:%M IST')}</p>",
     unsafe_allow_html=True,
 )
+
+# Strategy banner placeholder — filled after VIX is known
+_strategy_banner = st.empty()
 
 # ─────────────────────────────────────────────
 # AUTH
@@ -747,6 +828,41 @@ else:
     _eff_vix = _daily_vix = _exp_1s = _exp_2s = 0.0
     _steps_1s = _steps_2s = SHORT_STEPS          # fallback to constant
     _vix_ok   = False
+
+# ── Strategy banner — fill the placeholder now that VIX is known ────────────
+_active_strat = STRATEGY_REGISTRY[0] if (_vix_ok and _eff_vix > 15.0) else STRATEGY_REGISTRY[1]
+_sc = _active_strat["color"]
+_strategy_banner.markdown(
+    f"<div style='border-left:4px solid {_sc};background:var(--surface);"
+    f"border:1px solid {_sc};border-radius:10px;padding:.6rem 1rem;margin-bottom:.75rem;"
+    f"display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;'>"
+    f"<div style='min-width:220px;'>"
+    f"<div style='font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;"
+    f"color:{_sc};font-family:var(--mono);'>"
+    f"{_active_strat['emoji']} Active Strategy</div>"
+    f"<div style='font-size:16px;font-weight:800;color:var(--text);font-family:var(--hdr);'>"
+    f"{_active_strat['name']}</div>"
+    f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
+    f"Regime: <b style='color:{_sc};'>{_active_strat['regime']}</b> &nbsp;·&nbsp; "
+    f"Trigger: <code style='background:var(--border);padding:1px 5px;border-radius:3px;"
+    f"font-size:10px;'>{_active_strat['trigger']}</code>"
+    + (f" &nbsp;·&nbsp; VIX <b style='color:{_sc};'>{_eff_vix:.2f}</b>" if _vix_ok else "")
+    + f"</div></div>"
+    f"<div style='flex:1;min-width:280px;'>"
+    f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
+    f"font-weight:700;margin-bottom:3px;'>Structure</div>"
+    f"<div style='font-family:var(--mono);font-size:11px;color:var(--text);'>"
+    f"{_active_strat['structure']}</div>"
+    f"</div>"
+    f"<div style='flex:1;min-width:260px;'>"
+    f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
+    f"font-weight:700;margin-bottom:3px;'>Why this strategy</div>"
+    f"<div style='font-size:11px;color:var(--text);line-height:1.5;'>{_active_strat['why']}</div>"
+    f"<div style='font-size:10px;color:var(--muted);margin-top:4px;'>"
+    f"✅ Best for: {_active_strat['best_for']}</div>"
+    f"</div></div>",
+    unsafe_allow_html=True,
+)
 
 # Seed session_state with VIX default only when VIX value changes
 # (preserves user override across auto-refreshes, resets when VIX shifts)
@@ -1434,6 +1550,156 @@ st.markdown(
     f"</span></div>",
     unsafe_allow_html=True,
 )
+
+# ─────────────────────────────────────────────
+# HIGH-VIX STRATEGY  (VIX > 15)
+# ─────────────────────────────────────────────
+if _vix_ok and _eff_vix >= 15.0:
+    st.markdown(
+        f"<div class='sec-hdr' style='color:var(--bear);border-color:var(--bear);'>"
+        f"⚡ High VIX Strategy &nbsp;·&nbsp; VIX {_eff_vix:.2f} &gt; 15 "
+        f"&nbsp;·&nbsp; Delta-based Ratio Spread</div>",
+        unsafe_allow_html=True,
+    )
+
+    _T_near  = max(_days_to_exp, 1) / 365.0
+    _sigma   = _eff_vix / 100.0
+
+    _hv_ce_cands = find_delta_strikes(near_ce, spot, _T_near, _sigma, "CE", 0.12, 0.18)
+    _hv_pe_cands = find_delta_strikes(near_pe, spot, _T_near, _sigma, "PE", 0.12, 0.18)
+
+    if not _hv_ce_cands or not _hv_pe_cands:
+        st.warning(
+            f"⚠️ No NIFTY strikes found with delta 12–18 for VIX={_eff_vix:.1f} "
+            f"and DTE={_days_to_exp}d. Try a later near expiry or check VIX data."
+        )
+    else:
+        _hv_ce  = _hv_ce_cands[0]   # primary CE sell
+        _hv_pe  = _hv_pe_cands[0]   # primary PE sell
+
+        # Secondary (extra OTM) sell strikes  +300 / -300
+        _hv_ce2_strike = int(round((_hv_ce["strike"] + 300) / STEP) * STEP)
+        _hv_pe2_strike = int(round((_hv_pe["strike"] - 300) / STEP) * STEP)
+        _hv_ce2_ltp    = near_ce.get(float(_hv_ce2_strike), 0)
+        _hv_pe2_ltp    = near_pe.get(float(_hv_pe2_strike), 0)
+
+        # Far expiry selection: DTE >= 2 × near_DTE
+        _hv_far_exp = select_hv_far_expiry(all_exp, near_exp, _days_to_exp)
+        _hv_far_dte = (
+            (datetime.strptime(_hv_far_exp, "%Y-%m-%d").date() - now.date()).days
+            if _hv_far_exp else 0
+        )
+
+        # Fetch far chain — reuse existing if same expiry, else fetch fresh
+        if _hv_far_exp and _hv_far_exp == far_exp:
+            _hv_far_ce, _hv_far_pe = far_ce, far_pe
+        elif _hv_far_exp:
+            with st.spinner(f"Loading far chain {_hv_far_exp}…"):
+                _hv_far_raw, _hv_far_err = fetch_chain(token, _hv_far_exp)
+            if _hv_far_raw:
+                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _ = parse_chain(_hv_far_raw)
+            else:
+                _hv_far_ce, _hv_far_pe = {}, {}
+        else:
+            _hv_far_ce, _hv_far_pe = {}, {}
+
+        # Buy LTPs (same strike, far expiry)
+        _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
+        _hv_pe_buy_ltp = _hv_far_pe.get(float(_hv_pe["strike"]), 0)
+
+        # Net premium: collect from 3 sells, pay for 2 buys (1 lot each)
+        # CE: sell 2L primary + sell 1L +300; buy 1L far
+        # PE: sell 2L primary + sell 1L -300; buy 1L far
+        _hv_ce_collect = (_hv_ce["ltp"] * 2 + _hv_ce2_ltp * 1 - _hv_ce_buy_ltp * 1) * LOT_SIZE
+        _hv_pe_collect = (_hv_pe["ltp"] * 2 + _hv_pe2_ltp * 1 - _hv_pe_buy_ltp * 1) * LOT_SIZE
+        _hv_net        = _hv_ce_collect + _hv_pe_collect
+
+        # ── Display ────────────────────────────────────────────────────────
+        hv_c1, hv_c2 = st.columns(2)
+
+        with hv_c1:
+            st.markdown(
+                f"<div class='card card-ce'>"
+                f"<div class='lbl'>📅 <span class='date-pill'>{near_exp}</span> &nbsp; CE SIDE</div>"
+                f"<div style='margin-top:.5rem;'>"
+                # Primary sell
+                f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
+                f"<span class='lbl'>SELL 2L &nbsp;<span class='strike-pill-ce'>{_hv_ce['strike']}</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>₹{_hv_ce['ltp']:.2f}</span>"
+                f"<span style='font-size:10px;color:var(--muted);'>δ {_hv_ce['delta']:.3f}</span>"
+                f"</div>"
+                # Extra OTM sell
+                f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
+                f"<span class='lbl'>SELL 1L &nbsp;<span class='strike-pill-ce'>{_hv_ce2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(+300)</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>₹{_hv_ce2_ltp:.2f}</span>"
+                f"</div>"
+                # Far buy
+                f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
+                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
+                f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
+                f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce_buy_ltp:.2f}</span>"
+                f"</div>"
+                f"</div>"
+                f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+                f"<span class='lbl'>CE net: </span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:{'var(--bull)' if _hv_ce_collect>=0 else 'var(--bear)'};'>"
+                f"{'Credit' if _hv_ce_collect>=0 else 'Debit'} ₹{abs(_hv_ce_collect):,.0f}</span>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        with hv_c2:
+            st.markdown(
+                f"<div class='card card-pe'>"
+                f"<div class='lbl'>📅 <span class='date-pill' style='border-color:var(--pe);color:var(--pe);'>{near_exp}</span> &nbsp; PE SIDE</div>"
+                f"<div style='margin-top:.5rem;'>"
+                # Primary sell
+                f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
+                f"<span class='lbl'>SELL 2L &nbsp;<span class='strike-pill'>{_hv_pe['strike']}</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>₹{_hv_pe['ltp']:.2f}</span>"
+                f"<span style='font-size:10px;color:var(--muted);'>δ {_hv_pe['delta']:.3f}</span>"
+                f"</div>"
+                # Extra OTM sell
+                f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
+                f"<span class='lbl'>SELL 1L &nbsp;<span class='strike-pill'>{_hv_pe2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(-300)</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>₹{_hv_pe2_ltp:.2f}</span>"
+                f"</div>"
+                # Far buy
+                f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
+                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
+                f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
+                f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe_buy_ltp:.2f}</span>"
+                f"</div>"
+                f"</div>"
+                f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+                f"<span class='lbl'>PE net: </span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:{'var(--bull)' if _hv_pe_collect>=0 else 'var(--bear)'};'>"
+                f"{'Credit' if _hv_pe_collect>=0 else 'Debit'} ₹{abs(_hv_pe_collect):,.0f}</span>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        # Net summary row
+        _hv_ce2_bs_delta = bs_delta(spot, _hv_ce2_strike, _T_near, _sigma, "CE")
+        _hv_pe2_bs_delta = bs_delta(spot, _hv_pe2_strike, _T_near, _sigma, "PE")
+        st.markdown(
+            f"<div class='card' style='border-left:4px solid {'var(--bull)' if _hv_net>=0 else 'var(--bear)'};margin-top:.3rem;'>"
+            f"<div style='display:flex;align-items:center;gap:16px;flex-wrap:wrap;'>"
+            f"<div><span class='lbl'>Total Net Premium</span><br>"
+            f"<span class='val-big' style='color:{'var(--bull)' if _hv_net>=0 else 'var(--bear)'};"
+            f"'>{'Credit' if _hv_net>=0 else 'Debit'} ₹{abs(_hv_net):,.0f}</span></div>"
+            f"<div><span class='lbl'>Legs: CE {_hv_ce['strike']}×2 + {_hv_ce2_strike}×1 · "
+            f"PE {_hv_pe['strike']}×2 + {_hv_pe2_strike}×1 &nbsp;·&nbsp; "
+            f"Buy hedge: {_hv_ce['strike']} CE + {_hv_pe['strike']} PE @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_days_to_exp*2}d needed)</span><br>"
+            f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
+            f"δ: CE primary {_hv_ce['delta']:.3f} · CE+300 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
+            f"PE primary {_hv_pe['delta']:.3f} · PE-300 {_hv_pe2_bs_delta:.3f}"
+            f"</span></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
 
 # ─────────────────────────────────────────────
 # PCR HISTORY
