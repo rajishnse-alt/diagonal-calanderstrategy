@@ -172,7 +172,7 @@ STRATEGY_REGISTRY = [
         "regime":    "High Volatility",
         "trigger":   "VIX > 15",
         "structure": "Sell δ 12–18 (2L, DTE>5 expiry) · BUY ±300 OTM hedge (1L same expiry) · "
-                     "BUY same sell strike far monthly (DTE ≥ 2× sell DTE) as backstop",
+                     "BUY same sell strike far monthly (DTE ≥ 3× sell DTE) as backstop",
         "why":       "Elevated IV makes OTM options expensive → collect premium at delta-defined "
                      "distance. Extra OTM short adds income. Far-month long caps unlimited risk.",
         "best_for":  "VIX > 15, event-driven spikes, range-bound post-spike",
@@ -571,20 +571,41 @@ def find_delta_strikes(strike_map, spot, T, sigma, opt_type, delta_lo=0.12, delt
     return cands
 
 
+def get_monthly_expiries(all_exp):
+    """
+    Return set of expiry strings that are the last expiry of their calendar month.
+    Works directly from the expiry list — no date-math assumptions.
+    """
+    month_last = {}
+    for exp in sorted(all_exp):
+        ym = exp[:7]          # "YYYY-MM"
+        month_last[ym] = exp  # keeps overwriting → last entry per month wins
+    return set(month_last.values())
+
+
 def select_hv_far_expiry(all_exp, near_exp, near_dte):
     """
-    Pick the monthly expiry with DTE >= 2 × near_dte.
-    Falls back to the next expiry after near_exp if none qualifies.
+    Pick the MONTHLY expiry (last expiry of its calendar month in all_exp)
+    with DTE >= 3 × near_dte.
+    Falls back to nearest monthly expiry after near_exp, then any expiry.
     """
-    needed_dte = near_dte * 2
+    monthly = get_monthly_expiries(all_exp)
+    needed_dte = near_dte * 3
+    # Pass 1: monthly expiry with sufficient DTE
     for exp in sorted(all_exp):
         if exp <= near_exp:
+            continue
+        if exp not in monthly:
             continue
         dte = (datetime.strptime(exp, "%Y-%m-%d").date()
                - datetime.now(IST).date()).days
         if dte >= needed_dte:
             return exp
-    # Fallback: first expiry after near
+    # Pass 2: any monthly expiry after near_exp
+    for exp in sorted(all_exp):
+        if exp > near_exp and exp in monthly:
+            return exp
+    # Pass 3: any expiry after near_exp
     for exp in sorted(all_exp):
         if exp > near_exp:
             return exp
@@ -1718,7 +1739,7 @@ if _vix_ok and _eff_vix >= 15.0:
             f"<div><span class='lbl'>"
             f"SELL: CE {_hv_ce['strike']}×2L + PE {_hv_pe['strike']}×2L @ {_hv_sell_exp} (DTE {_hv_sell_dte}d)"
             f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} + PE {_hv_pe2_strike} (±300) @ {_hv_sell_exp}"
-            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*2}d needed)</span><br>"
+            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*3}d needed)</span><br>"
             f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
             f"δ: CE sell {_hv_ce['delta']:.3f} · CE+300 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
             f"PE sell {_hv_pe['delta']:.3f} · PE-300 {_hv_pe2_bs_delta:.3f}"
