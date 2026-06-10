@@ -405,61 +405,84 @@ def _get_oi_chg(md):
     return 0.0
 
 
-def calc_spp(chain_data, atm_strike):
+def fetch_prev_day_candle(tok, instrument_key):
     """
-    SPP (Strike Price Point / UIP concept) for NIFTY.
-
-    Formula (from UIP reference):
-        ce_median = (ce_high + ce_low) / 2
-        pe_median = (pe_high + pe_low) / 2
-        spp = (ce_median × ce_oi + pe_median × pe_oi) / (ce_oi + pe_oi)
-
-    Uses today's intraday OHLC high/low from the Upstox chain market_data.ohlc.
-    Falls back to prev_close if intraday H/L are not yet available (pre-market).
-
-    Returns: (spp, ce_high, ce_low, pe_high, pe_low, ce_oi_L, pe_oi_L, source)
+    Fetch the most recent completed trading day's OHLC + OI candle for an option.
+    Upstox historical-candle returns [ts, open, high, low, close, volume, oi].
+    Returns dict {open, high, low, close, oi} or None on failure.
     """
-    def _safe(v):
-        try:
-            f = float(v)
-            return f if f > 0 else None
-        except Exception:
+    try:
+        today     = datetime.now(IST).date()
+        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_date   = today.strftime("%Y-%m-%d")
+        enc_key   = urllib.parse.quote(instrument_key, safe="")
+        url = (f"https://api.upstox.com/v2/historical-candle/"
+               f"{enc_key}/day/{to_date}/{from_date}")
+        r = requests.get(url, headers={"Accept": "application/json",
+                                        "Authorization": f"Bearer {tok}"}, timeout=10)
+        candles = (r.json().get("data") or {}).get("candles") or []
+        # candle = [ts, open, high, low, close, volume, oi]
+        today_str = today.isoformat()
+        prev = sorted(
+            [c for c in candles if str(c[0])[:10] < today_str],
+            key=lambda c: c[0], reverse=True
+        )
+        if not prev:
             return None
+        c = prev[0]
+        return {
+            "date":  str(c[0])[:10],
+            "open":  float(c[1]),
+            "high":  float(c[2]),
+            "low":   float(c[3]),
+            "close": float(c[4]),
+            "oi":    float(c[6]) if len(c) > 6 else 0.0,
+        }
+    except Exception:
+        return None
 
+
+def get_atm_instrument_keys(chain_data, atm_strike):
+    """Extract CE and PE instrument keys for the ATM strike from chain data."""
     for row in chain_data:
-        if int(float(row.get("strike_price", 0))) != int(atm_strike):
-            continue
-        c_md   = (row.get("call_options") or {}).get("market_data") or {}
-        p_md   = (row.get("put_options")  or {}).get("market_data") or {}
-        c_ohlc = c_md.get("ohlc") or {}
-        p_ohlc = p_md.get("ohlc") or {}
+        if int(float(row.get("strike_price", 0))) == int(atm_strike):
+            ce_key = (row.get("call_options") or {}).get("instrument_key")
+            pe_key = (row.get("put_options")  or {}).get("instrument_key")
+            return ce_key, pe_key
+    return None, None
 
-        ce_h = _safe(c_ohlc.get("high")) or _safe(c_md.get("high"))
-        ce_l = _safe(c_ohlc.get("low"))  or _safe(c_md.get("low"))
-        pe_h = _safe(p_ohlc.get("high")) or _safe(p_md.get("high"))
-        pe_l = _safe(p_ohlc.get("low"))  or _safe(p_md.get("low"))
-        ce_oi = _get_oi(c_md)
-        pe_oi = _get_oi(p_md)
-        ce_oi_L = ce_oi / 1e5
-        pe_oi_L = pe_oi / 1e5
 
-        if ce_h and ce_l and pe_h and pe_l:
-            ce_med = (ce_h + ce_l) / 2
-            pe_med = (pe_h + pe_l) / 2
-            tot_oi = ce_oi + pe_oi
-            spp = (ce_med * ce_oi + pe_med * pe_oi) / tot_oi if tot_oi > 0 else (ce_med + pe_med) / 2
-            return round(spp, 2), ce_h, ce_l, pe_h, pe_l, round(ce_oi_L, 2), round(pe_oi_L, 2), "intraday H/L"
+def calc_spp(tok, chain_data, atm_strike):
+    """
+    SPP (UIP concept) — matches reference methodology exactly:
+      1. Previous trading day's H, L, OI for ATM CE and PE (via Upstox historical candle)
+      2. ce_median = (ce_high + ce_low) / 2
+         pe_median = (pe_high + pe_low) / 2
+         spp = (ce_median × ce_oi + pe_median × pe_oi) / (ce_oi + pe_oi)
 
-        # Fallback: use prev_close as both H and L proxy
-        ce_pc = _safe(c_md.get("prev_close_price"))
-        pe_pc = _safe(p_md.get("prev_close_price"))
-        if ce_pc and pe_pc:
-            tot_oi = ce_oi + pe_oi
-            spp = (ce_pc * ce_oi + pe_pc * pe_oi) / tot_oi if tot_oi > 0 else (ce_pc + pe_pc) / 2
-            return round(spp, 2), ce_pc, ce_pc, pe_pc, pe_pc, round(ce_oi_L, 2), round(pe_oi_L, 2), "prev close"
+    Returns: (spp, ce_h, ce_l, pe_h, pe_l, ce_oi_L, pe_oi_L, date_used) or all-None on failure.
+    """
+    ce_key, pe_key = get_atm_instrument_keys(chain_data, atm_strike)
+    if not ce_key or not pe_key:
+        return None, None, None, None, None, None, None, None
 
-        break
-    return None, None, None, None, None, None, None, None
+    ce_can = fetch_prev_day_candle(tok, ce_key)
+    pe_can = fetch_prev_day_candle(tok, pe_key)
+    if not ce_can or not pe_can:
+        return None, None, None, None, None, None, None, None
+
+    ce_h, ce_l, ce_oi = ce_can["high"], ce_can["low"], ce_can["oi"]
+    pe_h, pe_l, pe_oi = pe_can["high"], pe_can["low"], pe_can["oi"]
+
+    ce_oi_L = ce_oi / 1e5
+    pe_oi_L = pe_oi / 1e5
+
+    ce_med = (ce_h + ce_l) / 2
+    pe_med = (pe_h + pe_l) / 2
+    tot_oi = ce_oi + pe_oi
+    spp = (ce_med * ce_oi + pe_med * pe_oi) / tot_oi if tot_oi > 0 else (ce_med + pe_med) / 2
+
+    return round(spp, 2), ce_h, ce_l, pe_h, pe_l, round(ce_oi_L, 2), round(pe_oi_L, 2), ce_can["date"]
 
 
 def parse_chain(data):
@@ -1040,9 +1063,10 @@ _far_atm_ce_oi = far_ce_oi.get(float(atm), 0)
 _far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
 _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
 
-# SPP (UIP concept) — OI-weighted median of ATM CE/PE H/L
-_spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
-    calc_spp(near_raw, atm)
+# SPP (UIP concept) — prev-day H/L/OI for ATM CE+PE from Upstox historical candle
+with st.spinner("Computing SPP…"):
+    _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
+        calc_spp(token, near_raw, atm)
 
 # ── PCR logging to GitHub CSV (throttled: market hours, once per 5 min) ─────
 _gh_tok = None
@@ -1220,7 +1244,7 @@ with pb4:
         _spp_lbl  = "Spot above SPP ↑" if _spp_vs_spot > 0 else ("Spot below SPP ↓" if _spp_vs_spot < 0 else "At SPP")
         st.markdown(
             f"<div class='card' style='border-left:4px solid var(--gold);'>"
-            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>({_spp_src})</span></div>"
+            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>(prev day {_spp_src})</span></div>"
             f"<div class='val-big val-gold'>₹{_spp:,.2f}</div>"
             f"<div style='display:flex;align-items:baseline;gap:8px;margin:.2rem 0;'>"
             f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_spp_col};'>"
