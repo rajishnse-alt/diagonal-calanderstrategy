@@ -1238,24 +1238,58 @@ with pb3:
         unsafe_allow_html=True)
 with pb4:
     if _spp is not None:
-        # SPP vs spot: above = bearish reference, below = bullish reference
+        # Find strike where CE LTP is nearest to SPP
+        _ce_spp_strike, _ce_spp_ltp, _ce_spp_diff = None, None, float("inf")
+        for _s, _ltp in near_ce.items():
+            if _ltp > 0:
+                _d = abs(_ltp - _spp)
+                if _d < _ce_spp_diff:
+                    _ce_spp_diff, _ce_spp_strike, _ce_spp_ltp = _d, int(_s), _ltp
+        # Find strike where PE LTP is nearest to SPP
+        _pe_spp_strike, _pe_spp_ltp, _pe_spp_diff = None, None, float("inf")
+        for _s, _ltp in near_pe.items():
+            if _ltp > 0:
+                _d = abs(_ltp - _spp)
+                if _d < _pe_spp_diff:
+                    _pe_spp_diff, _pe_spp_strike, _pe_spp_ltp = _d, int(_s), _ltp
+
         _spp_vs_spot = spot - _spp
-        _spp_col  = "var(--bull)" if _spp_vs_spot > 0 else ("var(--bear)" if _spp_vs_spot < 0 else "var(--muted)")
-        _spp_lbl  = "Spot above SPP ↑" if _spp_vs_spot > 0 else ("Spot below SPP ↓" if _spp_vs_spot < 0 else "At SPP")
+        _spp_col = "var(--bull)" if _spp_vs_spot > 0 else ("var(--bear)" if _spp_vs_spot < 0 else "var(--muted)")
+        _spp_lbl = "Spot above SPP ↑" if _spp_vs_spot > 0 else ("Spot below SPP ↓" if _spp_vs_spot < 0 else "At SPP")
         st.markdown(
             f"<div class='card' style='border-left:4px solid var(--gold);'>"
-            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>(prev day {_spp_src})</span></div>"
+            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>(prev {_spp_src})</span></div>"
             f"<div class='val-big val-gold'>₹{_spp:,.2f}</div>"
             f"<div style='display:flex;align-items:baseline;gap:8px;margin:.2rem 0;'>"
             f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_spp_col};'>"
             f"{'+' if _spp_vs_spot > 0 else ''}{_spp_vs_spot:,.1f} pts</span>"
             f"<span style='font-size:9px;color:var(--muted);'>{_spp_lbl}</span>"
             f"</div>"
+            # Strikes nearest to SPP
             f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
-            f"<span class='lbl'>ATM <span class='strike-pill-ce'>{atm}</span> &nbsp; "
-            f"CE H:{_spp_ce_h:.1f} L:{_spp_ce_l:.1f} &nbsp;·&nbsp; "
-            f"PE H:{_spp_pe_h:.1f} L:{_spp_pe_l:.1f}</span><br>"
-            f"<span class='lbl'>OI: CE {_spp_ce_oi_L:.1f}L &nbsp;/&nbsp; PE {_spp_pe_oi_L:.1f}L</span>"
+            f"<div class='lbl' style='margin-bottom:.2rem;'>Strikes nearest to SPP</div>"
+            + (
+                f"<div style='display:flex;justify-content:space-between;margin:.15rem 0;'>"
+                f"<span class='lbl'>CE <span class='strike-pill-ce'>{_ce_spp_strike}</span></span>"
+                f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);font-weight:700;'>₹{_ce_spp_ltp:.2f}</span>"
+                f"<span style='font-size:9px;color:var(--muted);'>Δ{_ce_spp_diff:.1f}</span>"
+                f"</div>"
+                if _ce_spp_strike else ""
+            )
+            + (
+                f"<div style='display:flex;justify-content:space-between;margin:.15rem 0;'>"
+                f"<span class='lbl'>PE <span class='strike-pill'>{_pe_spp_strike}</span></span>"
+                f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);font-weight:700;'>₹{_pe_spp_ltp:.2f}</span>"
+                f"<span style='font-size:9px;color:var(--muted);'>Δ{_pe_spp_diff:.1f}</span>"
+                f"</div>"
+                if _pe_spp_strike else ""
+            )
+            + f"</div>"
+            # Prev day data used
+            f"<div style='margin-top:.3rem;padding-top:.3rem;border-top:1px solid var(--border);'>"
+            f"<span class='lbl'>ATM {atm} prev-day: "
+            f"CE H:{_spp_ce_h:.0f}/L:{_spp_ce_l:.0f} OI:{_spp_ce_oi_L:.1f}L &nbsp;·&nbsp; "
+            f"PE H:{_spp_pe_h:.0f}/L:{_spp_pe_l:.0f} OI:{_spp_pe_oi_L:.1f}L</span>"
             f"</div></div>",
             unsafe_allow_html=True)
     else:
