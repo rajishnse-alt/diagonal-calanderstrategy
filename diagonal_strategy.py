@@ -17,6 +17,7 @@ import time
 import base64
 import csv
 import io
+import urllib.parse
 from datetime import datetime, timedelta
 import pytz
 
@@ -316,7 +317,11 @@ def hdr(tok):
     return {"Authorization": f"Bearer {tok}", "Accept": "application/json"}
 
 def build_auth_url(k, r):
-    return f"{UPSTOX_AUTH_URL}?response_type=code&client_id={k}&redirect_uri={r}"
+    return (
+        f"{UPSTOX_AUTH_URL}?response_type=code"
+        f"&client_id={urllib.parse.quote(k, safe='')}"
+        f"&redirect_uri={urllib.parse.quote(r, safe='')}"
+    )
 
 def exchange_code(k, s, r, code):
     try:
@@ -325,9 +330,14 @@ def exchange_code(k, s, r, code):
             data={"code":code,"client_id":k,"client_secret":s,"redirect_uri":r,"grant_type":"authorization_code"},
             headers={"Accept":"application/json"}, timeout=15,
         ).json()
-        return (d["access_token"], None) if "access_token" in d else (None, str(d))
-    except Exception as e:
-        return None, str(e)
+        if "access_token" in d:
+            return d["access_token"], None
+        # Return a safe error message — never echo back credentials or raw response
+        err_code = d.get("error", d.get("errorCode", "unknown"))
+        err_msg  = d.get("error_description", d.get("message", "Token exchange failed"))
+        return None, f"{err_code}: {err_msg}"
+    except Exception:
+        return None, "Token exchange request failed. Please try logging in again."
 
 
 # ─────────────────────────────────────────────
@@ -722,47 +732,63 @@ _strategy_banner = st.empty()
 # AUTH
 # ─────────────────────────────────────────────
 if not secrets_ok():
-    st.error("Add Upstox credentials to `.streamlit/secrets.toml`")
-    st.code('[upstox]\napi_key="..."\napi_secret="..."\nredirect_uri="http://localhost:8501"', language="toml")
+    st.error("Missing Upstox credentials in Streamlit secrets. Contact the app admin.")
     st.stop()
 
-api_key      = st.secrets["upstox"]["api_key"]
-api_secret   = st.secrets["upstox"]["api_secret"]
-redirect_uri = st.secrets["upstox"]["redirect_uri"]
+# Load secrets into local variables — never render these to the page
+_ak = st.secrets["upstox"]["api_key"]
+_as = st.secrets["upstox"]["api_secret"]
+_ru = st.secrets["upstox"]["redirect_uri"]
 
+# Pre-load baked token if present in secrets
 if "access_token" not in st.session_state:
     try:
-        baked = st.secrets["upstox"].get("access_token", "")
-        if baked:
-            st.session_state.update(access_token=baked, token_acquired=time.time())
+        _baked = st.secrets["upstox"].get("access_token", "")
+        if _baked:
+            st.session_state.update(access_token=_baked, token_acquired=time.time())
     except Exception:
         pass
 
-qp = st.query_params
-if qp.get("code") and "access_token" not in st.session_state:
+# Handle OAuth callback — consume code immediately and clear params
+_qp_code = st.query_params.get("code")
+if _qp_code and "access_token" not in st.session_state:
+    st.query_params.clear()   # clear URL params NOW before any render
     with st.spinner("Completing Upstox login…"):
-        tok, err = exchange_code(api_key, api_secret, redirect_uri, qp["code"])
-    if tok:
-        st.session_state.update(access_token=tok, token_acquired=time.time())
-        st.query_params.clear(); st.rerun()
+        _tok, _tok_err = exchange_code(_ak, _as, _ru, _qp_code)
+    if _tok:
+        st.session_state.update(access_token=_tok, token_acquired=time.time())
+        st.rerun()
     else:
-        st.error(f"Login failed: {err}"); st.stop()
+        st.error(f"Login failed — please try connecting again. ({_tok_err})")
+        st.stop()
+elif _qp_code:
+    # Code arrived but token already present — just clear the URL
+    st.query_params.clear()
 
+# Expire token after 24 h
 if "access_token" in st.session_state:
     if time.time() - st.session_state.get("token_acquired", 0) > 86400:
         del st.session_state["access_token"]; st.rerun()
 
 if "access_token" not in st.session_state:
-    auth_url = build_auth_url(api_key, redirect_uri)
-    st.markdown("<div class='login-box'>", unsafe_allow_html=True)
+    _auth_url = build_auth_url(_ak, _ru)
+    st.markdown(
+        "<div style='border:1px solid var(--border);border-radius:12px;"
+        "padding:1.5rem 2rem;max-width:320px;margin:2rem auto;text-align:center;'>",
+        unsafe_allow_html=True,
+    )
     st.markdown("### 🔐 Login with Upstox")
-    st.markdown("<p style='color:#4a6080;font-size:12px;font-family:monospace;'>One click per trading day</p>",
-                unsafe_allow_html=True)
-    st.link_button("CONNECT →", auth_url, use_container_width=False)
+    st.markdown(
+        "<p style='color:var(--muted);font-size:12px;'>One click per trading day</p>",
+        unsafe_allow_html=True,
+    )
+    st.link_button("CONNECT →", _auth_url, use_container_width=False)
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 token = st.session_state["access_token"]
+# Unset credential vars — no further need to keep them in scope
+del _ak, _as, _ru
 
 # ─────────────────────────────────────────────
 # PARAMETERS
