@@ -1040,6 +1040,13 @@ if _pcr_log_ok:
     if append_pcr_log(_gh_tok, _pcr_rows):
         st.session_state["_pcr_last_write"] = time.time()
 
+# Load PCR history into session cache early (used by mini-table below)
+if _gh_tok:
+    _hist_age = time.time() - st.session_state.get("_pcr_hist_ts", 0)
+    if _hist_age > 900 or "pcr_hist_rows" not in st.session_state:
+        st.session_state["pcr_hist_rows"] = load_pcr_history(_gh_tok)
+        st.session_state["_pcr_hist_ts"]  = time.time()
+
 pb1, pb2, pb3 = st.columns(3)
 with pb1:
     if _pcr_has_oi:
@@ -1067,6 +1074,41 @@ with pb1:
             f"<span class='lbl'> &nbsp;CE {_atm_ce_oi/1e5:.1f}L / PE {_atm_pe_oi/1e5:.1f}L</span>"
             f"</div></div>",
             unsafe_allow_html=True)
+
+        # ── Last 10 PCR mini-table ────────────────────────────────────────
+        _mini_rows = [
+            r for r in st.session_state.get("pcr_hist_rows", [])
+            if r.get("expiry_type") == "near"
+        ]
+        _mini_rows = sorted(_mini_rows, key=lambda r: r.get("timestamp", ""), reverse=True)[:10]
+        if _mini_rows:
+            _tbl_html = (
+                "<div style='margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border);'>"
+                "<div class='lbl' style='margin-bottom:.3rem;'>🕐 Last 10 PCR snapshots (near)</div>"
+                "<table style='width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px;'>"
+                "<tr style='color:var(--muted);text-align:right;'>"
+                "<th style='text-align:left;font-weight:500;'>Time</th>"
+                "<th>PCR</th><th>ATM PCR</th><th>Spot</th></tr>"
+            )
+            for _mr in _mini_rows:
+                try:
+                    _mr_pcr     = float(_mr.get("pcr_range", 0))
+                    _mr_atm_pcr = float(_mr.get("pcr_atm", 0))
+                    _mr_spot    = float(_mr.get("spot", 0))
+                    _mr_time    = _mr.get("timestamp", "")[-5:]   # HH:MM
+                    _mr_col     = "var(--bull)" if _mr_pcr >= 1.1 else ("var(--bear)" if _mr_pcr < 0.9 else "var(--gold)")
+                    _tbl_html += (
+                        f"<tr style='text-align:right;border-top:1px solid var(--border);'>"
+                        f"<td style='text-align:left;color:var(--muted);'>{_mr_time}</td>"
+                        f"<td style='color:{_mr_col};font-weight:700;'>{_mr_pcr:.2f}</td>"
+                        f"<td style='color:var(--muted);'>{_mr_atm_pcr:.2f}</td>"
+                        f"<td style='color:var(--muted);'>{_mr_spot:,.0f}</td>"
+                        f"</tr>"
+                    )
+                except Exception:
+                    continue
+            _tbl_html += "</table></div>"
+            st.markdown(_tbl_html, unsafe_allow_html=True)
     else:
         st.markdown(
             f"<div class='card'><div class='lbl'>PCR OI</div>"
@@ -1782,11 +1824,7 @@ st.markdown("<div class='sec-hdr'>📈 PCR History</div>", unsafe_allow_html=Tru
 if not _gh_tok:
     st.info("💡 Add `[github] token` to Streamlit secrets to enable PCR logging and history.")
 else:
-    # Load history (cached in session for the auto-refresh cycle — refresh from GitHub every 15 min)
-    _hist_age = time.time() - st.session_state.get("_pcr_hist_ts", 0)
-    if _hist_age > 900 or "pcr_hist_rows" not in st.session_state:
-        st.session_state["pcr_hist_rows"] = load_pcr_history(_gh_tok)
-        st.session_state["_pcr_hist_ts"]  = time.time()
+    # History already loaded into session cache earlier in the page
     _hist_rows = st.session_state.get("pcr_hist_rows", [])
 
     _today_str = datetime.now(IST).strftime("%Y-%m-%d")
