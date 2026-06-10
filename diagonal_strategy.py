@@ -405,6 +405,63 @@ def _get_oi_chg(md):
     return 0.0
 
 
+def calc_spp(chain_data, atm_strike):
+    """
+    SPP (Strike Price Point / UIP concept) for NIFTY.
+
+    Formula (from UIP reference):
+        ce_median = (ce_high + ce_low) / 2
+        pe_median = (pe_high + pe_low) / 2
+        spp = (ce_median × ce_oi + pe_median × pe_oi) / (ce_oi + pe_oi)
+
+    Uses today's intraday OHLC high/low from the Upstox chain market_data.ohlc.
+    Falls back to prev_close if intraday H/L are not yet available (pre-market).
+
+    Returns: (spp, ce_high, ce_low, pe_high, pe_low, ce_oi_L, pe_oi_L, source)
+    """
+    def _safe(v):
+        try:
+            f = float(v)
+            return f if f > 0 else None
+        except Exception:
+            return None
+
+    for row in chain_data:
+        if int(float(row.get("strike_price", 0))) != int(atm_strike):
+            continue
+        c_md   = (row.get("call_options") or {}).get("market_data") or {}
+        p_md   = (row.get("put_options")  or {}).get("market_data") or {}
+        c_ohlc = c_md.get("ohlc") or {}
+        p_ohlc = p_md.get("ohlc") or {}
+
+        ce_h = _safe(c_ohlc.get("high")) or _safe(c_md.get("high"))
+        ce_l = _safe(c_ohlc.get("low"))  or _safe(c_md.get("low"))
+        pe_h = _safe(p_ohlc.get("high")) or _safe(p_md.get("high"))
+        pe_l = _safe(p_ohlc.get("low"))  or _safe(p_md.get("low"))
+        ce_oi = _get_oi(c_md)
+        pe_oi = _get_oi(p_md)
+        ce_oi_L = ce_oi / 1e5
+        pe_oi_L = pe_oi / 1e5
+
+        if ce_h and ce_l and pe_h and pe_l:
+            ce_med = (ce_h + ce_l) / 2
+            pe_med = (pe_h + pe_l) / 2
+            tot_oi = ce_oi + pe_oi
+            spp = (ce_med * ce_oi + pe_med * pe_oi) / tot_oi if tot_oi > 0 else (ce_med + pe_med) / 2
+            return round(spp, 2), ce_h, ce_l, pe_h, pe_l, round(ce_oi_L, 2), round(pe_oi_L, 2), "intraday H/L"
+
+        # Fallback: use prev_close as both H and L proxy
+        ce_pc = _safe(c_md.get("prev_close_price"))
+        pe_pc = _safe(p_md.get("prev_close_price"))
+        if ce_pc and pe_pc:
+            tot_oi = ce_oi + pe_oi
+            spp = (ce_pc * ce_oi + pe_pc * pe_oi) / tot_oi if tot_oi > 0 else (ce_pc + pe_pc) / 2
+            return round(spp, 2), ce_pc, ce_pc, pe_pc, pe_pc, round(ce_oi_L, 2), round(pe_oi_L, 2), "prev close"
+
+        break
+    return None, None, None, None, None, None, None, None
+
+
 def parse_chain(data):
     ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg = {}, {}, {}, {}, {}, {}
     spot = None
@@ -983,6 +1040,10 @@ _far_atm_ce_oi = far_ce_oi.get(float(atm), 0)
 _far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
 _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
 
+# SPP (UIP concept) — OI-weighted median of ATM CE/PE H/L
+_spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
+    calc_spp(near_raw, atm)
+
 # ── PCR logging to GitHub CSV (throttled: market hours, once per 5 min) ─────
 _gh_tok = None
 try:
@@ -1047,7 +1108,7 @@ if _gh_tok:
         st.session_state["pcr_hist_rows"] = load_pcr_history(_gh_tok)
         st.session_state["_pcr_hist_ts"]  = time.time()
 
-pb1, pb2, pb3 = st.columns(3)
+pb1, pb2, pb3, pb4 = st.columns(4)
 with pb1:
     if _pcr_has_oi:
         _pcr_dir_col = "var(--bull)" if _pcr_delta > 0.01 else ("var(--bear)" if _pcr_delta < -0.01 else "var(--muted)")
@@ -1151,6 +1212,34 @@ with pb3:
         f"PE <span class='strike-pill'>{sell_pe_strike}</span> ₹{_sell_pe_ltp2:.2f}"
         f"</div></div>",
         unsafe_allow_html=True)
+with pb4:
+    if _spp is not None:
+        # SPP vs spot: above = bearish reference, below = bullish reference
+        _spp_vs_spot = spot - _spp
+        _spp_col  = "var(--bull)" if _spp_vs_spot > 0 else ("var(--bear)" if _spp_vs_spot < 0 else "var(--muted)")
+        _spp_lbl  = "Spot above SPP ↑" if _spp_vs_spot > 0 else ("Spot below SPP ↓" if _spp_vs_spot < 0 else "At SPP")
+        st.markdown(
+            f"<div class='card' style='border-left:4px solid var(--gold);'>"
+            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>({_spp_src})</span></div>"
+            f"<div class='val-big val-gold'>₹{_spp:,.2f}</div>"
+            f"<div style='display:flex;align-items:baseline;gap:8px;margin:.2rem 0;'>"
+            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_spp_col};'>"
+            f"{'+' if _spp_vs_spot > 0 else ''}{_spp_vs_spot:,.1f} pts</span>"
+            f"<span style='font-size:9px;color:var(--muted);'>{_spp_lbl}</span>"
+            f"</div>"
+            f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+            f"<span class='lbl'>ATM <span class='strike-pill-ce'>{atm}</span> &nbsp; "
+            f"CE H:{_spp_ce_h:.1f} L:{_spp_ce_l:.1f} &nbsp;·&nbsp; "
+            f"PE H:{_spp_pe_h:.1f} L:{_spp_pe_l:.1f}</span><br>"
+            f"<span class='lbl'>OI: CE {_spp_ce_oi_L:.1f}L &nbsp;/&nbsp; PE {_spp_pe_oi_L:.1f}L</span>"
+            f"</div></div>",
+            unsafe_allow_html=True)
+    else:
+        st.markdown(
+            "<div class='card'><div class='lbl'>SPP · UIP Reference</div>"
+            "<div class='val-big' style='color:var(--muted);'>N/A</div>"
+            "<div class='lbl'>H/L data not yet available</div></div>",
+            unsafe_allow_html=True)
 
 # Row 2 — CE legs
 r2c1, r2c2 = st.columns(2)
