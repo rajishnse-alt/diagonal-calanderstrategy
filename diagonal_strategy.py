@@ -1201,9 +1201,12 @@ with pb1:
             f"<div class='lbl'>OI not available in feed</div></div>",
             unsafe_allow_html=True)
 with pb2:
-    # √CE vs √PE signal
-    _sqrt_ce  = math.sqrt(_atm_ce) if _atm_ce > 0 else 0
-    _sqrt_pe  = math.sqrt(_atm_pe) if _atm_pe > 0 else 0
+    # √CE vs √PE signal — sum of 3 strikes each side, then √
+    # CE: ATM, ATM+1, ATM+2  |  PE: ATM, ATM-1, ATM-2
+    _ce_sum = sum(near_ce.get(float(atm + i * STEP), 0) for i in range(3))
+    _pe_sum = sum(near_pe.get(float(atm - i * STEP), 0) for i in range(3))
+    _sqrt_ce  = math.sqrt(_ce_sum) if _ce_sum > 0 else 0
+    _sqrt_pe  = math.sqrt(_pe_sum) if _pe_sum > 0 else 0
     _sqrt_sig = "BEARISH" if _sqrt_ce > _sqrt_pe else ("BULLISH" if _sqrt_pe > _sqrt_ce else "NEUTRAL")
     _sqrt_arrow = "▼" if _sqrt_sig == "BEARISH" else ("▲" if _sqrt_sig == "BULLISH" else "→")
     _sqrt_col   = "var(--bear)" if _sqrt_sig == "BEARISH" else ("var(--bull)" if _sqrt_sig == "BULLISH" else "var(--muted)")
