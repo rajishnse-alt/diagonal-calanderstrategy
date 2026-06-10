@@ -1201,8 +1201,19 @@ with pb1:
             f"<div class='lbl'>OI not available in feed</div></div>",
             unsafe_allow_html=True)
 with pb2:
+    # √CE vs √PE signal
+    _sqrt_ce  = math.sqrt(_atm_ce) if _atm_ce > 0 else 0
+    _sqrt_pe  = math.sqrt(_atm_pe) if _atm_pe > 0 else 0
+    _sqrt_sig = "BEARISH" if _sqrt_ce > _sqrt_pe else ("BULLISH" if _sqrt_pe > _sqrt_ce else "NEUTRAL")
+    _sqrt_arrow = "▼" if _sqrt_sig == "BEARISH" else ("▲" if _sqrt_sig == "BULLISH" else "→")
+    _sqrt_col   = "var(--bear)" if _sqrt_sig == "BEARISH" else ("var(--bull)" if _sqrt_sig == "BULLISH" else "var(--muted)")
+    _sqrt_expr  = (
+        f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f}" if _sqrt_sig == "BEARISH"
+        else f"√PE {_sqrt_pe:.2f} &gt; √CE {_sqrt_ce:.2f}" if _sqrt_sig == "BULLISH"
+        else f"√CE {_sqrt_ce:.2f} = √PE {_sqrt_pe:.2f}"
+    )
+
     if _spcl is not None:
-        _spcl_col   = "var(--bull)" if _spcl > 0 else "var(--muted)"
         st.markdown(
             f"<div class='card card-gold'>"
             f"<div class='lbl'>SPCL VAL &nbsp;·&nbsp; (√(CE+PE)×π/2 adj VIX)</div>"
@@ -1211,6 +1222,11 @@ with pb2:
             f"ATM CE <b style='color:var(--ce);'>₹{_atm_ce:.2f}</b> &nbsp;+&nbsp; "
             f"ATM PE <b style='color:var(--pe);'>₹{_atm_pe:.2f}</b> &nbsp;·&nbsp; "
             f"<span class='strike-pill-ce'>{atm}</span>"
+            f"</div>"
+            f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_sqrt_col};'>"
+            f"{_sqrt_arrow} {_sqrt_sig}</span>"
+            f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:6px;'>{_sqrt_expr}</span>"
             f"</div></div>",
             unsafe_allow_html=True)
     else:
@@ -1221,6 +1237,11 @@ with pb2:
             f"<div class='val-big val-gold'>{_straddle:.2f}</div>"
             f"<div class='lbl'>"
             f"CE <b style='color:var(--ce);'>₹{_atm_ce:.2f}</b> + PE <b style='color:var(--pe);'>₹{_atm_pe:.2f}</b>"
+            f"</div>"
+            f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_sqrt_col};'>"
+            f"{_sqrt_arrow} {_sqrt_sig}</span>"
+            f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:6px;'>{_sqrt_expr}</span>"
             f"</div></div>",
             unsafe_allow_html=True)
 with pb3:
