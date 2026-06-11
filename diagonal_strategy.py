@@ -713,6 +713,47 @@ def bs_delta(S, K, T, sigma, opt_type="CE", r=0.065):
     return nd1 if opt_type == "CE" else abs(nd1 - 1.0)
 
 
+def bs_gamma(S, K, T, sigma, r=0.065):
+    """
+    Black-Scholes gamma (same for CE and PE).
+    Gamma = phi(d1) / (S × sigma × sqrt(T))
+    """
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    d1   = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    phi  = math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi)
+    return phi / (S * sigma * math.sqrt(T))
+
+
+def net_gamma_lots(legs, spot, sigma, r=0.065):
+    """
+    Net signed gamma of the position in units of gamma-per-lot.
+    Short legs contribute negative gamma; long legs positive.
+    """
+    total = 0.0
+    for leg in legs:
+        T   = leg.get("T", 0.0)
+        g   = bs_gamma(spot, leg["strike"], T, sigma, r)
+        sign = -1 if leg["is_sell"] else 1
+        total += sign * g * leg["lots"]
+    return total
+
+
+def calc_wing_pe_lots(legs_without_pe_wing, spot, sigma, pe_wing_strike, pe_wing_T,
+                      min_lots=1, max_lots=20, r=0.065):
+    """
+    Solve for the number of PE wing lots required to make net portfolio gamma ≈ 0.
+    Returns an integer ≥ min_lots, capped at max_lots.
+    """
+    g_wing = bs_gamma(spot, pe_wing_strike, pe_wing_T, sigma, r)
+    if g_wing <= 0:
+        return min_lots
+    net_g  = net_gamma_lots(legs_without_pe_wing, spot, sigma, r)
+    # We need: net_g + lots × g_wing ≈ 0  →  lots = -net_g / g_wing
+    lots   = int(math.ceil(-net_g / g_wing))
+    return max(min_lots, min(lots, max_lots))
+
+
 def find_delta_strikes(strike_map, spot, T, sigma, opt_type, delta_lo=0.12, delta_hi=0.18, r=0.065):
     """
     Return list of {strike, ltp, delta} where abs(delta) ∈ [delta_lo, delta_hi],
@@ -1942,21 +1983,39 @@ _far_days   = max((datetime.strptime(far_exp, "%Y-%m-%d").date() - now.date()).d
 _T_far_std  = _far_days / 365.0
 _sigma_std  = (_eff_vix / 100.0) if _vix_ok else 0.15
 
-# Near-expiry wing hedge legs (+500 CE / -500 PE) — flatten gamma intraday
-_wing_ce_strike = int(round((sell_ce_strike + 500) / STEP) * STEP)
-_wing_pe_strike = int(round((sell_pe_strike - 500) / STEP) * STEP)
-_wing_ce_ltp    = near_ce.get(float(_wing_ce_strike), 0)
-_wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
+# ── Wing hedge legs (near expiry) ────────────────────────────────────────────
+# CE wing: +500 pts from sell strike, same lots as short (= sell_lots)
+# PE wing: deep OTM at ~10% below spot; lots solved via gamma-neutralisation
+#   so net portfolio gamma ≈ 0 → intraday P&L curve is flat.
+_wing_ce_strike  = int(round((sell_ce_strike + 500) / STEP) * STEP)
+_wing_pe_strike  = int(round((spot * 0.90) / STEP) * STEP)
+_wing_ce_lots    = sell_lots
+_wing_ce_ltp     = near_ce.get(float(_wing_ce_strike), 0)
+_wing_pe_ltp     = near_pe.get(float(_wing_pe_strike), 0)
+
+# Build partial legs (without PE wing) to measure current net gamma
+_legs_no_pe_wing = [
+    {"opt_type":"CE","strike":sell_ce_strike, "ltp":sell_ce_ltp, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
+    {"opt_type":"PE","strike":sell_pe_strike, "ltp":sell_pe_ltp, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
+    {"opt_type":"CE","strike":buy_ce_strike,  "ltp":buy_ce_ltp,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
+    {"opt_type":"PE","strike":buy_pe_strike,  "ltp":buy_pe_ltp,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
+    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std},
+]
+_wing_pe_lots = calc_wing_pe_lots(
+    _legs_no_pe_wing, spot, _sigma_std,
+    pe_wing_strike=_wing_pe_strike, pe_wing_T=_T_near_std,
+    min_lots=1, max_lots=30
+)
 
 legs = [
     # Core diagonal — short near, long far (same strike)
-    {"opt_type":"CE","strike":sell_ce_strike,"ltp":sell_ce_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near CE"},
-    {"opt_type":"PE","strike":sell_pe_strike,"ltp":sell_pe_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near PE"},
-    {"opt_type":"CE","strike":buy_ce_strike, "ltp":buy_ce_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far CE"},
-    {"opt_type":"PE","strike":buy_pe_strike, "ltp":buy_pe_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far PE"},
-    # Wing hedges — near expiry, ±500 pts OTM, 1L each (taper intraday gamma)
-    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":1,"is_sell":False,"is_near":True, "T":_T_near_std, "label":"BUY wing CE +500"},
-    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":1,"is_sell":False,"is_near":True, "T":_T_near_std, "label":"BUY wing PE -500"},
+    {"opt_type":"CE","strike":sell_ce_strike, "ltp":sell_ce_ltp, "lots":sell_lots,      "is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near CE"},
+    {"opt_type":"PE","strike":sell_pe_strike, "ltp":sell_pe_ltp, "lots":sell_lots,      "is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near PE"},
+    {"opt_type":"CE","strike":buy_ce_strike,  "ltp":buy_ce_ltp,  "lots":BUY_LOTS,       "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far CE"},
+    {"opt_type":"PE","strike":buy_pe_strike,  "ltp":buy_pe_ltp,  "lots":BUY_LOTS,       "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far PE"},
+    # Wing hedges — gamma-neutral sizing
+    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots,  "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY wing CE +500"},
+    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots,  "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY wing PE deep OTM ({_wing_pe_lots}L)"},
 ]
 
 # Deployed capital: gross premium of all legs × lot_size (margin proxy)
@@ -1976,7 +2035,7 @@ with col_s:
         f"<div class='val-big val-bull'>₹{total_sell:,.0f}</div>"
         f"<div class='lbl'>{sell_lots}L × CE+PE short</div></div>", unsafe_allow_html=True)
 with col_b:
-    _wing_cost = (_wing_ce_ltp + _wing_pe_ltp) * LOT_SIZE
+    _wing_cost = (_wing_ce_ltp * _wing_ce_lots + _wing_pe_ltp * _wing_pe_lots) * LOT_SIZE
     st.markdown(
         f"<div class='card'><div class='lbl'>Premium Paid</div>"
         f"<div class='val-big val-bear'>₹{total_buy + _wing_cost:,.0f}</div>"
@@ -2001,14 +2060,14 @@ st.markdown(
     f"<div class='card' style='border-left:4px solid #4d9fff;margin-top:.3rem;'>"
     f"<div class='lbl' style='color:#4d9fff;font-weight:700;letter-spacing:1px;'>🪽 WING HEDGES — Near Expiry (flatten intraday gamma)</div>"
     f"<div style='display:flex;gap:2rem;margin-top:.4rem;flex-wrap:wrap;'>"
-    f"<div><span class='lbl'>BUY 1L CE</span> "
+    f"<div><span class='lbl'>BUY {_wing_ce_lots}L CE</span> "
     f"<span class='strike-pill-buy'>{_wing_ce_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_wing_ce_ltp:.2f}</span>"
     f"<span style='font-size:9px;color:var(--muted);'> &nbsp;+500 from sell {sell_ce_strike}</span></div>"
-    f"<div><span class='lbl'>BUY 1L PE</span> "
+    f"<div><span class='lbl'>BUY {_wing_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_wing_pe_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_wing_pe_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;−500 from sell {sell_pe_strike}</span></div>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;~10% below spot · γ-neutral sizing</span></div>"
     f"</div>"
     f"<div style='margin-top:.3rem;font-size:9px;color:var(--muted);'>"
     f"These legs cap intraday gamma — the blue dashed line in the chart should stay flat within the 1σ daily band.</div>"
@@ -2026,7 +2085,7 @@ st.caption(
     f"🟢 Green solid = P&L at near expiry &nbsp;│&nbsp; "
     f"🔵 Blue dashed = Intraday P&L now (BS-priced, should stay flat) &nbsp;│&nbsp; "
     f"🔴 Red dashed = 1.6% deployed capital loss cap (₹{abs(int(_deployed_cap*0.016)):,}) &nbsp;│&nbsp; "
-    f"Short: CE {sell_ce_strike} / PE {sell_pe_strike} &nbsp;│&nbsp; Far long: CE {buy_ce_strike} / PE {buy_pe_strike} &nbsp;│&nbsp; Wing hedge: CE {_wing_ce_strike} / PE {_wing_pe_strike}"
+    f"Short: CE {sell_ce_strike} / PE {sell_pe_strike} &nbsp;│&nbsp; Far long: CE {buy_ce_strike} / PE {buy_pe_strike} &nbsp;│&nbsp; Wing: BUY {_wing_ce_lots}L CE {_wing_ce_strike} + BUY {_wing_pe_lots}L PE {_wing_pe_strike}"
 )
 
 # ─────────────────────────────────────────────
