@@ -778,23 +778,37 @@ def nearest_chain_strike(chain_map, target, direction="below"):
         return int(min(candidates)) if candidates else int(min(strikes, key=lambda s: abs(s - target)))
 
 
-def find_deep_otm_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0):
+def find_deep_otm_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0,
+                         min_strike=None, max_strike=None):
     """
-    Find the deep OTM strike (CE or PE) whose LTP falls in [ltp_lo, ltp_hi].
-    Among qualifying strikes, picks the one with LTP closest to the midpoint.
-    Falls back to the strike with LTP closest to ltp_lo if none in range.
-    Returns (strike, ltp).
+    Find the deep OTM strike whose LTP falls in [ltp_lo, ltp_hi],
+    constrained to strikes in [min_strike, max_strike] (pass None to skip).
+
+    For CE deep wings: pass min_strike = sell_ce_strike + 1500 (truly far OTM).
+    For PE deep wings: pass max_strike = sell_pe_strike - 1500 (truly far OTM).
+
+    Enforcing the distance prevents near-OTM options (which have real delta)
+    from being picked just because they happen to be cheap near expiry.
+
+    Returns (strike, ltp).  Returns (0, 0.0) if chain is empty.
     """
-    candidates = [(s, ltp) for s, ltp in chain_map.items() if ltp_lo <= ltp <= ltp_hi]
+    pool = {s: ltp for s, ltp in chain_map.items() if ltp > 0}
+    if min_strike is not None:
+        pool = {s: ltp for s, ltp in pool.items() if s >= min_strike}
+    if max_strike is not None:
+        pool = {s: ltp for s, ltp in pool.items() if s <= max_strike}
+    if not pool:
+        return 0, 0.0
+
+    candidates = [(s, ltp) for s, ltp in pool.items() if ltp_lo <= ltp <= ltp_hi]
     if candidates:
         mid = (ltp_lo + ltp_hi) / 2
         best = min(candidates, key=lambda x: abs(x[1] - mid))
         return int(best[0]), best[1]
-    # fallback: strike whose LTP is closest to ltp_lo (nearest cheap OTM)
-    positive = [(s, ltp) for s, ltp in chain_map.items() if ltp > 0]
-    if not positive:
-        return 0, 0.0
-    best = min(positive, key=lambda x: abs(x[1] - ltp_lo))
+
+    # Fallback: pick the strike in pool whose LTP is closest to midpoint of range
+    mid = (ltp_lo + ltp_hi) / 2
+    best = min(pool.items(), key=lambda x: abs(x[1] - mid))
     return int(best[0]), best[1]
 
 # alias
@@ -2044,8 +2058,12 @@ _wing_ce_lots   = sell_lots
 _wing_pe_lots   = sell_lots
 
 # Deep OTM CE and PE (LTP ₹4–₹6)
-_deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(near_ce, ltp_lo=4.0, ltp_hi=6.0)
-_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(near_pe, ltp_lo=4.0, ltp_hi=6.0)
+# CE must be ≥ sell_ce_strike + 1500 so it is truly far OTM with negligible delta near spot
+# PE must be ≤ sell_pe_strike − 1500 for the same reason
+_deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(
+    near_ce, ltp_lo=4.0, ltp_hi=6.0, min_strike=sell_ce_strike + 1500)
+_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
+    near_pe, ltp_lo=4.0, ltp_hi=6.0, max_strike=sell_pe_strike - 1500)
 
 # Deep OTM wings — each side neutralizes ITS OWN gamma independently.
 # CE side: short near CE + long far CE + near +500 wing
@@ -2254,8 +2272,10 @@ if _vix_ok and _eff_vix >= 15.0:
 
         # Deep OTM CE + PE wings: LTP ₹4–₹6, gamma split 50/50
         _T_hv = max(_hv_sell_dte, 1) / 365.0
-        _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(_hv_sell_ce, ltp_lo=4.0, ltp_hi=6.0)
-        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(_hv_sell_pe, ltp_lo=4.0, ltp_hi=6.0)
+        _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
+            _hv_sell_ce, ltp_lo=4.0, ltp_hi=6.0, min_strike=_hv_ce["strike"] + 1500)
+        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
+            _hv_sell_pe, ltp_lo=4.0, ltp_hi=6.0, max_strike=_hv_pe["strike"] - 1500)
         # Each side neutralizes its own gamma — split emerges from actual gamma distribution
         _hv_ce_side_legs = [
             {"strike":_hv_ce["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
