@@ -1069,12 +1069,15 @@ _far_atm_ce_oi = far_ce_oi.get(float(atm), 0)
 _far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
 _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
 
-# SPP (UIP concept) — computed ONCE per day from prev-day H/L/OI; cached in session_state
+# SPP (UIP concept) — computed ONCE per calendar day, keyed ONLY by date.
+# ATM used is whatever it is on first computation (open/premarket ATM).
+# Never recomputed intraday even if spot crosses a strike boundary.
 _today_str = now.date().isoformat()
 _spp_cache = st.session_state.get("spp_cache", {})
-if _spp_cache.get("date") == _today_str and _spp_cache.get("atm") == atm:
-    # Reuse cached value — SPP must not change intraday
+if _spp_cache.get("date") == _today_str:
+    # Locked for the day — restore cached values
     _spp        = _spp_cache["spp"]
+    _spp_atm    = _spp_cache["atm"]
     _spp_ce_h   = _spp_cache["ce_h"]
     _spp_ce_l   = _spp_cache["ce_l"]
     _spp_pe_h   = _spp_cache["pe_h"]
@@ -1083,12 +1086,14 @@ if _spp_cache.get("date") == _today_str and _spp_cache.get("atm") == atm:
     _spp_pe_oi_L= _spp_cache["pe_oi_L"]
     _spp_src    = _spp_cache["src"]
 else:
+    # First call of the day — compute and lock
     with st.spinner("Computing SPP…"):
         _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
             calc_spp(token, near_raw, atm)
+    _spp_atm = atm  # record the ATM used (open-price ATM)
     if _spp is not None:
         st.session_state["spp_cache"] = {
-            "date": _today_str, "atm": atm,
+            "date": _today_str, "atm": _spp_atm,
             "spp": _spp, "ce_h": _spp_ce_h, "ce_l": _spp_ce_l,
             "pe_h": _spp_pe_h, "pe_l": _spp_pe_l,
             "ce_oi_L": _spp_ce_oi_L, "pe_oi_L": _spp_pe_oi_L,
@@ -1304,20 +1309,29 @@ with pb4:
                 if _d < _pe_spp_diff:
                     _pe_spp_diff, _pe_spp_strike, _pe_spp_ltp = _d, int(_s), _ltp
 
-        _spp_vs_spot = spot - _spp
-        _spp_col = "var(--bull)" if _spp_vs_spot > 0 else ("var(--bear)" if _spp_vs_spot < 0 else "var(--muted)")
-        _spp_lbl = "Spot above SPP ↑" if _spp_vs_spot > 0 else ("Spot below SPP ↓" if _spp_vs_spot < 0 else "At SPP")
+        # Spot vs Strike_Near_SPP (the reference strike, not raw SPP premium)
+        _ref_strike = _ce_spp_strike or _pe_spp_strike
+        if _ref_strike:
+            _vs_ref = spot - _ref_strike
+            _ref_col = "var(--bull)" if _vs_ref > 0 else ("var(--bear)" if _vs_ref < 0 else "var(--muted)")
+            _ref_lbl = f"Spot above ref strike ↑" if _vs_ref > 0 else (f"Spot below ref strike ↓" if _vs_ref < 0 else "At ref strike")
+        else:
+            _vs_ref, _ref_col, _ref_lbl = None, "var(--muted)", ""
         st.markdown(
             f"<div class='card' style='border-left:4px solid var(--gold);'>"
-            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>(prev {_spp_src})</span></div>"
+            f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>"
+            f"(prev {_spp_src} · ATM {_spp_atm} locked)</span></div>"
             f"<div class='val-big val-gold'>₹{_spp:,.2f}</div>"
-            f"<div style='display:flex;align-items:baseline;gap:8px;margin:.2rem 0;'>"
-            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_spp_col};'>"
-            f"{'+' if _spp_vs_spot > 0 else ''}{_spp_vs_spot:,.1f} pts</span>"
-            f"<span style='font-size:9px;color:var(--muted);'>{_spp_lbl}</span>"
-            f"</div>"
+            + (
+                f"<div style='display:flex;align-items:baseline;gap:8px;margin:.2rem 0;'>"
+                f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_ref_col};'>"
+                f"Spot {'+' if _vs_ref > 0 else ''}{_vs_ref:,.0f} vs {_ref_strike}</span>"
+                f"<span style='font-size:9px;color:var(--muted);'>{_ref_lbl}</span>"
+                f"</div>"
+                if _vs_ref is not None else ""
+            )
             # Strikes nearest to SPP
-            f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
+            + f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
             f"<div class='lbl' style='margin-bottom:.2rem;'>Strikes nearest to SPP</div>"
             + (
                 f"<div style='display:flex;justify-content:space-between;margin:.15rem 0;'>"
@@ -1338,7 +1352,7 @@ with pb4:
             + f"</div>"
             # Prev day data used
             f"<div style='margin-top:.3rem;padding-top:.3rem;border-top:1px solid var(--border);'>"
-            f"<span class='lbl'>ATM {atm} prev-day: "
+            f"<span class='lbl'>ATM {_spp_atm} prev-day: "
             f"CE H:{_spp_ce_h:.0f}/L:{_spp_ce_l:.0f} OI:{_spp_ce_oi_L:.1f}L &nbsp;·&nbsp; "
             f"PE H:{_spp_pe_h:.0f}/L:{_spp_pe_l:.0f} OI:{_spp_pe_oi_L:.1f}L</span>"
             f"</div></div>",
