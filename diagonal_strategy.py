@@ -739,19 +739,25 @@ def net_gamma_lots(legs, spot, sigma, r=0.065):
     return total
 
 
-def calc_wing_pe_lots(legs_without_pe_wing, spot, sigma, pe_wing_strike, pe_wing_T,
-                      min_lots=1, max_lots=20, r=0.065):
+def calc_wing_lots(legs_context, spot, sigma, wing_strike, wing_T,
+                   gamma_fraction=1.0, min_lots=1, max_lots=50, r=0.065):
     """
-    Solve for the number of PE wing lots required to make net portfolio gamma ≈ 0.
-    Returns an integer ≥ min_lots, capped at max_lots.
+    Solve for lots of a deep OTM wing buy needed to offset gamma_fraction of
+    the net negative gamma in legs_context.
+      gamma_fraction=1.0 → offset all remaining gamma (single wing)
+      gamma_fraction=0.5 → offset half (when CE+PE wings share the job equally)
+    Returns an integer clamped to [min_lots, max_lots].
     """
-    g_wing = bs_gamma(spot, pe_wing_strike, pe_wing_T, sigma, r)
+    g_wing = bs_gamma(spot, wing_strike, wing_T, sigma, r)
     if g_wing <= 0:
         return min_lots
-    net_g  = net_gamma_lots(legs_without_pe_wing, spot, sigma, r)
-    # We need: net_g + lots × g_wing ≈ 0  →  lots = -net_g / g_wing
-    lots   = int(math.ceil(-net_g / g_wing))
+    net_g = net_gamma_lots(legs_context, spot, sigma, r)
+    lots  = int(math.ceil((-net_g * gamma_fraction) / g_wing))
     return max(min_lots, min(lots, max_lots))
+
+
+# keep old name as alias for backward compat
+calc_wing_pe_lots = calc_wing_lots
 
 
 def nearest_chain_strike(chain_map, target, direction="below"):
@@ -772,9 +778,9 @@ def nearest_chain_strike(chain_map, target, direction="below"):
         return int(min(candidates)) if candidates else int(min(strikes, key=lambda s: abs(s - target)))
 
 
-def find_deep_otm_pe_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0):
+def find_deep_otm_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0):
     """
-    Find the deep OTM PE strike whose LTP falls in [ltp_lo, ltp_hi].
+    Find the deep OTM strike (CE or PE) whose LTP falls in [ltp_lo, ltp_hi].
     Among qualifying strikes, picks the one with LTP closest to the midpoint.
     Falls back to the strike with LTP closest to ltp_lo if none in range.
     Returns (strike, ltp).
@@ -790,6 +796,9 @@ def find_deep_otm_pe_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0):
         return 0, 0.0
     best = min(positive, key=lambda x: abs(x[1] - ltp_lo))
     return int(best[0]), best[1]
+
+# alias
+find_deep_otm_pe_strike = find_deep_otm_strike
 
 
 def find_delta_strikes(strike_map, spot, T, sigma, opt_type, delta_lo=0.12, delta_hi=0.18, r=0.065):
@@ -2022,37 +2031,59 @@ _T_far_std  = _far_days / 365.0
 _sigma_std  = (_eff_vix / 100.0) if _vix_ok else 0.15
 
 # ── Wing hedge legs (near expiry) ────────────────────────────────────────────
-# CE wing: +500 pts from sell strike, same lots as short (= sell_lots)
-# PE wing: deep OTM at ~10% below spot; lots solved via gamma-neutralisation
-#   so net portfolio gamma ≈ 0 → intraday P&L curve is flat.
-_wing_ce_strike          = int(round((sell_ce_strike + 500) / STEP) * STEP)
-_wing_pe_strike, _wing_pe_ltp = find_deep_otm_pe_strike(near_pe, ltp_lo=4.0, ltp_hi=6.0)
-_wing_ce_lots            = sell_lots
-_wing_ce_ltp             = near_ce.get(float(_wing_ce_strike), 0)
+# Near wings  : CE +500 (sell_lots) + PE -500 (sell_lots)  — primary taper
+# Deep OTM wings: CE & PE both with LTP ₹4–₹6; lots split 50/50 from gamma solver
+#   → net portfolio gamma ≈ 0 on both sides → blue line flat
 
-# Build partial legs (without PE wing) to measure current net gamma
-_legs_no_pe_wing = [
-    {"opt_type":"CE","strike":sell_ce_strike, "ltp":sell_ce_ltp, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
-    {"opt_type":"PE","strike":sell_pe_strike, "ltp":sell_pe_ltp, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
-    {"opt_type":"CE","strike":buy_ce_strike,  "ltp":buy_ce_ltp,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
-    {"opt_type":"PE","strike":buy_pe_strike,  "ltp":buy_pe_ltp,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
-    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std},
+# Near ±500 wings
+_wing_ce_strike = int(round((sell_ce_strike + 500) / STEP) * STEP)
+_wing_pe_strike = int(round((sell_pe_strike - 500) / STEP) * STEP)
+_wing_ce_ltp    = near_ce.get(float(_wing_ce_strike), 0)
+_wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
+_wing_ce_lots   = sell_lots
+_wing_pe_lots   = sell_lots
+
+# Deep OTM CE and PE (LTP ₹4–₹6)
+_deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(near_ce, ltp_lo=4.0, ltp_hi=6.0)
+_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(near_pe, ltp_lo=4.0, ltp_hi=6.0)
+
+# Deep OTM wings — each side neutralizes ITS OWN gamma independently.
+# CE side: short near CE + long far CE + near +500 wing
+# PE side: short near PE + long far PE + near -500 wing
+# The split naturally reflects actual gamma imbalance between sides (may be 60/40, 70/30, etc.)
+_ce_side_legs = [
+    {"strike":sell_ce_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
+    {"strike":buy_ce_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
+    {"strike":_wing_ce_strike,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std},
 ]
-_wing_pe_lots = calc_wing_pe_lots(
-    _legs_no_pe_wing, spot, _sigma_std,
-    pe_wing_strike=_wing_pe_strike, pe_wing_T=_T_near_std,
-    min_lots=1, max_lots=50
+_pe_side_legs = [
+    {"strike":sell_pe_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
+    {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
+    {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std},
+]
+_deep_ce_lots = calc_wing_lots(
+    _ce_side_legs, spot, _sigma_std,
+    wing_strike=_deep_ce_strike, wing_T=_T_near_std,
+    gamma_fraction=1.0, min_lots=1, max_lots=50
+)
+_deep_pe_lots = calc_wing_lots(
+    _pe_side_legs, spot, _sigma_std,
+    wing_strike=_deep_pe_strike, wing_T=_T_near_std,
+    gamma_fraction=1.0, min_lots=1, max_lots=50
 )
 
 legs = [
-    # Core diagonal — short near, long far (same strike)
-    {"opt_type":"CE","strike":sell_ce_strike, "ltp":sell_ce_ltp, "lots":sell_lots,      "is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near CE"},
-    {"opt_type":"PE","strike":sell_pe_strike, "ltp":sell_pe_ltp, "lots":sell_lots,      "is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near PE"},
-    {"opt_type":"CE","strike":buy_ce_strike,  "ltp":buy_ce_ltp,  "lots":BUY_LOTS,       "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far CE"},
-    {"opt_type":"PE","strike":buy_pe_strike,  "ltp":buy_pe_ltp,  "lots":BUY_LOTS,       "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far PE"},
-    # Wing hedges — gamma-neutral sizing
-    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots,  "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY wing CE +500"},
-    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots,  "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY wing PE deep OTM ({_wing_pe_lots}L)"},
+    # Core diagonal — short near, long far
+    {"opt_type":"CE","strike":sell_ce_strike, "ltp":sell_ce_ltp, "lots":sell_lots,     "is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near CE"},
+    {"opt_type":"PE","strike":sell_pe_strike, "ltp":sell_pe_ltp, "lots":sell_lots,     "is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near PE"},
+    {"opt_type":"CE","strike":buy_ce_strike,  "ltp":buy_ce_ltp,  "lots":BUY_LOTS,      "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far CE"},
+    {"opt_type":"PE","strike":buy_pe_strike,  "ltp":buy_pe_ltp,  "lots":BUY_LOTS,      "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far PE"},
+    # Near ±500 wings
+    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing CE +500"},
+    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing PE -500"},
+    # Deep OTM wings (γ-taper)
+    {"opt_type":"CE","strike":_deep_ce_strike,"ltp":_deep_ce_ltp,"lots":_deep_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY deep CE ({_deep_ce_lots}L) ₹4-6"},
+    {"opt_type":"PE","strike":_deep_pe_strike,"ltp":_deep_pe_ltp,"lots":_deep_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY deep PE ({_deep_pe_lots}L) ₹4-6"},
 ]
 
 # Deployed capital: gross premium of all legs × lot_size (margin proxy)
@@ -2072,11 +2103,14 @@ with col_s:
         f"<div class='val-big val-bull'>₹{total_sell:,.0f}</div>"
         f"<div class='lbl'>{sell_lots}L × CE+PE short</div></div>", unsafe_allow_html=True)
 with col_b:
-    _wing_cost = (_wing_ce_ltp * _wing_ce_lots + _wing_pe_ltp * _wing_pe_lots) * LOT_SIZE
+    _wing_cost = (
+        _wing_ce_ltp * _wing_ce_lots + _wing_pe_ltp * _wing_pe_lots
+        + _deep_ce_ltp * _deep_ce_lots + _deep_pe_ltp * _deep_pe_lots
+    ) * LOT_SIZE
     st.markdown(
         f"<div class='card'><div class='lbl'>Premium Paid</div>"
         f"<div class='val-big val-bear'>₹{total_buy + _wing_cost:,.0f}</div>"
-        f"<div class='lbl'>{BUY_LOTS}L far CE+PE + wing hedges ₹{_wing_cost:,.0f}</div></div>",
+        f"<div class='lbl'>{BUY_LOTS}L far CE+PE + all wings ₹{_wing_cost:,.0f}</div></div>",
         unsafe_allow_html=True)
 with col_beu:
     st.markdown(
@@ -2097,14 +2131,26 @@ st.markdown(
     f"<div class='card' style='border-left:4px solid #4d9fff;margin-top:.3rem;'>"
     f"<div class='lbl' style='color:#4d9fff;font-weight:700;letter-spacing:1px;'>🪽 WING HEDGES — Near Expiry (flatten intraday gamma)</div>"
     f"<div style='display:flex;gap:2rem;margin-top:.4rem;flex-wrap:wrap;'>"
+    # Near ±500
     f"<div><span class='lbl'>BUY {_wing_ce_lots}L CE</span> "
     f"<span class='strike-pill-buy'>{_wing_ce_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_wing_ce_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;+500 from sell {sell_ce_strike}</span></div>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;+500</span></div>"
     f"<div><span class='lbl'>BUY {_wing_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_wing_pe_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_wing_pe_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;LTP ₹4–₹6 deep OTM · {_wing_pe_lots}L γ-neutral</span></div>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;−500</span></div>"
+    # Deep OTM γ-taper
+    f"<div style='border-left:2px solid #4d9fff;padding-left:.5rem;'>"
+    f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_ce_lots}L CE</span> "
+    f"<span class='strike-pill-buy'>{_deep_ce_strike}</span> "
+    f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_deep_ce_ltp:.2f}</span>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;deep OTM γ-taper</span></div>"
+    f"<div style='border-left:2px solid #4d9fff;padding-left:.5rem;'>"
+    f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_pe_lots}L PE</span> "
+    f"<span class='strike-pill'>{_deep_pe_strike}</span> "
+    f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_deep_pe_ltp:.2f}</span>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;deep OTM γ-taper</span></div>"
     f"</div>"
     f"<div style='margin-top:.3rem;font-size:9px;color:var(--muted);'>"
     f"These legs cap intraday gamma — the blue dashed line in the chart should stay flat within the 1σ daily band.</div>"
@@ -2206,19 +2252,28 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
         _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
 
-        # Deep OTM PE wing: select strike where LTP ∈ [₹4, ₹6], gamma-neutral lots
-        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_pe_strike(_hv_sell_pe, ltp_lo=4.0, ltp_hi=6.0)
-        _T_hv              = max(_hv_sell_dte, 1) / 365.0
-        _hv_legs_no_deep = [
-            {"opt_type":"CE","strike":_hv_ce["strike"], "ltp":_hv_ce["ltp"],  "lots":2,          "is_sell":True,  "T":_T_hv},
-            {"opt_type":"PE","strike":_hv_pe["strike"], "ltp":_hv_pe["ltp"],  "lots":2,          "is_sell":True,  "T":_T_hv},
-            {"opt_type":"CE","strike":_hv_ce2_strike,   "ltp":_hv_ce2_ltp,   "lots":1,          "is_sell":False, "T":_T_hv},
-            {"opt_type":"PE","strike":_hv_pe2_strike,   "ltp":_hv_pe2_ltp,   "lots":1,          "is_sell":False, "T":_T_hv},
+        # Deep OTM CE + PE wings: LTP ₹4–₹6, gamma split 50/50
+        _T_hv = max(_hv_sell_dte, 1) / 365.0
+        _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(_hv_sell_ce, ltp_lo=4.0, ltp_hi=6.0)
+        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(_hv_sell_pe, ltp_lo=4.0, ltp_hi=6.0)
+        # Each side neutralizes its own gamma — split emerges from actual gamma distribution
+        _hv_ce_side_legs = [
+            {"strike":_hv_ce["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
+            {"strike":_hv_ce2_strike,   "lots":1, "is_sell":False, "T":_T_hv},
         ]
-        _hv_deep_pe_lots = calc_wing_pe_lots(
-            _hv_legs_no_deep, spot, _sigma,
-            pe_wing_strike=_hv_deep_pe_strike, pe_wing_T=_T_hv,
-            min_lots=1, max_lots=50
+        _hv_pe_side_legs = [
+            {"strike":_hv_pe["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
+            {"strike":_hv_pe2_strike,   "lots":1, "is_sell":False, "T":_T_hv},
+        ]
+        _hv_deep_ce_lots = calc_wing_lots(
+            _hv_ce_side_legs, spot, _sigma,
+            wing_strike=_hv_deep_ce_strike, wing_T=_T_hv,
+            gamma_fraction=1.0, min_lots=1, max_lots=50
+        )
+        _hv_deep_pe_lots = calc_wing_lots(
+            _hv_pe_side_legs, spot, _sigma,
+            wing_strike=_hv_deep_pe_strike, wing_T=_T_hv,
+            gamma_fraction=1.0, min_lots=1, max_lots=50
         )
 
         # Far expiry selection: DTE >= 2 × sell_DTE
@@ -2245,11 +2300,13 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
         _hv_pe_buy_ltp = _hv_far_pe.get(float(_hv_pe["strike"]), 0)
 
-        # Net premium:
-        # CE: sell 2L primary - buy 1L +500 near - buy 1L far monthly
-        # PE: sell 2L primary - buy 1L -500 near - buy deep_lots deep OTM - buy 1L far monthly
-        _hv_ce_collect = (_hv_ce["ltp"] * 2 - _hv_ce2_ltp * 1 - _hv_ce_buy_ltp * 1) * LOT_SIZE
-        _hv_pe_collect = (_hv_pe["ltp"] * 2 - _hv_pe2_ltp * 1
+        # Net premium (deep OTM wings on BOTH sides):
+        _hv_ce_collect = (_hv_ce["ltp"] * 2
+                          - _hv_ce2_ltp * 1
+                          - _hv_deep_ce_ltp * _hv_deep_ce_lots
+                          - _hv_ce_buy_ltp  * 1) * LOT_SIZE
+        _hv_pe_collect = (_hv_pe["ltp"] * 2
+                          - _hv_pe2_ltp * 1
                           - _hv_deep_pe_ltp * _hv_deep_pe_lots
                           - _hv_pe_buy_ltp  * 1) * LOT_SIZE
         _hv_net        = _hv_ce_collect + _hv_pe_collect
@@ -2268,10 +2325,16 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>₹{_hv_ce['ltp']:.2f}</span>"
                 f"<span style='font-size:10px;color:var(--muted);'>δ {_hv_ce['delta']:.3f}</span>"
                 f"</div>"
-                # Extra OTM buy (+300)
+                # Near +500 hedge
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
                 f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_ce2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(+500 hedge)</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce2_ltp:.2f}</span>"
+                f"</div>"
+                # Deep OTM CE wing (γ-taper)
+                f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;background:rgba(77,159,255,0.07);border-radius:4px;padding:2px 4px;'>"
+                f"<span class='lbl'>BUY {_hv_deep_ce_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_deep_ce_strike}</span>"
+                f" <span style='color:#4d9fff;font-size:9px;font-weight:700;'>🪽 DEEP OTM γ-TAPER</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:#4d9fff;'>₹{_hv_deep_ce_ltp:.2f}</span>"
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
@@ -2300,10 +2363,16 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>₹{_hv_pe['ltp']:.2f}</span>"
                 f"<span style='font-size:10px;color:var(--muted);'>δ {_hv_pe['delta']:.3f}</span>"
                 f"</div>"
-                # Extra OTM buy (-300)
+                # Near -500 hedge
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
                 f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_pe2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(-500 hedge)</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe2_ltp:.2f}</span>"
+                f"</div>"
+                # Deep OTM PE wing (γ-taper)
+                f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;background:rgba(77,159,255,0.07);border-radius:4px;padding:2px 4px;'>"
+                f"<span class='lbl'>BUY {_hv_deep_pe_lots}L &nbsp;<span class='strike-pill'>{_hv_deep_pe_strike}</span>"
+                f" <span style='color:#4d9fff;font-size:9px;font-weight:700;'>🪽 DEEP OTM γ-TAPER</span></span>"
+                f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:#4d9fff;'>₹{_hv_deep_pe_ltp:.2f}</span>"
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
@@ -2332,7 +2401,8 @@ if _vix_ok and _eff_vix >= 15.0:
             f"'>{'Credit' if _hv_net>=0 else 'Debit'} ₹{abs(_hv_net):,.0f}</span></div>"
             f"<div><span class='lbl'>"
             f"SELL: CE {_hv_ce['strike']}×2L + PE {_hv_pe['strike']}×2L @ {_hv_sell_exp} (DTE {_hv_sell_dte}d)"
-            f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} + PE {_hv_pe2_strike} (±500) @ {_hv_sell_exp}"
+            f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} (+500) + PE {_hv_pe2_strike} (-500) @ {_hv_sell_exp}"
+            f"&nbsp;·&nbsp; 🪽 deep OTM: CE {_hv_deep_ce_strike}×{_hv_deep_ce_lots}L ₹{_hv_deep_ce_ltp:.2f} + PE {_hv_deep_pe_strike}×{_hv_deep_pe_lots}L ₹{_hv_deep_pe_ltp:.2f} (γ-taper)"
             f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*3}d needed)</span><br>"
             f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
             f"δ: CE sell {_hv_ce['delta']:.3f} · CE+500 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
