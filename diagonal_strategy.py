@@ -754,6 +754,44 @@ def calc_wing_pe_lots(legs_without_pe_wing, spot, sigma, pe_wing_strike, pe_wing
     return max(min_lots, min(lots, max_lots))
 
 
+def nearest_chain_strike(chain_map, target, direction="below"):
+    """
+    Return the nearest strike in chain_map to target.
+    direction='below' → largest available strike ≤ target
+    direction='above' → smallest available strike ≥ target
+    Falls back to nearest overall if none found in the preferred direction.
+    """
+    strikes = [s for s in chain_map if chain_map[s] > 0]
+    if not strikes:
+        return int(target)
+    if direction == "below":
+        candidates = [s for s in strikes if s <= target]
+        return int(max(candidates)) if candidates else int(min(strikes, key=lambda s: abs(s - target)))
+    else:
+        candidates = [s for s in strikes if s >= target]
+        return int(min(candidates)) if candidates else int(min(strikes, key=lambda s: abs(s - target)))
+
+
+def find_deep_otm_pe_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0):
+    """
+    Find the deep OTM PE strike whose LTP falls in [ltp_lo, ltp_hi].
+    Among qualifying strikes, picks the one with LTP closest to the midpoint.
+    Falls back to the strike with LTP closest to ltp_lo if none in range.
+    Returns (strike, ltp).
+    """
+    candidates = [(s, ltp) for s, ltp in chain_map.items() if ltp_lo <= ltp <= ltp_hi]
+    if candidates:
+        mid = (ltp_lo + ltp_hi) / 2
+        best = min(candidates, key=lambda x: abs(x[1] - mid))
+        return int(best[0]), best[1]
+    # fallback: strike whose LTP is closest to ltp_lo (nearest cheap OTM)
+    positive = [(s, ltp) for s, ltp in chain_map.items() if ltp > 0]
+    if not positive:
+        return 0, 0.0
+    best = min(positive, key=lambda x: abs(x[1] - ltp_lo))
+    return int(best[0]), best[1]
+
+
 def find_delta_strikes(strike_map, spot, T, sigma, opt_type, delta_lo=0.12, delta_hi=0.18, r=0.065):
     """
     Return list of {strike, ltp, delta} where abs(delta) ∈ [delta_lo, delta_hi],
@@ -1987,11 +2025,10 @@ _sigma_std  = (_eff_vix / 100.0) if _vix_ok else 0.15
 # CE wing: +500 pts from sell strike, same lots as short (= sell_lots)
 # PE wing: deep OTM at ~10% below spot; lots solved via gamma-neutralisation
 #   so net portfolio gamma ≈ 0 → intraday P&L curve is flat.
-_wing_ce_strike  = int(round((sell_ce_strike + 500) / STEP) * STEP)
-_wing_pe_strike  = int(round((spot * 0.90) / STEP) * STEP)
-_wing_ce_lots    = sell_lots
-_wing_ce_ltp     = near_ce.get(float(_wing_ce_strike), 0)
-_wing_pe_ltp     = near_pe.get(float(_wing_pe_strike), 0)
+_wing_ce_strike          = int(round((sell_ce_strike + 500) / STEP) * STEP)
+_wing_pe_strike, _wing_pe_ltp = find_deep_otm_pe_strike(near_pe, ltp_lo=4.0, ltp_hi=6.0)
+_wing_ce_lots            = sell_lots
+_wing_ce_ltp             = near_ce.get(float(_wing_ce_strike), 0)
 
 # Build partial legs (without PE wing) to measure current net gamma
 _legs_no_pe_wing = [
@@ -2004,7 +2041,7 @@ _legs_no_pe_wing = [
 _wing_pe_lots = calc_wing_pe_lots(
     _legs_no_pe_wing, spot, _sigma_std,
     pe_wing_strike=_wing_pe_strike, pe_wing_T=_T_near_std,
-    min_lots=1, max_lots=30
+    min_lots=1, max_lots=50
 )
 
 legs = [
@@ -2067,7 +2104,7 @@ st.markdown(
     f"<div><span class='lbl'>BUY {_wing_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_wing_pe_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_wing_pe_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;~10% below spot · γ-neutral sizing</span></div>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;LTP ₹4–₹6 deep OTM · {_wing_pe_lots}L γ-neutral</span></div>"
     f"</div>"
     f"<div style='margin-top:.3rem;font-size:9px;color:var(--muted);'>"
     f"These legs cap intraday gamma — the blue dashed line in the chart should stay flat within the 1σ daily band.</div>"
@@ -2163,11 +2200,26 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce  = _hv_ce_cands[0]   # primary CE sell
         _hv_pe  = _hv_pe_cands[0]   # primary PE sell
 
-        # Extra OTM BUY legs  +500 / -500
+        # Near wing: CE +500 / PE -500
         _hv_ce2_strike = int(round((_hv_ce["strike"] + 500) / STEP) * STEP)
         _hv_pe2_strike = int(round((_hv_pe["strike"] - 500) / STEP) * STEP)
         _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
         _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
+
+        # Deep OTM PE wing: select strike where LTP ∈ [₹4, ₹6], gamma-neutral lots
+        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_pe_strike(_hv_sell_pe, ltp_lo=4.0, ltp_hi=6.0)
+        _T_hv              = max(_hv_sell_dte, 1) / 365.0
+        _hv_legs_no_deep = [
+            {"opt_type":"CE","strike":_hv_ce["strike"], "ltp":_hv_ce["ltp"],  "lots":2,          "is_sell":True,  "T":_T_hv},
+            {"opt_type":"PE","strike":_hv_pe["strike"], "ltp":_hv_pe["ltp"],  "lots":2,          "is_sell":True,  "T":_T_hv},
+            {"opt_type":"CE","strike":_hv_ce2_strike,   "ltp":_hv_ce2_ltp,   "lots":1,          "is_sell":False, "T":_T_hv},
+            {"opt_type":"PE","strike":_hv_pe2_strike,   "ltp":_hv_pe2_ltp,   "lots":1,          "is_sell":False, "T":_T_hv},
+        ]
+        _hv_deep_pe_lots = calc_wing_pe_lots(
+            _hv_legs_no_deep, spot, _sigma,
+            pe_wing_strike=_hv_deep_pe_strike, pe_wing_T=_T_hv,
+            min_lots=1, max_lots=50
+        )
 
         # Far expiry selection: DTE >= 2 × sell_DTE
         _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
@@ -2193,11 +2245,13 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
         _hv_pe_buy_ltp = _hv_far_pe.get(float(_hv_pe["strike"]), 0)
 
-        # Net premium: sell 2L primary; BUY 1L ±500 + BUY 1L far monthly (all buys are costs)
-        # CE: +collect(2L primary) - pay(1L +500 buy) - pay(1L far buy)
-        # PE: +collect(2L primary) - pay(1L -500 buy) - pay(1L far buy)
+        # Net premium:
+        # CE: sell 2L primary - buy 1L +500 near - buy 1L far monthly
+        # PE: sell 2L primary - buy 1L -500 near - buy deep_lots deep OTM - buy 1L far monthly
         _hv_ce_collect = (_hv_ce["ltp"] * 2 - _hv_ce2_ltp * 1 - _hv_ce_buy_ltp * 1) * LOT_SIZE
-        _hv_pe_collect = (_hv_pe["ltp"] * 2 - _hv_pe2_ltp * 1 - _hv_pe_buy_ltp * 1) * LOT_SIZE
+        _hv_pe_collect = (_hv_pe["ltp"] * 2 - _hv_pe2_ltp * 1
+                          - _hv_deep_pe_ltp * _hv_deep_pe_lots
+                          - _hv_pe_buy_ltp  * 1) * LOT_SIZE
         _hv_net        = _hv_ce_collect + _hv_pe_collect
 
         # ── Display ────────────────────────────────────────────────────────
