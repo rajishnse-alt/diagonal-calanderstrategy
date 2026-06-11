@@ -775,73 +775,160 @@ def payoff_near_expiry(legs, spot_val, lot_size):
     return pnl
 
 
-def make_payoff_svg(legs, atm, lot_size, sell_ce_s, sell_pe_s, width=720, height=220):
+def payoff_now(legs, spot_val, sigma, lot_size, r=0.065):
+    """
+    Intraday P&L at current date using Black-Scholes pricing for each leg.
+    Each leg must have 'T' (annualised time to expiry at current moment).
+    P&L = (current_bs_price − entry_ltp) × direction × lots × lot_size
+    """
+    pnl = 0.0
+    for leg in legs:
+        T = leg.get("T", 0.0)
+        if T <= 0:
+            # Expired — use intrinsic only
+            cur = max(spot_val - leg["strike"], 0) if leg["opt_type"] == "CE" \
+                  else max(leg["strike"] - spot_val, 0)
+        else:
+            cur = bs_price(spot_val, leg["strike"], T, r, sigma, leg["opt_type"])
+        direction = -1 if leg["is_sell"] else 1
+        pnl += direction * (cur - leg["ltp"]) * leg["lots"] * lot_size
+    return pnl
+
+
+def make_payoff_svg(legs, atm, lot_size, sell_ce_s, sell_pe_s,
+                    sigma=0.15, spot=None, deployed_cap=0, cap_pct=1.6,
+                    width=720, height=270):
+    cur_spot = spot or atm
+
+    # 1-day expected move (1σ) from VIX
+    daily_move = cur_spot * sigma / math.sqrt(252)
+    day_lo = cur_spot - daily_move
+    day_hi = cur_spot + daily_move
+
     lo = atm - 14 * STEP
     hi = atm + 14 * STEP
-    pts = [(s, payoff_near_expiry(legs, float(s), lot_size))
-           for s in range(int(lo), int(hi) + 1, STEP)]
-    pnls  = [p[1] for p in pts]
-    max_p = max(pnls) if pnls else 1
-    min_p = min(pnls) if pnls else -1
+    spots = list(range(int(lo), int(hi) + 1, STEP))
+
+    # Expiry P&L (green curve)
+    pts_exp = [(s, payoff_near_expiry(legs, float(s), lot_size)) for s in spots]
+    # Intraday P&L using Black-Scholes at current time (blue curve)
+    pts_now = [(s, payoff_now(legs, float(s), sigma, lot_size))  for s in spots]
+
+    # Loss cap = 1.6% of deployed capital
+    cap_loss = -(deployed_cap * cap_pct / 100) if deployed_cap > 0 else None
+
+    # Worst intraday loss WITHIN the 1-day move band
+    band_pnls = [v for s, v in pts_now if day_lo <= s <= day_hi]
+    worst_intraday = min(band_pnls) if band_pnls else min(v for _, v in pts_now)
+    worst_pct = abs(worst_intraday) / deployed_cap * 100 if deployed_cap > 0 else 0
+    passes_cap = (cap_loss is None) or (worst_intraday >= cap_loss)
+
+    all_pnls = [v for _, v in pts_exp] + [v for _, v in pts_now]
+    max_p = max(all_pnls) if all_pnls else 1
+    min_p = min(all_pnls) if all_pnls else -1
+    if cap_loss is not None:
+        min_p = min(min_p, cap_loss * 1.15)
+
     y_rng = max(abs(max_p), abs(min_p), 1)
-    mg = 42
+    mg = 48
     pw = width  - 2 * mg
     ph = height - 2 * mg
 
-    tx = lambda s:  mg + (s - lo) / (hi - lo) * pw
-    ty = lambda v:  mg + ph / 2 - (v / y_rng) * (ph / 2)
+    tx = lambda s: mg + (float(s) - lo) / (hi - lo) * pw
+    ty = lambda v: mg + ph / 2 - (v / y_rng) * (ph / 2)
     zy = ty(0)
 
     svg = [f'<svg width="{width}" height="{height}" '
            f'style="background:#0a0e1a;border:1px solid #1c2840;border-radius:8px;">']
+
+    # 1-day move band (shaded region)
+    bx1 = max(tx(day_lo), mg)
+    bx2 = min(tx(day_hi), mg + pw)
+    svg.append(f'<rect x="{bx1:.1f}" y="{mg}" width="{max(bx2-bx1,0):.1f}" height="{ph}" '
+               f'fill="#4d9fff" opacity="0.06" rx="2"/>')
+    svg.append(f'<line x1="{bx1:.1f}" y1="{mg}" x2="{bx1:.1f}" y2="{mg+ph}" '
+               f'stroke="#4d9fff" stroke-width="1" stroke-dasharray="3,3" opacity="0.4"/>')
+    svg.append(f'<line x1="{bx2:.1f}" y1="{mg}" x2="{bx2:.1f}" y2="{mg+ph}" '
+               f'stroke="#4d9fff" stroke-width="1" stroke-dasharray="3,3" opacity="0.4"/>')
+    svg.append(f'<text x="{(bx1+bx2)/2:.0f}" y="{mg+ph+36}" font-size="8" fill="#4d9fff" '
+               f'text-anchor="middle">1σ day ±{int(daily_move)}pts</text>')
 
     # Zero line
     svg.append(f'<line x1="{mg}" y1="{zy}" x2="{width-mg}" y2="{zy}" '
                f'stroke="#253352" stroke-width="1"/>')
     svg.append(f'<text x="{mg-4}" y="{zy+4}" font-size="9" fill="#4a6080" text-anchor="end">0</text>')
 
-    # ATM line
+    # 1.6% cap line (full width)
+    if cap_loss is not None:
+        cy = ty(cap_loss)
+        col_cap = "#ff5252" if not passes_cap else "#ff9800"
+        svg.append(f'<line x1="{mg}" y1="{cy}" x2="{width-mg}" y2="{cy}" '
+                   f'stroke="{col_cap}" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.9"/>')
+        svg.append(f'<text x="{mg+4}" y="{cy-4}" font-size="8" fill="{col_cap}">'
+                   f'{cap_pct}% cap = ₹{abs(int(cap_loss)):,}</text>')
+
+    # ATM / current spot lines
     ax = tx(atm)
     svg.append(f'<line x1="{ax}" y1="{mg}" x2="{ax}" y2="{mg+ph}" '
                f'stroke="#ffc940" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>')
     svg.append(f'<text x="{ax}" y="{mg-6}" font-size="9" fill="#ffc940" text-anchor="middle">ATM {atm}</text>')
+    if cur_spot != atm:
+        spx = tx(cur_spot)
+        svg.append(f'<line x1="{spx}" y1="{mg}" x2="{spx}" y2="{mg+ph}" '
+                   f'stroke="#ffffff" stroke-width="1" stroke-dasharray="2,4" opacity="0.3"/>')
+        svg.append(f'<text x="{spx}" y="{mg-6}" font-size="8" fill="#aaaaaa" text-anchor="middle">{int(cur_spot)}</text>')
 
-    # Short strike lines
+    # Short / long strike lines
     for s, color in [(sell_ce_s, "#2979ff"), (sell_pe_s, "#ab47bc")]:
         sx = tx(s)
         svg.append(f'<line x1="{sx}" y1="{mg}" x2="{sx}" y2="{mg+ph}" '
                    f'stroke="{color}" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>')
-        svg.append(f'<text x="{sx}" y="{mg+ph+14}" font-size="8" fill="{color}" '
-                   f'text-anchor="middle">{s}(S)</text>')
-
-    # Long strike lines
+        svg.append(f'<text x="{sx}" y="{mg+ph+14}" font-size="8" fill="{color}" text-anchor="middle">{s}(S)</text>')
     for leg in legs:
         if not leg["is_near"] and not leg["is_sell"]:
             sx = tx(leg["strike"])
             svg.append(f'<line x1="{sx}" y1="{mg}" x2="{sx}" y2="{mg+ph}" '
                        f'stroke="#00e676" stroke-width="1" stroke-dasharray="2,5" opacity="0.4"/>')
-            svg.append(f'<text x="{sx}" y="{mg+ph+24}" font-size="8" fill="#00e676" '
-                       f'text-anchor="middle">{leg["strike"]}(B)</text>')
+            svg.append(f'<text x="{sx}" y="{mg+ph+24}" font-size="8" fill="#00e676" text-anchor="middle">{leg["strike"]}(B)</text>')
 
-    # Fill profit
-    path = (f"M {tx(pts[0][0])},{zy} "
-            + " ".join(f"L {tx(s)},{ty(v)}" for s, v in pts)
-            + f" L {tx(pts[-1][0])},{zy} Z")
-    svg.append(f'<path d="{path}" fill="#00e676" opacity="0.10"/>')
+    # Expiry P&L fill + line
+    path = (f"M {tx(pts_exp[0][0])},{zy} "
+            + " ".join(f"L {tx(s)},{ty(v)}" for s, v in pts_exp)
+            + f" L {tx(pts_exp[-1][0])},{zy} Z")
+    svg.append(f'<path d="{path}" fill="#00e676" opacity="0.07"/>')
+    loss_path = (f"M {tx(pts_exp[0][0])},{zy} "
+                 + " ".join(f"L {tx(s)},{ty(min(v, 0))}" for s, v in pts_exp)
+                 + f" L {tx(pts_exp[-1][0])},{zy} Z")
+    svg.append(f'<path d="{loss_path}" fill="#ff5252" opacity="0.10"/>')
+    svg.append(f'<polyline points="{" ".join(f"{tx(s)},{ty(v)}" for s,v in pts_exp)}" '
+               f'fill="none" stroke="#00e676" stroke-width="2" opacity="0.8"/>')
 
-    # Fill loss
-    loss_path = (f"M {tx(pts[0][0])},{zy} "
-                 + " ".join(f"L {tx(s)},{ty(min(v, 0))}" for s, v in pts)
-                 + f" L {tx(pts[-1][0])},{zy} Z")
-    svg.append(f'<path d="{loss_path}" fill="#ff5252" opacity="0.15"/>')
+    # Intraday P&L line (blue dashed)
+    svg.append(f'<polyline points="{" ".join(f"{tx(s)},{ty(v)}" for s,v in pts_now)}" '
+               f'fill="none" stroke="#4d9fff" stroke-width="2.5" stroke-dasharray="7,3" opacity="0.95"/>')
 
-    # Payoff line
-    poly = " ".join(f"{tx(s)},{ty(v)}" for s, v in pts)
-    svg.append(f'<polyline points="{poly}" fill="none" stroke="#00e676" stroke-width="2" opacity="0.85"/>')
+    # Worst intraday loss dot WITHIN band
+    worst_s = next((s for s, v in pts_now if v == worst_intraday), cur_spot)
+    dot_col = "#ff5252" if not passes_cap else "#ffc940"
+    dx = tx(worst_s); dy = ty(worst_intraday)
+    svg.append(f'<circle cx="{dx:.1f}" cy="{dy:.1f}" r="5" fill="{dot_col}" opacity="0.95"/>')
+    svg.append(f'<text x="{dx:.1f}" y="{dy-8}" font-size="9" font-weight="bold" fill="{dot_col}" text-anchor="middle">'
+               f'▼ {worst_pct:.1f}%</text>')
 
-    # Labels
-    svg.append(f'<text x="{mg+4}" y="{mg+12}" font-size="9" fill="#00e676">Max ₹{int(max_p):,}</text>')
-    svg.append(f'<text x="{mg+4}" y="{mg+ph-4}" font-size="9" fill="#ff5252">Floor ₹{int(min_p):,}</text>')
+    # Legend + pass/fail badge
+    lx = mg + 4
+    pass_col = "#00e676" if passes_cap else "#ff5252"
+    pass_txt = f"✅ WITHIN {cap_pct}% CAP" if passes_cap else f"❌ BREACH {cap_pct}% CAP"
+    svg.append(f'<text x="{width-mg-4}" y="{mg+14}" font-size="10" font-weight="bold" '
+               f'fill="{pass_col}" text-anchor="end">{pass_txt}</text>')
+    svg.append(f'<text x="{width-mg-4}" y="{mg+26}" font-size="9" fill="{dot_col}" text-anchor="end">'
+               f'Worst intraday (1σ band): ₹{abs(int(worst_intraday)):,} = {worst_pct:.1f}% of cap</text>')
+    svg.append(f'<circle cx="{lx+4}" cy="{mg+12}" r="4" fill="#00e676"/>')
+    svg.append(f'<text x="{lx+12}" y="{mg+16}" font-size="9" fill="#00e676">Expiry P&L</text>')
+    svg.append(f'<line x1="{lx}" y1="{mg+26}" x2="{lx+10}" y2="{mg+26}" '
+               f'stroke="#4d9fff" stroke-width="2" stroke-dasharray="5,2"/>')
+    svg.append(f'<text x="{lx+14}" y="{mg+30}" font-size="9" fill="#4d9fff">Intraday P&L (today, BS-priced)</text>')
+
     svg.append("</svg>")
     return "\n".join(svg)
 
@@ -1875,12 +1962,22 @@ net        = total_sell - total_buy
 be_up      = sell_ce_strike + sell_ce_ltp
 be_dn      = sell_pe_strike - sell_pe_ltp
 
+_T_near_std = max(_days_to_exp, 1) / 365.0
+_far_days   = max((datetime.strptime(far_exp, "%Y-%m-%d").date() - now.date()).days, 1)
+_T_far_std  = _far_days / 365.0
+_sigma_std  = (_eff_vix / 100.0) if _vix_ok else 0.15
+
 legs = [
-    {"opt_type":"CE","strike":sell_ce_strike,"ltp":sell_ce_ltp,"lots":sell_lots,"is_sell":True, "is_near":True},
-    {"opt_type":"PE","strike":sell_pe_strike,"ltp":sell_pe_ltp,"lots":sell_lots,"is_sell":True, "is_near":True},
-    {"opt_type":"CE","strike":buy_ce_strike, "ltp":buy_ce_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False},
-    {"opt_type":"PE","strike":buy_pe_strike, "ltp":buy_pe_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False},
+    {"opt_type":"CE","strike":sell_ce_strike,"ltp":sell_ce_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std},
+    {"opt_type":"PE","strike":sell_pe_strike,"ltp":sell_pe_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std},
+    {"opt_type":"CE","strike":buy_ce_strike, "ltp":buy_ce_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std},
+    {"opt_type":"PE","strike":buy_pe_strike, "ltp":buy_pe_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std},
 ]
+
+# Deployed capital: gross premium of all legs × lot_size (margin proxy)
+_deployed_cap = sum(
+    abs(leg["ltp"]) * leg["lots"] * LOT_SIZE for leg in legs
+)
 
 col_n, col_s, col_b, col_beu, col_bed = st.columns(5)
 with col_n:
@@ -1914,14 +2011,17 @@ with col_bed:
 # ─────────────────────────────────────────────
 # PAYOFF CHART
 # ─────────────────────────────────────────────
-st.markdown("<div class='sec-hdr'>📈 Payoff at Near Expiry (far legs ~60% time value retained)</div>",
+st.markdown("<div class='sec-hdr'>📈 Payoff — Expiry (green) vs Intraday/Current (blue dashed)</div>",
             unsafe_allow_html=True)
-st.markdown(make_payoff_svg(legs, atm, LOT_SIZE, sell_ce_strike, sell_pe_strike), unsafe_allow_html=True)
+st.markdown(make_payoff_svg(
+    legs, atm, LOT_SIZE, sell_ce_strike, sell_pe_strike,
+    sigma=_sigma_std, spot=spot, deployed_cap=_deployed_cap, cap_pct=1.6,
+), unsafe_allow_html=True)
 st.caption(
-    f"Blue dashed = CE short {sell_ce_strike} &nbsp;│&nbsp; "
-    f"Purple dashed = PE short {sell_pe_strike} &nbsp;│&nbsp; "
-    f"Green faint = long legs ({buy_ce_strike}, {buy_pe_strike}) &nbsp;│&nbsp; "
-    f"Gold = ATM {atm}"
+    f"🟢 Green solid = P&L at near expiry &nbsp;│&nbsp; "
+    f"🔵 Blue dashed = Intraday P&L now (BS-priced, should stay flat) &nbsp;│&nbsp; "
+    f"🔴 Red dashed = 1.6% deployed capital loss cap (₹{abs(int(_deployed_cap*0.016)):,}) &nbsp;│&nbsp; "
+    f"Short: CE {sell_ce_strike} / PE {sell_pe_strike} &nbsp;│&nbsp; Long: CE {buy_ce_strike} / PE {buy_pe_strike}"
 )
 
 # ─────────────────────────────────────────────
