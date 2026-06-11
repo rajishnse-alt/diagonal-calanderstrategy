@@ -1942,17 +1942,25 @@ _far_days   = max((datetime.strptime(far_exp, "%Y-%m-%d").date() - now.date()).d
 _T_far_std  = _far_days / 365.0
 _sigma_std  = (_eff_vix / 100.0) if _vix_ok else 0.15
 
+# Near-expiry wing hedge legs (+500 CE / -500 PE) — flatten gamma intraday
+_wing_ce_strike = int(round((sell_ce_strike + 500) / STEP) * STEP)
+_wing_pe_strike = int(round((sell_pe_strike - 500) / STEP) * STEP)
+_wing_ce_ltp    = near_ce.get(float(_wing_ce_strike), 0)
+_wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
+
 legs = [
-    {"opt_type":"CE","strike":sell_ce_strike,"ltp":sell_ce_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std},
-    {"opt_type":"PE","strike":sell_pe_strike,"ltp":sell_pe_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std},
-    {"opt_type":"CE","strike":buy_ce_strike, "ltp":buy_ce_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std},
-    {"opt_type":"PE","strike":buy_pe_strike, "ltp":buy_pe_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std},
+    # Core diagonal — short near, long far (same strike)
+    {"opt_type":"CE","strike":sell_ce_strike,"ltp":sell_ce_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near CE"},
+    {"opt_type":"PE","strike":sell_pe_strike,"ltp":sell_pe_ltp,"lots":sell_lots,"is_sell":True, "is_near":True,  "T":_T_near_std, "label":"SELL near PE"},
+    {"opt_type":"CE","strike":buy_ce_strike, "ltp":buy_ce_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far CE"},
+    {"opt_type":"PE","strike":buy_pe_strike, "ltp":buy_pe_ltp, "lots":BUY_LOTS, "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far PE"},
+    # Wing hedges — near expiry, ±500 pts OTM, 1L each (taper intraday gamma)
+    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":1,"is_sell":False,"is_near":True, "T":_T_near_std, "label":"BUY wing CE +500"},
+    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":1,"is_sell":False,"is_near":True, "T":_T_near_std, "label":"BUY wing PE -500"},
 ]
 
 # Deployed capital: gross premium of all legs × lot_size (margin proxy)
-_deployed_cap = sum(
-    abs(leg["ltp"]) * leg["lots"] * LOT_SIZE for leg in legs
-)
+_deployed_cap = sum(abs(leg["ltp"]) * leg["lots"] * LOT_SIZE for leg in legs)
 
 col_n, col_s, col_b, col_beu, col_bed = st.columns(5)
 with col_n:
@@ -1968,10 +1976,12 @@ with col_s:
         f"<div class='val-big val-bull'>₹{total_sell:,.0f}</div>"
         f"<div class='lbl'>{sell_lots}L × CE+PE short</div></div>", unsafe_allow_html=True)
 with col_b:
+    _wing_cost = (_wing_ce_ltp + _wing_pe_ltp) * LOT_SIZE
     st.markdown(
         f"<div class='card'><div class='lbl'>Premium Paid</div>"
-        f"<div class='val-big val-bear'>₹{total_buy:,.0f}</div>"
-        f"<div class='lbl'>{BUY_LOTS}L × CE+PE long</div></div>", unsafe_allow_html=True)
+        f"<div class='val-big val-bear'>₹{total_buy + _wing_cost:,.0f}</div>"
+        f"<div class='lbl'>{BUY_LOTS}L far CE+PE + wing hedges ₹{_wing_cost:,.0f}</div></div>",
+        unsafe_allow_html=True)
 with col_beu:
     st.markdown(
         f"<div class='card card-ce'><div class='lbl'>CE Breakeven ↑</div>"
@@ -1986,6 +1996,26 @@ with col_bed:
 # ─────────────────────────────────────────────
 # PAYOFF CHART
 # ─────────────────────────────────────────────
+# Wing hedge summary
+st.markdown(
+    f"<div class='card' style='border-left:4px solid #4d9fff;margin-top:.3rem;'>"
+    f"<div class='lbl' style='color:#4d9fff;font-weight:700;letter-spacing:1px;'>🪽 WING HEDGES — Near Expiry (flatten intraday gamma)</div>"
+    f"<div style='display:flex;gap:2rem;margin-top:.4rem;flex-wrap:wrap;'>"
+    f"<div><span class='lbl'>BUY 1L CE</span> "
+    f"<span class='strike-pill-buy'>{_wing_ce_strike}</span> "
+    f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_wing_ce_ltp:.2f}</span>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;+500 from sell {sell_ce_strike}</span></div>"
+    f"<div><span class='lbl'>BUY 1L PE</span> "
+    f"<span class='strike-pill'>{_wing_pe_strike}</span> "
+    f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_wing_pe_ltp:.2f}</span>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;−500 from sell {sell_pe_strike}</span></div>"
+    f"</div>"
+    f"<div style='margin-top:.3rem;font-size:9px;color:var(--muted);'>"
+    f"These legs cap intraday gamma — the blue dashed line in the chart should stay flat within the 1σ daily band.</div>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
 st.markdown("<div class='sec-hdr'>📈 Payoff — Expiry (green) vs Intraday/Current (blue dashed)</div>",
             unsafe_allow_html=True)
 st.markdown(make_payoff_svg(
@@ -1996,7 +2026,7 @@ st.caption(
     f"🟢 Green solid = P&L at near expiry &nbsp;│&nbsp; "
     f"🔵 Blue dashed = Intraday P&L now (BS-priced, should stay flat) &nbsp;│&nbsp; "
     f"🔴 Red dashed = 1.6% deployed capital loss cap (₹{abs(int(_deployed_cap*0.016)):,}) &nbsp;│&nbsp; "
-    f"Short: CE {sell_ce_strike} / PE {sell_pe_strike} &nbsp;│&nbsp; Long: CE {buy_ce_strike} / PE {buy_pe_strike}"
+    f"Short: CE {sell_ce_strike} / PE {sell_pe_strike} &nbsp;│&nbsp; Far long: CE {buy_ce_strike} / PE {buy_pe_strike} &nbsp;│&nbsp; Wing hedge: CE {_wing_ce_strike} / PE {_wing_pe_strike}"
 )
 
 # ─────────────────────────────────────────────
