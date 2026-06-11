@@ -862,7 +862,13 @@ if "access_token" not in st.session_state:
         "<p style='color:var(--muted);font-size:12px;'>One click per trading day</p>",
         unsafe_allow_html=True,
     )
-    st.link_button("CONNECT →", _auth_url, use_container_width=False)
+    st.markdown(
+        f"<a href='{_auth_url}' target='_self' style='"
+        f"display:inline-block;padding:.5rem 1.4rem;border-radius:8px;"
+        f"background:var(--gold);color:#000;font-weight:700;font-size:14px;"
+        f"text-decoration:none;letter-spacing:.5px;'>CONNECT →</a>",
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
