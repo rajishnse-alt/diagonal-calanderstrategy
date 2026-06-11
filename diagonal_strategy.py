@@ -2079,16 +2079,21 @@ _pe_side_legs = [
     {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
     {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std},
 ]
-_deep_ce_lots = calc_wing_lots(
+_raw_deep_ce_lots = calc_wing_lots(
     _ce_side_legs, spot, _sigma_std,
     wing_strike=_deep_ce_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=50
+    gamma_fraction=1.0, min_lots=1, max_lots=10
 )
-_deep_pe_lots = calc_wing_lots(
+_raw_deep_pe_lots = calc_wing_lots(
     _pe_side_legs, spot, _sigma_std,
     wing_strike=_deep_pe_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=50
+    gamma_fraction=1.0, min_lots=1, max_lots=10
 )
+# Symmetry guard: cap both to the MINIMUM of the two computed values so one side
+# never overwhelms the other (avoids 10-vs-50 skew from asymmetric far-OTM gammas)
+_deep_wing_lots  = min(_raw_deep_ce_lots, _raw_deep_pe_lots)
+_deep_ce_lots    = _deep_wing_lots
+_deep_pe_lots    = _deep_wing_lots
 
 legs = [
     # Core diagonal — short near, long far
@@ -2285,16 +2290,20 @@ if _vix_ok and _eff_vix >= 15.0:
             {"strike":_hv_pe["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
             {"strike":_hv_pe2_strike,   "lots":1, "is_sell":False, "T":_T_hv},
         ]
-        _hv_deep_ce_lots = calc_wing_lots(
+        _hv_raw_deep_ce = calc_wing_lots(
             _hv_ce_side_legs, spot, _sigma,
             wing_strike=_hv_deep_ce_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=50
+            gamma_fraction=1.0, min_lots=1, max_lots=10
         )
-        _hv_deep_pe_lots = calc_wing_lots(
+        _hv_raw_deep_pe = calc_wing_lots(
             _hv_pe_side_legs, spot, _sigma,
             wing_strike=_hv_deep_pe_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=50
+            gamma_fraction=1.0, min_lots=1, max_lots=10
         )
+        # Symmetry guard: equal lots on both sides prevents skew from asymmetric far-OTM gammas
+        _hv_deep_wing_lots = min(_hv_raw_deep_ce, _hv_raw_deep_pe)
+        _hv_deep_ce_lots   = _hv_deep_wing_lots
+        _hv_deep_pe_lots   = _hv_deep_wing_lots
 
         # Far expiry selection: DTE >= 2 × sell_DTE
         _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
