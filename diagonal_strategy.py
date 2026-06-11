@@ -805,9 +805,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Strategy banner placeholder — filled after VIX is known
-_strategy_banner = st.empty()
-
 # ─────────────────────────────────────────────
 # AUTH
 # ─────────────────────────────────────────────
@@ -873,8 +870,54 @@ if "access_token" not in st.session_state:
     st.stop()
 
 token = st.session_state["access_token"]
-# Unset credential vars — no further need to keep them in scope
-del _ak, _as, _ru
+del _ak, _as, _ru   # no further need; prevent accidental render
+
+# ── VIX (early fetch — needed for strategy banner) ──────────────────────────
+_open_vix, _curr_vix, _vix_err_early = fetch_vix(token)
+if _vix_err_early == "token_expired":
+    del st.session_state["access_token"]; st.rerun()
+
+if _open_vix and _curr_vix:
+    _eff_vix   = (_open_vix + _curr_vix) / 2
+    _vix_ok    = True
+else:
+    _eff_vix   = 0.0
+    _vix_ok    = False
+
+# ── Strategy banner (rendered inline — no st.empty() placeholder) ────────────
+_active_strat = STRATEGY_REGISTRY[0] if (_vix_ok and _eff_vix > 15.0) else STRATEGY_REGISTRY[1]
+_sc = _active_strat["color"]
+st.markdown(
+    f"<div style='border-left:4px solid {_sc};background:var(--surface);"
+    f"border:1px solid {_sc};border-radius:10px;padding:.6rem 1rem;margin-bottom:.75rem;"
+    f"display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;'>"
+    f"<div style='min-width:220px;'>"
+    f"<div style='font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;"
+    f"color:{_sc};font-family:var(--mono);'>"
+    f"{_active_strat['emoji']} Active Strategy</div>"
+    f"<div style='font-size:16px;font-weight:800;color:var(--text);font-family:var(--hdr);'>"
+    f"{_active_strat['name']}</div>"
+    f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
+    f"Regime: <b style='color:{_sc};'>{_active_strat['regime']}</b> &nbsp;·&nbsp; "
+    f"Trigger: <code style='background:var(--border);padding:1px 5px;border-radius:3px;"
+    f"font-size:10px;'>{_active_strat['trigger']}</code>"
+    + (f" &nbsp;·&nbsp; VIX <b style='color:{_sc};'>{_eff_vix:.2f}</b>" if _vix_ok else "")
+    + f"</div></div>"
+    f"<div style='flex:1;min-width:280px;'>"
+    f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
+    f"font-weight:700;margin-bottom:3px;'>Structure</div>"
+    f"<div style='font-family:var(--mono);font-size:11px;color:var(--text);'>"
+    f"{_active_strat['structure']}</div>"
+    f"</div>"
+    f"<div style='flex:1;min-width:260px;'>"
+    f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
+    f"font-weight:700;margin-bottom:3px;'>Why this strategy</div>"
+    f"<div style='font-size:11px;color:var(--text);line-height:1.5;'>{_active_strat['why']}</div>"
+    f"<div style='font-size:10px;color:var(--muted);margin-top:4px;'>"
+    f"✅ Best for: {_active_strat['best_for']}</div>"
+    f"</div></div>",
+    unsafe_allow_html=True,
+)
 
 # ─────────────────────────────────────────────
 # PARAMETERS
@@ -940,62 +983,19 @@ if fe or not far_raw:
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg  = parse_chain(far_raw)
 
-# ── VIX fetch (needed before strike selection) ──────────────────────────────
-_open_vix, _curr_vix, _vix_err = fetch_vix(token)
-if _vix_err == "token_expired":
-    del st.session_state["access_token"]; st.rerun()
-
+# ── VIX derived values (spot-dependent, computed after chain load) ───────────
 _days_to_exp = max(
     (datetime.strptime(near_exp, "%Y-%m-%d").date() - now.date()).days, 1
 )
-
-if _open_vix and _curr_vix and spot:
-    _eff_vix   = (_open_vix + _curr_vix) / 2
+if _vix_ok and spot:
     _daily_vix = _eff_vix / math.sqrt(252)
     _exp_1s    = spot * (_eff_vix / 100) * math.sqrt(_days_to_exp / 252)
     _exp_2s    = _exp_1s * 2
     _steps_1s  = max(1, round(_exp_1s / STEP))
     _steps_2s  = max(1, round(_exp_2s / STEP))
-    _vix_ok    = True
 else:
-    _eff_vix = _daily_vix = _exp_1s = _exp_2s = 0.0
-    _steps_1s = _steps_2s = SHORT_STEPS          # fallback to constant
-    _vix_ok   = False
-
-# ── Strategy banner — fill the placeholder now that VIX is known ────────────
-_active_strat = STRATEGY_REGISTRY[0] if (_vix_ok and _eff_vix > 15.0) else STRATEGY_REGISTRY[1]
-_sc = _active_strat["color"]
-_strategy_banner.markdown(
-    f"<div style='border-left:4px solid {_sc};background:var(--surface);"
-    f"border:1px solid {_sc};border-radius:10px;padding:.6rem 1rem;margin-bottom:.75rem;"
-    f"display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;'>"
-    f"<div style='min-width:220px;'>"
-    f"<div style='font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;"
-    f"color:{_sc};font-family:var(--mono);'>"
-    f"{_active_strat['emoji']} Active Strategy</div>"
-    f"<div style='font-size:16px;font-weight:800;color:var(--text);font-family:var(--hdr);'>"
-    f"{_active_strat['name']}</div>"
-    f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
-    f"Regime: <b style='color:{_sc};'>{_active_strat['regime']}</b> &nbsp;·&nbsp; "
-    f"Trigger: <code style='background:var(--border);padding:1px 5px;border-radius:3px;"
-    f"font-size:10px;'>{_active_strat['trigger']}</code>"
-    + (f" &nbsp;·&nbsp; VIX <b style='color:{_sc};'>{_eff_vix:.2f}</b>" if _vix_ok else "")
-    + f"</div></div>"
-    f"<div style='flex:1;min-width:280px;'>"
-    f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
-    f"font-weight:700;margin-bottom:3px;'>Structure</div>"
-    f"<div style='font-family:var(--mono);font-size:11px;color:var(--text);'>"
-    f"{_active_strat['structure']}</div>"
-    f"</div>"
-    f"<div style='flex:1;min-width:260px;'>"
-    f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
-    f"font-weight:700;margin-bottom:3px;'>Why this strategy</div>"
-    f"<div style='font-size:11px;color:var(--text);line-height:1.5;'>{_active_strat['why']}</div>"
-    f"<div style='font-size:10px;color:var(--muted);margin-top:4px;'>"
-    f"✅ Best for: {_active_strat['best_for']}</div>"
-    f"</div></div>",
-    unsafe_allow_html=True,
-)
+    _daily_vix = _exp_1s = _exp_2s = 0.0
+    _steps_1s  = _steps_2s = SHORT_STEPS
 
 # Seed session_state with VIX default only when VIX value changes
 # (preserves user override across auto-refreshes, resets when VIX shifts)
