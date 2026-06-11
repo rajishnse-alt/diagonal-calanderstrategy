@@ -405,69 +405,78 @@ def _get_oi_chg(md):
     return 0.0
 
 
-def fetch_prev_day_candle(tok, instrument_key):
+_NSE_FO_HIST = "https://www.nseindia.com/api/historical/fo/daily"
+_NSE_HOME    = "https://www.nseindia.com"
+_NSE_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/",
+}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_nse_fo_hist(expiry_str, strike, option_type):
     """
-    Fetch the most recent completed trading day's OHLC + OI candle for an option.
-    Upstox historical-candle returns [ts, open, high, low, close, volume, oi].
-    Returns dict {open, high, low, close, oi} or None on failure.
+    Fetch previous trading day's H, L, OI from NSE FO daily historical.
+    expiry_str : "YYYY-MM-DD"  e.g. "2026-06-16"
+    option_type: "CE" or "PE"
+    Returns dict {high, low, oi, date} or None.
     """
     try:
-        today     = datetime.now(IST).date()
-        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        to_date   = today.strftime("%Y-%m-%d")
-        enc_key   = urllib.parse.quote(instrument_key, safe="")
-        url = (f"https://api.upstox.com/v2/historical-candle/"
-               f"{enc_key}/day/{to_date}/{from_date}")
-        r = requests.get(url, headers={"Accept": "application/json",
-                                        "Authorization": f"Bearer {tok}"}, timeout=10)
-        candles = (r.json().get("data") or {}).get("candles") or []
-        # candle = [ts, open, high, low, close, volume, oi]
-        today_str = today.isoformat()
-        prev = sorted(
-            [c for c in candles if str(c[0])[:10] < today_str],
-            key=lambda c: c[0], reverse=True
+        # Expiry: "2026-06-16" → "16-Jun-2026"
+        exp_dt     = datetime.strptime(expiry_str, "%Y-%m-%d")
+        expiry_nse = exp_dt.strftime("%d-%b-%Y")
+
+        # Previous business day
+        today = datetime.now(IST).date()
+        prev  = today - timedelta(days=1)
+        while prev.weekday() >= 5:
+            prev -= timedelta(days=1)
+        date_str = prev.strftime("%d-%m-%Y")   # "10-06-2026"
+
+        sess = requests.Session()
+        sess.headers.update(_NSE_HEADERS)
+        sess.get(_NSE_HOME, timeout=8)          # prime cookies
+
+        r = sess.get(
+            _NSE_FO_HIST,
+            params={
+                "from":           date_str,
+                "to":             date_str,
+                "instrumentType": "OPTIDX",
+                "symbol":         "NIFTY",
+                "expiryDate":     expiry_nse,
+                "optionType":     option_type,
+                "strikePrice":    str(int(strike)),
+            },
+            timeout=15,
         )
-        if not prev:
+        rows = r.json().get("data") or []
+        if not rows:
             return None
-        c = prev[0]
+        row = rows[-1]
         return {
-            "date":  str(c[0])[:10],
-            "open":  float(c[1]),
-            "high":  float(c[2]),
-            "low":   float(c[3]),
-            "close": float(c[4]),
-            "oi":    float(c[6]) if len(c) > 6 else 0.0,
+            "date": str(prev),
+            "high": float(row.get("FH_TRADE_HIGH_PRICE") or 0),
+            "low":  float(row.get("FH_TRADE_LOW_PRICE")  or 0),
+            "oi":   float(row.get("FH_OPEN_INT")         or 0),
         }
     except Exception:
         return None
 
 
-def get_atm_instrument_keys(chain_data, atm_strike):
-    """Extract CE and PE instrument keys for the ATM strike from chain data."""
-    for row in chain_data:
-        if int(float(row.get("strike_price", 0))) == int(atm_strike):
-            ce_key = (row.get("call_options") or {}).get("instrument_key")
-            pe_key = (row.get("put_options")  or {}).get("instrument_key")
-            return ce_key, pe_key
-    return None, None
-
-
-def calc_spp(tok, chain_data, atm_strike):
+def calc_spp(expiry_str, atm_strike):
     """
-    SPP (UIP concept) — matches reference methodology exactly:
-      1. Previous trading day's H, L, OI for ATM CE and PE (via Upstox historical candle)
-      2. ce_median = (ce_high + ce_low) / 2
-         pe_median = (pe_high + pe_low) / 2
-         spp = (ce_median × ce_oi + pe_median × pe_oi) / (ce_oi + pe_oi)
+    SPP (UIP concept) — NSE FO historical data, identical to reference methodology:
+      ce_median = (ce_H + ce_L) / 2  (prev day)
+      pe_median = (pe_H + pe_L) / 2  (prev day)
+      spp = (ce_median × ce_OI + pe_median × pe_OI) / (ce_OI + pe_OI)
 
-    Returns: (spp, ce_h, ce_l, pe_h, pe_l, ce_oi_L, pe_oi_L, date_used) or all-None on failure.
+    Returns: (spp, ce_h, ce_l, pe_h, pe_l, ce_oi_L, pe_oi_L, date_used) or all-None.
     """
-    ce_key, pe_key = get_atm_instrument_keys(chain_data, atm_strike)
-    if not ce_key or not pe_key:
-        return None, None, None, None, None, None, None, None
-
-    ce_can = fetch_prev_day_candle(tok, ce_key)
-    pe_can = fetch_prev_day_candle(tok, pe_key)
+    ce_can = fetch_nse_fo_hist(expiry_str, atm_strike, "CE")
+    pe_can = fetch_nse_fo_hist(expiry_str, atm_strike, "PE")
     if not ce_can or not pe_can:
         return None, None, None, None, None, None, None, None
 
@@ -477,10 +486,10 @@ def calc_spp(tok, chain_data, atm_strike):
     ce_oi_L = ce_oi / 1e5
     pe_oi_L = pe_oi / 1e5
 
-    ce_med = (ce_h + ce_l) / 2
-    pe_med = (pe_h + pe_l) / 2
-    tot_oi = ce_oi + pe_oi
-    spp = (ce_med * ce_oi + pe_med * pe_oi) / tot_oi if tot_oi > 0 else (ce_med + pe_med) / 2
+    ce_med  = (ce_h + ce_l) / 2
+    pe_med  = (pe_h + pe_l) / 2
+    tot_oi  = ce_oi + pe_oi
+    spp     = (ce_med * ce_oi + pe_med * pe_oi) / tot_oi if tot_oi > 0 else (ce_med + pe_med) / 2
 
     return round(spp, 2), ce_h, ce_l, pe_h, pe_l, round(ce_oi_L, 2), round(pe_oi_L, 2), ce_can["date"]
 
@@ -1089,7 +1098,7 @@ else:
     # First call of the day — compute and lock
     with st.spinner("Computing SPP…"):
         _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
-            calc_spp(token, near_raw, atm)
+            calc_spp(near_exp, atm)
     _spp_atm = atm  # record the ATM used (open-price ATM)
     if _spp is not None:
         st.session_state["spp_cache"] = {
