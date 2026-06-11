@@ -1069,10 +1069,31 @@ _far_atm_ce_oi = far_ce_oi.get(float(atm), 0)
 _far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
 _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
 
-# SPP (UIP concept) — prev-day H/L/OI for ATM CE+PE from Upstox historical candle
-with st.spinner("Computing SPP…"):
-    _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
-        calc_spp(token, near_raw, atm)
+# SPP (UIP concept) — computed ONCE per day from prev-day H/L/OI; cached in session_state
+_today_str = now.date().isoformat()
+_spp_cache = st.session_state.get("spp_cache", {})
+if _spp_cache.get("date") == _today_str and _spp_cache.get("atm") == atm:
+    # Reuse cached value — SPP must not change intraday
+    _spp        = _spp_cache["spp"]
+    _spp_ce_h   = _spp_cache["ce_h"]
+    _spp_ce_l   = _spp_cache["ce_l"]
+    _spp_pe_h   = _spp_cache["pe_h"]
+    _spp_pe_l   = _spp_cache["pe_l"]
+    _spp_ce_oi_L= _spp_cache["ce_oi_L"]
+    _spp_pe_oi_L= _spp_cache["pe_oi_L"]
+    _spp_src    = _spp_cache["src"]
+else:
+    with st.spinner("Computing SPP…"):
+        _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
+            calc_spp(token, near_raw, atm)
+    if _spp is not None:
+        st.session_state["spp_cache"] = {
+            "date": _today_str, "atm": atm,
+            "spp": _spp, "ce_h": _spp_ce_h, "ce_l": _spp_ce_l,
+            "pe_h": _spp_pe_h, "pe_l": _spp_pe_l,
+            "ce_oi_L": _spp_ce_oi_L, "pe_oi_L": _spp_pe_oi_L,
+            "src": _spp_src,
+        }
 
 # ── PCR logging to GitHub CSV (throttled: market hours, once per 5 min) ─────
 _gh_tok = None
