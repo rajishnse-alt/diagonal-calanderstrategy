@@ -688,6 +688,20 @@ def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ra
     return base_steps, int(sell_strike), sell_ltp, cands, False
 
 
+def bs_price(S, K, T, sigma, opt_type="CE", r=0.065):
+    """Black-Scholes option price."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return max(S - K, 0) if opt_type == "CE" else max(K - S, 0)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2)))
+    nd2 = 0.5 * (1.0 + math.erf(d2 / math.sqrt(2)))
+    if opt_type == "CE":
+        return S * nd1 - K * math.exp(-r * T) * nd2
+    else:
+        return K * math.exp(-r * T) * (1 - nd2) - S * (1 - nd1)
+
+
 def bs_delta(S, K, T, sigma, opt_type="CE", r=0.065):
     """
     Black-Scholes delta.
