@@ -415,29 +415,30 @@ _NSE_HEADERS = {
     "Referer": "https://www.nseindia.com/",
 }
 
-@st.cache_data(ttl=3600, show_spinner=False)
+
+def _prev_biz_day():
+    today = datetime.now(IST).date()
+    prev  = today - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    return prev
+
+
 def fetch_nse_fo_hist(expiry_str, strike, option_type):
     """
-    Fetch previous trading day's H, L, OI from NSE FO daily historical.
-    expiry_str : "YYYY-MM-DD"  e.g. "2026-06-16"
-    option_type: "CE" or "PE"
+    Fetch previous trading day H, L, OI from NSE FO daily historical.
     Returns dict {high, low, oi, date} or None.
     """
     try:
-        # Expiry: "2026-06-16" → "16-Jun-2026"
         exp_dt     = datetime.strptime(expiry_str, "%Y-%m-%d")
-        expiry_nse = exp_dt.strftime("%d-%b-%Y")
-
-        # Previous business day
-        today = datetime.now(IST).date()
-        prev  = today - timedelta(days=1)
-        while prev.weekday() >= 5:
-            prev -= timedelta(days=1)
-        date_str = prev.strftime("%d-%m-%Y")   # "10-06-2026"
+        expiry_nse = exp_dt.strftime("%d-%b-%Y")          # "16-Jun-2026"
+        prev       = _prev_biz_day()
+        date_str   = prev.strftime("%d-%m-%Y")             # "10-06-2026"
 
         sess = requests.Session()
         sess.headers.update(_NSE_HEADERS)
-        sess.get(_NSE_HOME, timeout=8)          # prime cookies
+        sess.get(_NSE_HOME, timeout=8)                     # prime cookies
+        sess.get("https://www.nseindia.com/option-chain", timeout=8)
 
         r = sess.get(
             _NSE_FO_HIST,
@@ -456,27 +457,72 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         if not rows:
             return None
         row = rows[-1]
-        return {
-            "date": str(prev),
-            "high": float(row.get("FH_TRADE_HIGH_PRICE") or 0),
-            "low":  float(row.get("FH_TRADE_LOW_PRICE")  or 0),
-            "oi":   float(row.get("FH_OPEN_INT")         or 0),
-        }
+        h = float(row.get("FH_TRADE_HIGH_PRICE") or 0)
+        l = float(row.get("FH_TRADE_LOW_PRICE")  or 0)
+        o = float(row.get("FH_OPEN_INT")         or 0)
+        if h <= 0 or l <= 0 or o <= 0:
+            return None
+        return {"date": str(prev), "high": h, "low": l, "oi": o}
     except Exception:
         return None
 
 
-def calc_spp(expiry_str, atm_strike):
+def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
     """
-    SPP (UIP concept) — NSE FO historical data, identical to reference methodology:
-      ce_median = (ce_H + ce_L) / 2  (prev day)
-      pe_median = (pe_H + pe_L) / 2  (prev day)
-      spp = (ce_median × ce_OI + pe_median × pe_OI) / (ce_OI + pe_OI)
+    Fallback: fetch prev-day H, L, OI from Upstox historical candle.
+    option_type: "CE" or "PE"
+    """
+    try:
+        side_key = "call_options" if option_type == "CE" else "put_options"
+        inst_key = None
+        for row in chain_data:
+            if int(float(row.get("strike_price", 0))) == int(atm_strike):
+                inst_key = (row.get(side_key) or {}).get("instrument_key")
+                break
+        if not inst_key:
+            return None
+        today     = datetime.now(IST).date()
+        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_date   = today.strftime("%Y-%m-%d")
+        enc       = urllib.parse.quote(inst_key, safe="")
+        r = requests.get(
+            f"https://api.upstox.com/v2/historical-candle/{enc}/day/{to_date}/{from_date}",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
+            timeout=10,
+        )
+        candles = (r.json().get("data") or {}).get("candles") or []
+        today_s = today.isoformat()
+        prev = sorted([c for c in candles if str(c[0])[:10] < today_s],
+                      key=lambda c: c[0], reverse=True)
+        if not prev:
+            return None
+        c = prev[0]
+        h, l, oi = float(c[2]), float(c[3]), float(c[6]) if len(c) > 6 else 0.0
+        if h <= 0 or l <= 0 or oi <= 0:
+            return None
+        return {"date": str(c[0])[:10], "high": h, "low": l, "oi": oi}
+    except Exception:
+        return None
 
+
+def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
+    """
+    SPP (UIP concept):
+      spp = (ce_median × ce_OI + pe_median × pe_OI) / (ce_OI + pe_OI)
+    Tries NSE FO historical first; falls back to Upstox if NSE is blocked.
     Returns: (spp, ce_h, ce_l, pe_h, pe_l, ce_oi_L, pe_oi_L, date_used) or all-None.
     """
+    # Primary: NSE
     ce_can = fetch_nse_fo_hist(expiry_str, atm_strike, "CE")
     pe_can = fetch_nse_fo_hist(expiry_str, atm_strike, "PE")
+    src    = "NSE"
+
+    # Fallback: Upstox
+    if (not ce_can or not pe_can) and tok and chain_data:
+        ce_can = fetch_upstox_fo_hist(tok, chain_data, atm_strike, "CE")
+        pe_can = fetch_upstox_fo_hist(tok, chain_data, atm_strike, "PE")
+        src    = "Upstox"
+
     if not ce_can or not pe_can:
         return None, None, None, None, None, None, None, None
 
@@ -485,13 +531,13 @@ def calc_spp(expiry_str, atm_strike):
 
     ce_oi_L = ce_oi / 1e5
     pe_oi_L = pe_oi / 1e5
-
     ce_med  = (ce_h + ce_l) / 2
     pe_med  = (pe_h + pe_l) / 2
     tot_oi  = ce_oi + pe_oi
     spp     = (ce_med * ce_oi + pe_med * pe_oi) / tot_oi if tot_oi > 0 else (ce_med + pe_med) / 2
 
-    return round(spp, 2), ce_h, ce_l, pe_h, pe_l, round(ce_oi_L, 2), round(pe_oi_L, 2), ce_can["date"]
+    date_lbl = f"{ce_can['date']} ({src})"
+    return round(spp, 2), ce_h, ce_l, pe_h, pe_l, round(ce_oi_L, 2), round(pe_oi_L, 2), date_lbl
 
 
 def parse_chain(data):
@@ -1098,7 +1144,7 @@ else:
     # First call of the day — compute and lock
     with st.spinner("Computing SPP…"):
         _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
-            calc_spp(near_exp, atm)
+            calc_spp(near_exp, atm, tok=token, chain_data=near_raw)
     _spp_atm = atm  # record the ATM used (open-price ATM)
     if _spp is not None:
         st.session_state["spp_cache"] = {
