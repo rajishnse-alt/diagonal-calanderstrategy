@@ -984,22 +984,32 @@ components.html("""
 (function(){
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const TOK  = /^[a-z0-9]{5,20}$/i;
+  function isToken(t){ return UUID.test(t)||(TOK.test(t)&&t.length<=15); }
   function sweep(){
     try{
       var doc = window.parent.document;
+      // Hide stMarkdown containers whose full text is a token
       doc.querySelectorAll('[data-testid="stMarkdown"]').forEach(function(el){
-        var t = (el.textContent||'').trim();
-        if(UUID.test(t)||(TOK.test(t)&&t.length<=15)){
+        if(isToken((el.textContent||'').trim()))
           el.style.cssText='display:none!important';
-        }
+      });
+      // Also hide bare <p> elements (Streamlit Cloud injects some outside stMarkdown)
+      doc.querySelectorAll('p').forEach(function(el){
+        var t=(el.textContent||'').trim();
+        if(isToken(t))
+          el.style.cssText='display:none!important';
+      });
+      // Hide any direct text node containers that wrap a token string
+      doc.querySelectorAll('[data-testid="stVerticalBlock"] > div').forEach(function(el){
+        if(isToken((el.textContent||'').trim()))
+          el.style.cssText='display:none!important';
       });
     }catch(e){}
   }
   sweep();
   try{
-    new MutationObserver(sweep).observe(
-      window.parent.document.body,{childList:true,subtree:true}
-    );
+    new MutationObserver(function(){ sweep(); })
+      .observe(window.parent.document.body,{childList:true,subtree:true});
   }catch(e){}
 })();
 </script>
