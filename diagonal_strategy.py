@@ -11,7 +11,6 @@ Run:  streamlit run diagonal_strategy.py
 """
 
 import streamlit as st
-import streamlit.components.v1 as components
 import requests
 import math
 import time
@@ -803,7 +802,8 @@ def payoff_now(legs, spot_val, sigma, lot_size, r=0.065):
             cur = max(spot_val - leg["strike"], 0) if leg["opt_type"] == "CE" \
                   else max(leg["strike"] - spot_val, 0)
         else:
-            cur = bs_price(spot_val, leg["strike"], T, r, sigma, leg["opt_type"])
+            cur = bs_price(S=spot_val, K=leg["strike"], T=T, sigma=sigma,
+                           opt_type=leg["opt_type"], r=r)
         direction = -1 if leg["is_sell"] else 1
         pnl += direction * (cur - leg["ltp"]) * leg["lots"] * lot_size
     return pnl
@@ -1076,45 +1076,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Suppress Streamlit Cloud management overlay tokens ───────────────────────
-# Streamlit Cloud injects session-ID and viewer tokens as plain <p> nodes into
-# the DOM for the app owner. This JS observer hides any stMarkdown element whose
-# entire text content is a UUID or short alphanumeric token.
-components.html("""
-<script>
-(function(){
-  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const TOK  = /^[a-z0-9]{5,20}$/i;
-  function isToken(t){ return UUID.test(t)||(TOK.test(t)&&t.length<=15); }
-  function sweep(){
-    try{
-      var doc = window.parent.document;
-      // Hide stMarkdown containers whose full text is a token
-      doc.querySelectorAll('[data-testid="stMarkdown"]').forEach(function(el){
-        if(isToken((el.textContent||'').trim()))
-          el.style.cssText='display:none!important';
-      });
-      // Also hide bare <p> elements (Streamlit Cloud injects some outside stMarkdown)
-      doc.querySelectorAll('p').forEach(function(el){
-        var t=(el.textContent||'').trim();
-        if(isToken(t))
-          el.style.cssText='display:none!important';
-      });
-      // Hide any direct text node containers that wrap a token string
-      doc.querySelectorAll('[data-testid="stVerticalBlock"] > div').forEach(function(el){
-        if(isToken((el.textContent||'').trim()))
-          el.style.cssText='display:none!important';
-      });
-    }catch(e){}
-  }
-  sweep();
-  try{
-    new MutationObserver(function(){ sweep(); })
-      .observe(window.parent.document.body,{childList:true,subtree:true});
-  }catch(e){}
-})();
-</script>
-""", height=0)
 
 # ─────────────────────────────────────────────
 # PARAMETERS
