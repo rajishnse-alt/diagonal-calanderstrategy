@@ -199,7 +199,7 @@ GITHUB_REPO     = "diagonal-calanderstrategy"
 GITHUB_BRANCH   = "main"
 PCR_CSV_PATH    = "pcr_data/pcr_log.csv"
 PCR_RETENTION   = 35   # days to keep
-PCR_LOG_INTERVAL= 300  # seconds between writes (5 min)
+PCR_LOG_INTERVAL= 180  # seconds between writes (3 min)
 PCR_COLUMNS     = [
     "timestamp","date","expiry_type","expiry","spot","atm",
     "pcr_range","pcr_atm","ce_oi_L","pe_oi_L","atm_ce_oi_L","atm_pe_oi_L",
@@ -1109,7 +1109,7 @@ else:
             "src": _spp_src,
         }
 
-# ── PCR logging to GitHub CSV (throttled: market hours, once per 5 min) ─────
+# ── PCR logging to GitHub CSV (throttled: market hours, once per 3 min) ─────
 _gh_tok = None
 try:
     _gh_tok = st.secrets["github"]["token"]
@@ -2150,7 +2150,7 @@ else:
     if _chart:
         st.markdown(_chart, unsafe_allow_html=True)
     else:
-        st.caption("No intraday data yet — PCR is recorded every 5 min during market hours.")
+        st.caption("No intraday data yet — PCR is recorded every 3 min during market hours.")
 
     # ── Recent readings table (last 20 near + last 20 far) ────────────────
     _ph1, _ph2 = st.columns(2)
