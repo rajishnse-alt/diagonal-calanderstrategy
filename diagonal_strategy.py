@@ -860,7 +860,7 @@ if "access_token" not in st.session_state:
         unsafe_allow_html=True,
     )
     st.markdown(
-        f"<a href='{_auth_url}' target='_self' style='"
+        f"<a href='{_auth_url}' target='_blank' rel='noopener noreferrer' style='"
         f"display:inline-block;padding:.5rem 1.4rem;border-radius:8px;"
         f"background:var(--gold);color:#000;font-weight:700;font-size:14px;"
         f"text-decoration:none;letter-spacing:.5px;'>CONNECT →</a>",
