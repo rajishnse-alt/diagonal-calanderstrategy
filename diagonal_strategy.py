@@ -542,6 +542,7 @@ def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
 
 def parse_chain(data):
     ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg = {}, {}, {}, {}, {}, {}
+    ce_gamma, pe_gamma = {}, {}          # API greeks — gamma per strike
     spot = None
     for row in data:
         s = float(row.get("strike_price", 0))
@@ -549,20 +550,25 @@ def parse_chain(data):
             sp = row.get("underlying_spot_price")
             if sp:
                 spot = float(sp)
-        c = (row.get("call_options") or {}).get("market_data") or {}
-        p = (row.get("put_options")  or {}).get("market_data") or {}
+        c  = (row.get("call_options") or {}).get("market_data")    or {}
+        p  = (row.get("put_options")  or {}).get("market_data")    or {}
+        cg = (row.get("call_options") or {}).get("option_greeks")  or {}
+        pg = (row.get("put_options")  or {}).get("option_greeks")  or {}
         ce_map[s]     = float(c.get("ltp") or 0)
         pe_map[s]     = float(p.get("ltp") or 0)
         ce_oi[s]      = _get_oi(c)
         pe_oi[s]      = _get_oi(p)
         ce_oi_chg[s]  = _get_oi_chg(c)
         pe_oi_chg[s]  = _get_oi_chg(p)
+        # gamma is always positive; abs() guards against sign conventions
+        ce_gamma[s]   = abs(float(cg.get("gamma") or 0))
+        pe_gamma[s]   = abs(float(pg.get("gamma") or 0))
     if spot is None:
         common = set(ce_map) & set(pe_map)
         if common:
             spot = float(min(common, key=lambda s: abs(ce_map[s] - pe_map[s])))
     atm = int(round(spot / STEP) * STEP) if spot else 0
-    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg
+    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma
 
 
 def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=10):
@@ -728,27 +734,30 @@ def bs_gamma(S, K, T, sigma, r=0.065):
 def net_gamma_lots(legs, spot, sigma, r=0.065):
     """
     Net signed gamma of the position in units of gamma-per-lot.
+    Uses api_gamma from leg dict if > 0 (Upstox greeks), else falls back to BS.
     Short legs contribute negative gamma; long legs positive.
     """
     total = 0.0
     for leg in legs:
-        T   = leg.get("T", 0.0)
-        g   = bs_gamma(spot, leg["strike"], T, sigma, r)
-        sign = -1 if leg["is_sell"] else 1
+        T      = leg.get("T", 0.0)
+        api_g  = leg.get("api_gamma", 0.0)
+        g      = api_g if api_g > 0 else bs_gamma(spot, leg["strike"], T, sigma, r)
+        sign   = -1 if leg["is_sell"] else 1
         total += sign * g * leg["lots"]
     return total
 
 
 def calc_wing_lots(legs_context, spot, sigma, wing_strike, wing_T,
-                   gamma_fraction=1.0, min_lots=1, max_lots=50, r=0.065):
+                   gamma_fraction=1.0, min_lots=1, max_lots=50, r=0.065,
+                   wing_api_gamma=0.0):
     """
     Solve for lots of a deep OTM wing buy needed to offset gamma_fraction of
     the net negative gamma in legs_context.
       gamma_fraction=1.0 → offset all remaining gamma (single wing)
-      gamma_fraction=0.5 → offset half (when CE+PE wings share the job equally)
+    Uses wing_api_gamma (Upstox) when > 0, else falls back to BS.
     Returns an integer clamped to [min_lots, max_lots].
     """
-    g_wing = bs_gamma(spot, wing_strike, wing_T, sigma, r)
+    g_wing = wing_api_gamma if wing_api_gamma > 0 else bs_gamma(spot, wing_strike, wing_T, sigma, r)
     if g_wing <= 0:
         return min_lots
     net_g = net_gamma_lots(legs_context, spot, sigma, r)
@@ -1248,8 +1257,8 @@ if ne or not near_raw:
 if fe or not far_raw:
     st.error(f"Far chain error: {fe}"); st.stop()
 
-spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg  = parse_chain(far_raw)
+spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
+_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
 
 # ── VIX derived values (spot-dependent, computed after chain load) ───────────
 _days_to_exp = max(
@@ -2065,26 +2074,40 @@ _wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
 _wing_ce_lots   = sell_lots
 _wing_pe_lots   = sell_lots
 
-# ── Deep OTM wings (reference: Stockmock positions 7 & 8) ────────────────────
-# CE: sell_ce_strike + ~1000 pts, LTP ₹2–6, lots = sell_lots (fixed, low delta ~0.02)
-# PE: sell_pe_strike − ~1000 pts, LTP ₹4–8, lots = gamma-solved (came out 3× in reference)
+# ── Deep OTM wings — BOTH sides gamma-solved independently ───────────────────
+# Reference (Stockmock): SELL 2L CE/PE → deep CE 4L (+900) + deep PE 7L (−2100)
+# Both lots are gamma-solved from their respective side legs.
+# CE side: SELL near CE + BUY far CE + BUY wing CE +500
+# PE side: SELL near PE + BUY far PE + BUY wing PE -500
+
 _deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(
     near_ce, sell_ltp=sell_ce_ltp, pct_lo=0.05, pct_hi=0.10,
     min_strike=sell_ce_strike + 900)
-_deep_ce_lots = sell_lots   # fixed — matches the short leg count, delta ≈ 0.02
+_ce_side_legs = [
+    {"strike":sell_ce_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(sell_ce_strike), 0)},
+    {"strike":buy_ce_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_ce_gamma.get(float(buy_ce_strike), 0)},
+    {"strike":_wing_ce_strike,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(_wing_ce_strike), 0)},
+]
+_deep_ce_lots = calc_wing_lots(
+    _ce_side_legs, spot, _sigma_std,
+    wing_strike=_deep_ce_strike, wing_T=_T_near_std,
+    gamma_fraction=1.0, min_lots=1, max_lots=sell_lots * 6,
+    wing_api_gamma=near_ce_gamma.get(float(_deep_ce_strike), 0)
+)
 
 _deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
     near_pe, sell_ltp=sell_pe_ltp, pct_lo=0.05, pct_hi=0.10,
     max_strike=sell_pe_strike - 900)
 _pe_side_legs = [
-    {"strike":sell_pe_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
-    {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
-    {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std},
+    {"strike":sell_pe_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std, "api_gamma": near_pe_gamma.get(float(sell_pe_strike), 0)},
+    {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_pe_gamma.get(float(buy_pe_strike), 0)},
+    {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_pe_gamma.get(float(_wing_pe_strike), 0)},
 ]
 _deep_pe_lots = calc_wing_lots(
     _pe_side_legs, spot, _sigma_std,
     wing_strike=_deep_pe_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=sell_lots * 6
+    gamma_fraction=1.0, min_lots=1, max_lots=sell_lots * 6,
+    wing_api_gamma=near_pe_gamma.get(float(_deep_pe_strike), 0)
 )
 
 legs = [
@@ -2096,7 +2119,7 @@ legs = [
     # Near ±500 wings
     {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing CE +500"},
     {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing PE -500"},
-    # Deep OTM wings (γ-taper) — CE fixed lots, PE gamma-solved
+    # Deep OTM wings (γ-taper) — both sides gamma-solved from API greeks
     {"opt_type":"CE","strike":_deep_ce_strike,"ltp":_deep_ce_ltp,"lots":_deep_ce_lots,"is_sell":False,"is_near":True,"T":_T_near_std,"label":f"BUY deep CE {_deep_ce_lots}L @+1000"},
     {"opt_type":"PE","strike":_deep_pe_strike,"ltp":_deep_pe_ltp,"lots":_deep_pe_lots,"is_sell":False,"is_near":True,"T":_T_near_std,"label":f"BUY deep PE {_deep_pe_lots}L γ-solved"},
 ]
@@ -2160,7 +2183,7 @@ st.markdown(
     f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_ce_lots}L CE</span> "
     f"<span class='strike-pill-buy'>{_deep_ce_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_deep_ce_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;+1000 fixed lots · δ≈0.02</span></div>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;+900 γ-solved · {_deep_ce_lots}L</span></div>"
     f"<div style='border-left:2px solid #4d9fff;padding-left:.5rem;'>"
     f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_deep_pe_strike}</span> "
@@ -2237,14 +2260,16 @@ if _vix_ok and _eff_vix >= 15.0:
     # Fetch chain for sell expiry (reuse near chain if same)
     if _hv_sell_exp == near_exp:
         _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+        _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
     else:
         with st.spinner(f"Loading sell chain {_hv_sell_exp}…"):
             _hv_sell_raw, _hv_sell_err = fetch_chain(token, _hv_sell_exp)
         if _hv_sell_raw:
-            _, _, _hv_sell_ce, _hv_sell_pe, _, _, _, _ = parse_chain(_hv_sell_raw)
+            _, _, _hv_sell_ce, _hv_sell_pe, _, _, _, _, _hv_sell_ce_gamma, _hv_sell_pe_gamma = parse_chain(_hv_sell_raw)
         else:
             st.warning(f"⚠️ Could not load chain for {_hv_sell_exp}: {_hv_sell_err}")
             _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+            _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
 
     _T_near  = max(_hv_sell_dte, 1) / 365.0
     _sigma   = _eff_vix / 100.0
@@ -2267,28 +2292,36 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
         _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
 
-        # Deep OTM CE + PE wings: LTP ₹4–₹6, gamma split 50/50
+        # Deep OTM wings — BOTH sides gamma-solved independently (same logic as standard section)
         _T_hv = max(_hv_sell_dte, 1) / 365.0
-        # Deep OTM wings — same logic as reference (positions 7 & 8 in Stockmock)
-        # CE: +900 pts from sell, LTP ₹2–6, lots = 2 (sell lots, fixed)
-        # PE: −900 pts from sell, LTP ₹4–8, lots = gamma-solved
+        _hv_sell_lots = 2       # HV always sells 2 lots
+
         _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
             _hv_sell_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.05, pct_hi=0.10,
             min_strike=_hv_ce["strike"] + 900)
-        _hv_sell_lots = 2       # HV always sells 2 lots
-        _hv_deep_ce_lots = _hv_sell_lots   # fixed = sell lots
+        _hv_ce_side_legs = [
+            {"strike":_hv_ce["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce["strike"]), 0)},
+            {"strike":_hv_ce2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce2_strike), 0)},
+        ]
+        _hv_deep_ce_lots = calc_wing_lots(
+            _hv_ce_side_legs, spot, _sigma,
+            wing_strike=_hv_deep_ce_strike, wing_T=_T_hv,
+            gamma_fraction=1.0, min_lots=1, max_lots=_hv_sell_lots * 6,
+            wing_api_gamma=_hv_sell_ce_gamma.get(float(_hv_deep_ce_strike), 0)
+        )
 
         _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
             _hv_sell_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.05, pct_hi=0.10,
             max_strike=_hv_pe["strike"] - 900)
         _hv_pe_side_legs = [
-            {"strike":_hv_pe["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv},
-            {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv},
+            {"strike":_hv_pe["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe["strike"]), 0)},
+            {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe2_strike), 0)},
         ]
         _hv_deep_pe_lots = calc_wing_lots(
             _hv_pe_side_legs, spot, _sigma,
             wing_strike=_hv_deep_pe_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=_hv_sell_lots * 6
+            gamma_fraction=1.0, min_lots=1, max_lots=_hv_sell_lots * 6,
+            wing_api_gamma=_hv_sell_pe_gamma.get(float(_hv_deep_pe_strike), 0)
         )
 
         # Far expiry selection: DTE >= 2 × sell_DTE
@@ -2305,7 +2338,7 @@ if _vix_ok and _eff_vix >= 15.0:
             with st.spinner(f"Loading far chain {_hv_far_exp}…"):
                 _hv_far_raw, _hv_far_err = fetch_chain(token, _hv_far_exp)
             if _hv_far_raw:
-                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _ = parse_chain(_hv_far_raw)
+                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _, _, _ = parse_chain(_hv_far_raw)
             else:
                 _hv_far_ce, _hv_far_pe = {}, {}
         else:
