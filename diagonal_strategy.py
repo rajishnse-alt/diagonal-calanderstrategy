@@ -2391,11 +2391,11 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce_collect = (_hv_ce["ltp"] * _hv_sell_lots
                           - _hv_ce2_ltp * 1
                           - _hv_deep_ce_ltp * _hv_deep_ce_lots
-                          - _hv_ce_buy_ltp  * _hv_sell_lots) * LOT_SIZE
+                          - _hv_ce_buy_ltp  * BUY_LOTS) * LOT_SIZE
         _hv_pe_collect = (_hv_pe["ltp"] * _hv_sell_lots
                           - _hv_pe2_ltp * 1
                           - _hv_deep_pe_ltp * _hv_deep_pe_lots
-                          - _hv_pe_buy_ltp  * _hv_sell_lots) * LOT_SIZE
+                          - _hv_pe_buy_ltp  * BUY_LOTS) * LOT_SIZE
         _hv_net        = _hv_ce_collect + _hv_pe_collect
 
         # ── Display ────────────────────────────────────────────────────────
@@ -2425,7 +2425,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
-                f"<span class='lbl'>BUY {_hv_sell_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
+                f"<span class='lbl'>BUY {BUY_LOTS}L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
                 f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
                 f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce_buy_ltp:.2f}</span>"
@@ -2463,7 +2463,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
-                f"<span class='lbl'>BUY {_hv_sell_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
+                f"<span class='lbl'>BUY {BUY_LOTS}L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
                 f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
                 f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe_buy_ltp:.2f}</span>"
@@ -2490,7 +2490,7 @@ if _vix_ok and _eff_vix >= 15.0:
             f"SELL: CE {_hv_ce['strike']}×2L + PE {_hv_pe['strike']}×2L @ {_hv_sell_exp} (DTE {_hv_sell_dte}d)"
             f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} (+500) + PE {_hv_pe2_strike} (-500) @ {_hv_sell_exp}"
             f"&nbsp;·&nbsp; 🪽 deep OTM: CE {_hv_deep_ce_strike}×{_hv_deep_ce_lots}L ₹{_hv_deep_ce_ltp:.2f} + PE {_hv_deep_pe_strike}×{_hv_deep_pe_lots}L ₹{_hv_deep_pe_ltp:.2f} (γ-taper)"
-            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*3}d needed)</span><br>"
+            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']}×{BUY_LOTS}L + PE {_hv_pe['strike']}×{BUY_LOTS}L @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d)</span><br>"
             f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
             f"δ: CE sell {_hv_ce['delta']:.3f} · CE+500 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
             f"PE sell {_hv_pe['delta']:.3f} · PE-500 {_hv_pe2_bs_delta:.3f}"
