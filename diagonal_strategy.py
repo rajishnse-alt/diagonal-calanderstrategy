@@ -2315,32 +2315,16 @@ if _vix_ok and _eff_vix >= 15.0:
         unsafe_allow_html=True,
     )
 
-    # Auto-select sell expiry: must have DTE > 5
-    _hv_sell_exp = None
-    for _exp in sorted(all_exp):
-        _exp_dte = (datetime.strptime(_exp, "%Y-%m-%d").date() - now.date()).days
-        if _exp_dte > 5:
-            _hv_sell_exp = _exp
-            _hv_sell_dte = _exp_dte
-            break
-    if _hv_sell_exp is None:
-        st.warning("⚠️ No expiry with DTE > 5 found. Cannot build High-VIX strategy.")
-        _hv_sell_exp = near_exp
-        _hv_sell_dte = _days_to_exp
+    # Use user-selected near expiry for sell leg
+    _hv_sell_exp = near_exp
+    _hv_sell_dte = _days_to_exp
+    if _hv_sell_dte <= 5:
+        st.warning(f"⚠️ Selected near expiry {near_exp} has only {_hv_sell_dte} DTE — "
+                   f"High VIX strategy works best with DTE > 5. Consider selecting a later expiry.")
 
-    # Fetch chain for sell expiry (reuse near chain if same)
-    if _hv_sell_exp == near_exp:
-        _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
-        _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
-    else:
-        with st.spinner(f"Loading sell chain {_hv_sell_exp}…"):
-            _hv_sell_raw, _hv_sell_err = fetch_chain(token, _hv_sell_exp)
-        if _hv_sell_raw:
-            _, _, _hv_sell_ce, _hv_sell_pe, _, _, _, _, _hv_sell_ce_gamma, _hv_sell_pe_gamma = parse_chain(_hv_sell_raw)
-        else:
-            st.warning(f"⚠️ Could not load chain for {_hv_sell_exp}: {_hv_sell_err}")
-            _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
-            _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
+    # Reuse already-loaded near chain
+    _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+    _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
 
     _T_near  = max(_hv_sell_dte, 1) / 365.0
     _sigma   = _eff_vix / 100.0
@@ -2392,25 +2376,12 @@ if _vix_ok and _eff_vix >= 15.0:
             min_lots=1, max_lots=_hv_sell_lots * 6,
         )
 
-        # Far expiry selection: DTE >= 2 × sell_DTE
-        _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
-        _hv_far_dte = (
-            (datetime.strptime(_hv_far_exp, "%Y-%m-%d").date() - now.date()).days
-            if _hv_far_exp else 0
-        )
+        # Use user-selected far expiry for buy leg
+        _hv_far_exp = far_exp
+        _hv_far_dte = _far_days
 
-        # Fetch far chain — reuse existing if same expiry, else fetch fresh
-        if _hv_far_exp and _hv_far_exp == far_exp:
-            _hv_far_ce, _hv_far_pe = far_ce, far_pe
-        elif _hv_far_exp:
-            with st.spinner(f"Loading far chain {_hv_far_exp}…"):
-                _hv_far_raw, _hv_far_err = fetch_chain(token, _hv_far_exp)
-            if _hv_far_raw:
-                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _, _, _ = parse_chain(_hv_far_raw)
-            else:
-                _hv_far_ce, _hv_far_pe = {}, {}
-        else:
-            _hv_far_ce, _hv_far_pe = {}, {}
+        # Reuse already-loaded far chain
+        _hv_far_ce, _hv_far_pe = far_ce, far_pe
 
         # Buy LTPs (same strike, far expiry)
         _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
