@@ -1428,8 +1428,8 @@ _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.
 # never shifts intraday even if spot crosses a strike boundary or app restarts.
 _today_str = now.date().isoformat()
 _spp_cache = st.session_state.get("spp_cache", {})
-if _spp_cache.get("date") == _today_str:
-    # Locked for the day — restore cached values
+if _spp_cache.get("date") == _today_str and _spp_cache.get("expiry") == near_exp:
+    # Locked for the day + expiry — restore cached values
     _spp        = _spp_cache["spp"]
     _spp_atm    = _spp_cache["atm"]
     _spp_ce_h   = _spp_cache["ce_h"]
@@ -1447,7 +1447,7 @@ else:
             calc_spp(near_exp, _spp_atm, tok=token, chain_data=near_raw)
     if _spp is not None:
         st.session_state["spp_cache"] = {
-            "date": _today_str, "atm": _spp_atm,
+            "date": _today_str, "expiry": near_exp, "atm": _spp_atm,
             "spp": _spp, "ce_h": _spp_ce_h, "ce_l": _spp_ce_l,
             "pe_h": _spp_pe_h, "pe_l": _spp_pe_l,
             "ce_oi_L": _spp_ce_oi_L, "pe_oi_L": _spp_pe_oi_L,
