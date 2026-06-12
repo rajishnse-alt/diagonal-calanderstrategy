@@ -1371,6 +1371,23 @@ ce_steps, sell_ce_strike, sell_ce_ltp, ce_cands, ce_adjusted = \
 pe_steps, sell_pe_strike, sell_pe_ltp, pe_cands, pe_adjusted = \
     auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio)
 
+# ── Equalize CE/PE steps to eliminate delta skew in the blue P&L line ────────
+# If auto-adjust walked one side closer to ATM than the other, the position
+# ends up net long/short delta — causing the blue line to slope instead of tent.
+# Fix: pull the "farther" side in to match the "closer" side.
+if ce_steps != pe_steps:
+    _eq_steps = min(ce_steps, pe_steps)
+    if ce_steps > _eq_steps:
+        sell_ce_strike = atm + _eq_steps * STEP
+        sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
+        ce_cands       = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
+        ce_steps, ce_adjusted = _eq_steps, True
+    else:
+        sell_pe_strike = atm - _eq_steps * STEP
+        sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
+        pe_cands       = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
+        pe_steps, pe_adjusted = _eq_steps, True
+
 best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
 best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
 
