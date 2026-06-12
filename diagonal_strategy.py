@@ -606,31 +606,39 @@ def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_d
     return pcr, pcr_chg, tot_ce, tot_pe, spcl, ce_atm, pe_atm, sentiment
 
 
-def fetch_vix(tok):
-    """Fetch India VIX open and current LTP from Upstox market-quote API."""
+def fetch_vix_and_nifty_open(tok):
+    """
+    Single call: fetch India VIX (open + LTP) AND NIFTY 50 day-open price.
+    Returns (open_vix, curr_vix, nifty_day_open, err).
+    nifty_day_open is the day's OHLC open — used to anchor SPP ATM for the day.
+    """
     try:
         r = requests.get(
             "https://api.upstox.com/v2/market-quote/quotes",
-            params={"instrument_key": "NSE_INDEX|India VIX"},
+            params={"instrument_key": "NSE_INDEX|India VIX,NSE_INDEX|Nifty 50"},
             headers=hdr(tok), timeout=10,
         )
         if r.status_code == 401:
-            return None, None, "token_expired"
+            return None, None, None, "token_expired"
         d = r.json()
         if d.get("status") == "success":
             data = d.get("data", {})
-            # response key uses colon separator
             vd = (data.get("NSE_INDEX:India VIX")
-                  or data.get("NSE_INDEX|India VIX")
-                  or next(iter(data.values()), None))
-            if vd:
-                ohlc     = vd.get("ohlc", {})
-                open_vix = float(ohlc.get("open") or 0)
-                curr_vix = float(vd.get("last_price") or 0)
-                return open_vix, curr_vix, None
-        return None, None, str(d)
+                  or data.get("NSE_INDEX|India VIX"))
+            nd = (data.get("NSE_INDEX:Nifty 50")
+                  or data.get("NSE_INDEX|Nifty 50"))
+            open_vix      = float((vd or {}).get("ohlc", {}).get("open") or 0) if vd else None
+            curr_vix      = float((vd or {}).get("last_price") or 0)           if vd else None
+            nifty_day_open= float((nd or {}).get("ohlc", {}).get("open") or 0) if nd else None
+            return open_vix, curr_vix, nifty_day_open, None
+        return None, None, None, str(d)
     except Exception as e:
-        return None, None, str(e)
+        return None, None, None, str(e)
+
+# backward-compat alias used elsewhere
+def fetch_vix(tok):
+    open_vix, curr_vix, _, err = fetch_vix_and_nifty_open(tok)
+    return open_vix, curr_vix, err
 
 
 def weeks_out(expiry_str):
@@ -1149,7 +1157,7 @@ token = st.session_state["access_token"]
 del _ak, _as, _ru   # no further need; prevent accidental render
 
 # ── VIX (early fetch — needed for strategy banner) ──────────────────────────
-_open_vix, _curr_vix, _vix_err_early = fetch_vix(token)
+_open_vix, _curr_vix, _nifty_day_open, _vix_err_early = fetch_vix_and_nifty_open(token)
 if _vix_err_early == "token_expired":
     del st.session_state["access_token"]; st.rerun()
 
@@ -1159,6 +1167,10 @@ if _open_vix and _curr_vix:
 else:
     _eff_vix   = 0.0
     _vix_ok    = False
+
+# Open ATM — anchored to NIFTY day-open price, falls back to current spot
+_open_atm = (int(round(_nifty_day_open / STEP) * STEP)
+             if _nifty_day_open and _nifty_day_open > 0 else None)
 
 # ── Strategy banner (rendered inline — no st.empty() placeholder) ────────────
 _active_strat = STRATEGY_REGISTRY[0] if (_vix_ok and _eff_vix > 15.0) else STRATEGY_REGISTRY[1]
@@ -1347,8 +1359,8 @@ _far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
 _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
 
 # SPP (UIP concept) — computed ONCE per calendar day, keyed ONLY by date.
-# ATM used is whatever it is on first computation (open/premarket ATM).
-# Never recomputed intraday even if spot crosses a strike boundary.
+# ATM is anchored to NIFTY day-open price (pre-market / 9:15 open) so it
+# never shifts intraday even if spot crosses a strike boundary or app restarts.
 _today_str = now.date().isoformat()
 _spp_cache = st.session_state.get("spp_cache", {})
 if _spp_cache.get("date") == _today_str:
@@ -1363,11 +1375,11 @@ if _spp_cache.get("date") == _today_str:
     _spp_pe_oi_L= _spp_cache["pe_oi_L"]
     _spp_src    = _spp_cache["src"]
 else:
-    # First call of the day — compute and lock
-    with st.spinner("Computing SPP…"):
+    # First call of the day — use day-open ATM, fall back to current spot ATM
+    _spp_atm = _open_atm if _open_atm else atm
+    with st.spinner(f"Computing SPP (open ATM={_spp_atm})…"):
         _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
-            calc_spp(near_exp, atm, tok=token, chain_data=near_raw)
-    _spp_atm = atm  # record the ATM used (open-price ATM)
+            calc_spp(near_exp, _spp_atm, tok=token, chain_data=near_raw)
     if _spp is not None:
         st.session_state["spp_cache"] = {
             "date": _today_str, "atm": _spp_atm,
