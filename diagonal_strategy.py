@@ -1371,23 +1371,6 @@ ce_steps, sell_ce_strike, sell_ce_ltp, ce_cands, ce_adjusted = \
 pe_steps, sell_pe_strike, sell_pe_ltp, pe_cands, pe_adjusted = \
     auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio)
 
-# ── Equalize CE/PE steps to eliminate delta skew in the blue P&L line ────────
-# If auto-adjust walked one side closer to ATM than the other, the position
-# ends up net long/short delta — causing the blue line to slope instead of tent.
-# Fix: pull the "farther" side in to match the "closer" side.
-if ce_steps != pe_steps:
-    _eq_steps = min(ce_steps, pe_steps)
-    if ce_steps > _eq_steps:
-        sell_ce_strike = atm + _eq_steps * STEP
-        sell_ce_ltp    = near_ce.get(float(sell_ce_strike), 0)
-        ce_cands       = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
-        ce_steps, ce_adjusted = _eq_steps, True
-    else:
-        sell_pe_strike = atm - _eq_steps * STEP
-        sell_pe_ltp    = near_pe.get(float(sell_pe_strike), 0)
-        pe_cands       = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
-        pe_steps, pe_adjusted = _eq_steps, True
-
 best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
 best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
 
@@ -2332,16 +2315,32 @@ if _vix_ok and _eff_vix >= 15.0:
         unsafe_allow_html=True,
     )
 
-    # Use user-selected near expiry for sell leg
-    _hv_sell_exp = near_exp
-    _hv_sell_dte = _days_to_exp
-    if _hv_sell_dte <= 5:
-        st.warning(f"⚠️ Selected near expiry {near_exp} has only {_hv_sell_dte} DTE — "
-                   f"High VIX strategy works best with DTE > 5. Consider selecting a later expiry.")
+    # Auto-select sell expiry: must have DTE > 5
+    _hv_sell_exp = None
+    for _exp in sorted(all_exp):
+        _exp_dte = (datetime.strptime(_exp, "%Y-%m-%d").date() - now.date()).days
+        if _exp_dte > 5:
+            _hv_sell_exp = _exp
+            _hv_sell_dte = _exp_dte
+            break
+    if _hv_sell_exp is None:
+        st.warning("⚠️ No expiry with DTE > 5 found. Cannot build High-VIX strategy.")
+        _hv_sell_exp = near_exp
+        _hv_sell_dte = _days_to_exp
 
-    # Reuse already-loaded near chain
-    _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
-    _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
+    # Fetch chain for sell expiry (reuse near chain if same)
+    if _hv_sell_exp == near_exp:
+        _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+        _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
+    else:
+        with st.spinner(f"Loading sell chain {_hv_sell_exp}…"):
+            _hv_sell_raw, _hv_sell_err = fetch_chain(token, _hv_sell_exp)
+        if _hv_sell_raw:
+            _, _, _hv_sell_ce, _hv_sell_pe, _, _, _, _, _hv_sell_ce_gamma, _hv_sell_pe_gamma = parse_chain(_hv_sell_raw)
+        else:
+            st.warning(f"⚠️ Could not load chain for {_hv_sell_exp}: {_hv_sell_err}")
+            _hv_sell_ce, _hv_sell_pe = near_ce, near_pe
+            _hv_sell_ce_gamma, _hv_sell_pe_gamma = near_ce_gamma, near_pe_gamma
 
     _T_near  = max(_hv_sell_dte, 1) / 365.0
     _sigma   = _eff_vix / 100.0
@@ -2393,12 +2392,25 @@ if _vix_ok and _eff_vix >= 15.0:
             min_lots=1, max_lots=_hv_sell_lots * 6,
         )
 
-        # Use user-selected far expiry for buy leg
-        _hv_far_exp = far_exp
-        _hv_far_dte = _far_days
+        # Far expiry selection: DTE >= 2 × sell_DTE
+        _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
+        _hv_far_dte = (
+            (datetime.strptime(_hv_far_exp, "%Y-%m-%d").date() - now.date()).days
+            if _hv_far_exp else 0
+        )
 
-        # Reuse already-loaded far chain
-        _hv_far_ce, _hv_far_pe = far_ce, far_pe
+        # Fetch far chain — reuse existing if same expiry, else fetch fresh
+        if _hv_far_exp and _hv_far_exp == far_exp:
+            _hv_far_ce, _hv_far_pe = far_ce, far_pe
+        elif _hv_far_exp:
+            with st.spinner(f"Loading far chain {_hv_far_exp}…"):
+                _hv_far_raw, _hv_far_err = fetch_chain(token, _hv_far_exp)
+            if _hv_far_raw:
+                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _, _, _ = parse_chain(_hv_far_raw)
+            else:
+                _hv_far_ce, _hv_far_pe = {}, {}
+        else:
+            _hv_far_ce, _hv_far_pe = {}, {}
 
         # Buy LTPs (same strike, far expiry)
         _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
@@ -2408,11 +2420,11 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce_collect = (_hv_ce["ltp"] * _hv_sell_lots
                           - _hv_ce2_ltp * 1
                           - _hv_deep_ce_ltp * _hv_deep_ce_lots
-                          - _hv_ce_buy_ltp  * BUY_LOTS) * LOT_SIZE
+                          - _hv_ce_buy_ltp  * _hv_sell_lots) * LOT_SIZE
         _hv_pe_collect = (_hv_pe["ltp"] * _hv_sell_lots
                           - _hv_pe2_ltp * 1
                           - _hv_deep_pe_ltp * _hv_deep_pe_lots
-                          - _hv_pe_buy_ltp  * BUY_LOTS) * LOT_SIZE
+                          - _hv_pe_buy_ltp  * _hv_sell_lots) * LOT_SIZE
         _hv_net        = _hv_ce_collect + _hv_pe_collect
 
         # ── Display ────────────────────────────────────────────────────────
@@ -2442,7 +2454,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
-                f"<span class='lbl'>BUY {BUY_LOTS}L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
+                f"<span class='lbl'>BUY {_hv_sell_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
                 f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
                 f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce_buy_ltp:.2f}</span>"
@@ -2480,7 +2492,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
-                f"<span class='lbl'>BUY {BUY_LOTS}L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
+                f"<span class='lbl'>BUY {_hv_sell_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
                 f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
                 f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe_buy_ltp:.2f}</span>"
@@ -2507,7 +2519,7 @@ if _vix_ok and _eff_vix >= 15.0:
             f"SELL: CE {_hv_ce['strike']}×2L + PE {_hv_pe['strike']}×2L @ {_hv_sell_exp} (DTE {_hv_sell_dte}d)"
             f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} (+500) + PE {_hv_pe2_strike} (-500) @ {_hv_sell_exp}"
             f"&nbsp;·&nbsp; 🪽 deep OTM: CE {_hv_deep_ce_strike}×{_hv_deep_ce_lots}L ₹{_hv_deep_ce_ltp:.2f} + PE {_hv_deep_pe_strike}×{_hv_deep_pe_lots}L ₹{_hv_deep_pe_ltp:.2f} (γ-taper)"
-            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']}×{BUY_LOTS}L + PE {_hv_pe['strike']}×{BUY_LOTS}L @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d)</span><br>"
+            f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*3}d needed)</span><br>"
             f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
             f"δ: CE sell {_hv_ce['delta']:.3f} · CE+500 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
             f"PE sell {_hv_pe['delta']:.3f} · PE-500 {_hv_pe2_bs_delta:.3f}"
@@ -2736,4 +2748,4 @@ with st.sidebar:
 # AUTO-REFRESH — live prices + scheduler tick
 # ─────────────────────────────────────────────
 time.sleep(refresh_secs)
-
+st.rerun()
