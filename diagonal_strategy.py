@@ -778,20 +778,29 @@ def nearest_chain_strike(chain_map, target, direction="below"):
         return int(min(candidates)) if candidates else int(min(strikes, key=lambda s: abs(s - target)))
 
 
-def find_deep_otm_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0,
+def find_deep_otm_strike(chain_map, sell_ltp, pct_lo=0.05, pct_hi=0.10,
                          min_strike=None, max_strike=None):
     """
-    Find the deep OTM strike whose LTP falls in [ltp_lo, ltp_hi],
-    constrained to strikes in [min_strike, max_strike] (pass None to skip).
+    Find the deep OTM strike whose LTP ≈ sell_ltp × [pct_lo, pct_hi].
 
-    For CE deep wings: pass min_strike = sell_ce_strike + 1500 (truly far OTM).
-    For PE deep wings: pass max_strike = sell_pe_strike - 1500 (truly far OTM).
+    The target range is expressed as a fraction of the SOLD option's premium so it
+    automatically scales with market levels and volatility — e.g. if sell_ltp=₹50,
+    the deep wing is selected at LTP ≈ ₹2.5–₹5 (5–10% of ₹50).
 
-    Enforcing the distance prevents near-OTM options (which have real delta)
-    from being picked just because they happen to be cheap near expiry.
+    Reference (Stockmock):
+      CE sold ₹48.5 → deep CE ₹3.7  (7.6%)
+      PE sold ₹88   → deep PE ₹6    (6.8%)
+
+    Constraints:
+      min_strike — deep CE must be ≥ this (enforces truly far OTM for calls)
+      max_strike — deep PE must be ≤ this (enforces truly far OTM for puts)
 
     Returns (strike, ltp).  Returns (0, 0.0) if chain is empty.
     """
+    ltp_lo = sell_ltp * pct_lo
+    ltp_hi = sell_ltp * pct_hi
+    ltp_mid = (ltp_lo + ltp_hi) / 2
+
     pool = {s: ltp for s, ltp in chain_map.items() if ltp > 0}
     if min_strike is not None:
         pool = {s: ltp for s, ltp in pool.items() if s >= min_strike}
@@ -800,15 +809,14 @@ def find_deep_otm_strike(chain_map, ltp_lo=4.0, ltp_hi=6.0,
     if not pool:
         return 0, 0.0
 
+    # Primary: strike whose LTP is inside the pct range
     candidates = [(s, ltp) for s, ltp in pool.items() if ltp_lo <= ltp <= ltp_hi]
     if candidates:
-        mid = (ltp_lo + ltp_hi) / 2
-        best = min(candidates, key=lambda x: abs(x[1] - mid))
+        best = min(candidates, key=lambda x: abs(x[1] - ltp_mid))
         return int(best[0]), best[1]
 
-    # Fallback: pick the strike in pool whose LTP is closest to midpoint of range
-    mid = (ltp_lo + ltp_hi) / 2
-    best = min(pool.items(), key=lambda x: abs(x[1] - mid))
+    # Fallback: closest LTP to midpoint regardless of range
+    best = min(pool.items(), key=lambda x: abs(x[1] - ltp_mid))
     return int(best[0]), best[1]
 
 # alias
@@ -2057,43 +2065,27 @@ _wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
 _wing_ce_lots   = sell_lots
 _wing_pe_lots   = sell_lots
 
-# Deep OTM CE and PE (LTP ₹4–₹6)
-# CE must be ≥ sell_ce_strike + 1500 so it is truly far OTM with negligible delta near spot
-# PE must be ≤ sell_pe_strike − 1500 for the same reason
+# ── Deep OTM wings (reference: Stockmock positions 7 & 8) ────────────────────
+# CE: sell_ce_strike + ~1000 pts, LTP ₹2–6, lots = sell_lots (fixed, low delta ~0.02)
+# PE: sell_pe_strike − ~1000 pts, LTP ₹4–8, lots = gamma-solved (came out 3× in reference)
 _deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(
-    near_ce, ltp_lo=4.0, ltp_hi=6.0, min_strike=sell_ce_strike + 1500)
-_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
-    near_pe, ltp_lo=4.0, ltp_hi=6.0, max_strike=sell_pe_strike - 1500)
+    near_ce, sell_ltp=sell_ce_ltp, pct_lo=0.05, pct_hi=0.10,
+    min_strike=sell_ce_strike + 900)
+_deep_ce_lots = sell_lots   # fixed — matches the short leg count, delta ≈ 0.02
 
-# Deep OTM wings — each side neutralizes ITS OWN gamma independently.
-# CE side: short near CE + long far CE + near +500 wing
-# PE side: short near PE + long far PE + near -500 wing
-# The split naturally reflects actual gamma imbalance between sides (may be 60/40, 70/30, etc.)
-_ce_side_legs = [
-    {"strike":sell_ce_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
-    {"strike":buy_ce_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
-    {"strike":_wing_ce_strike,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std},
-]
+_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
+    near_pe, sell_ltp=sell_pe_ltp, pct_lo=0.05, pct_hi=0.10,
+    max_strike=sell_pe_strike - 900)
 _pe_side_legs = [
     {"strike":sell_pe_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std},
     {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std},
     {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std},
 ]
-_raw_deep_ce_lots = calc_wing_lots(
-    _ce_side_legs, spot, _sigma_std,
-    wing_strike=_deep_ce_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=10
-)
-_raw_deep_pe_lots = calc_wing_lots(
+_deep_pe_lots = calc_wing_lots(
     _pe_side_legs, spot, _sigma_std,
     wing_strike=_deep_pe_strike, wing_T=_T_near_std,
     gamma_fraction=1.0, min_lots=1, max_lots=10
 )
-# Symmetry guard: cap both to the MINIMUM of the two computed values so one side
-# never overwhelms the other (avoids 10-vs-50 skew from asymmetric far-OTM gammas)
-_deep_wing_lots  = min(_raw_deep_ce_lots, _raw_deep_pe_lots)
-_deep_ce_lots    = _deep_wing_lots
-_deep_pe_lots    = _deep_wing_lots
 
 legs = [
     # Core diagonal — short near, long far
@@ -2104,9 +2096,9 @@ legs = [
     # Near ±500 wings
     {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing CE +500"},
     {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing PE -500"},
-    # Deep OTM wings (γ-taper)
-    {"opt_type":"CE","strike":_deep_ce_strike,"ltp":_deep_ce_ltp,"lots":_deep_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY deep CE ({_deep_ce_lots}L) ₹4-6"},
-    {"opt_type":"PE","strike":_deep_pe_strike,"ltp":_deep_pe_ltp,"lots":_deep_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY deep PE ({_deep_pe_lots}L) ₹4-6"},
+    # Deep OTM wings (γ-taper) — CE fixed lots, PE gamma-solved
+    {"opt_type":"CE","strike":_deep_ce_strike,"ltp":_deep_ce_ltp,"lots":_deep_ce_lots,"is_sell":False,"is_near":True,"T":_T_near_std,"label":f"BUY deep CE {_deep_ce_lots}L @+1000"},
+    {"opt_type":"PE","strike":_deep_pe_strike,"ltp":_deep_pe_ltp,"lots":_deep_pe_lots,"is_sell":False,"is_near":True,"T":_T_near_std,"label":f"BUY deep PE {_deep_pe_lots}L γ-solved"},
 ]
 
 # Deployed capital: gross premium of all legs × lot_size (margin proxy)
@@ -2127,8 +2119,8 @@ with col_s:
         f"<div class='lbl'>{sell_lots}L × CE+PE short</div></div>", unsafe_allow_html=True)
 with col_b:
     _wing_cost = (
-        _wing_ce_ltp * _wing_ce_lots + _wing_pe_ltp * _wing_pe_lots
-        + _deep_ce_ltp * _deep_ce_lots + _deep_pe_ltp * _deep_pe_lots
+        _wing_ce_ltp  * _wing_ce_lots  + _wing_pe_ltp  * _wing_pe_lots
+        + _deep_ce_ltp * _deep_ce_lots + _deep_pe_ltp  * _deep_pe_lots
     ) * LOT_SIZE
     st.markdown(
         f"<div class='card'><div class='lbl'>Premium Paid</div>"
@@ -2168,12 +2160,12 @@ st.markdown(
     f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_ce_lots}L CE</span> "
     f"<span class='strike-pill-buy'>{_deep_ce_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_deep_ce_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;deep OTM γ-taper</span></div>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;+1000 fixed lots · δ≈0.02</span></div>"
     f"<div style='border-left:2px solid #4d9fff;padding-left:.5rem;'>"
     f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_deep_pe_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_deep_pe_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;deep OTM γ-taper</span></div>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;−1000 γ-solved · {_deep_pe_lots}L</span></div>"
     f"</div>"
     f"<div style='margin-top:.3rem;font-size:9px;color:var(--muted);'>"
     f"These legs cap intraday gamma — the blue dashed line in the chart should stay flat within the 1σ daily band.</div>"
@@ -2277,33 +2269,26 @@ if _vix_ok and _eff_vix >= 15.0:
 
         # Deep OTM CE + PE wings: LTP ₹4–₹6, gamma split 50/50
         _T_hv = max(_hv_sell_dte, 1) / 365.0
+        # Deep OTM wings — same logic as reference (positions 7 & 8 in Stockmock)
+        # CE: +900 pts from sell, LTP ₹2–6, lots = 2 (sell lots, fixed)
+        # PE: −900 pts from sell, LTP ₹4–8, lots = gamma-solved
         _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
-            _hv_sell_ce, ltp_lo=4.0, ltp_hi=6.0, min_strike=_hv_ce["strike"] + 1500)
+            _hv_sell_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.05, pct_hi=0.10,
+            min_strike=_hv_ce["strike"] + 900)
+        _hv_deep_ce_lots = 2   # fixed = sell lots
+
         _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
-            _hv_sell_pe, ltp_lo=4.0, ltp_hi=6.0, max_strike=_hv_pe["strike"] - 1500)
-        # Each side neutralizes its own gamma — split emerges from actual gamma distribution
-        _hv_ce_side_legs = [
-            {"strike":_hv_ce["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
-            {"strike":_hv_ce2_strike,   "lots":1, "is_sell":False, "T":_T_hv},
-        ]
+            _hv_sell_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.05, pct_hi=0.10,
+            max_strike=_hv_pe["strike"] - 900)
         _hv_pe_side_legs = [
             {"strike":_hv_pe["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
             {"strike":_hv_pe2_strike,   "lots":1, "is_sell":False, "T":_T_hv},
         ]
-        _hv_raw_deep_ce = calc_wing_lots(
-            _hv_ce_side_legs, spot, _sigma,
-            wing_strike=_hv_deep_ce_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=10
-        )
-        _hv_raw_deep_pe = calc_wing_lots(
+        _hv_deep_pe_lots = calc_wing_lots(
             _hv_pe_side_legs, spot, _sigma,
             wing_strike=_hv_deep_pe_strike, wing_T=_T_hv,
             gamma_fraction=1.0, min_lots=1, max_lots=10
         )
-        # Symmetry guard: equal lots on both sides prevents skew from asymmetric far-OTM gammas
-        _hv_deep_wing_lots = min(_hv_raw_deep_ce, _hv_raw_deep_pe)
-        _hv_deep_ce_lots   = _hv_deep_wing_lots
-        _hv_deep_pe_lots   = _hv_deep_wing_lots
 
         # Far expiry selection: DTE >= 2 × sell_DTE
         _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
