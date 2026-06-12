@@ -20,6 +20,11 @@ import io
 import urllib.parse
 from datetime import datetime, timedelta
 import pytz
+try:
+    from scipy.optimize import minimize as _scipy_minimize
+    _SCIPY_OK = True
+except ImportError:
+    _SCIPY_OK = False
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -151,7 +156,7 @@ SYMBOL       = "NIFTY"
 STEP         = 50           # NIFTY strike step
 LOT_SIZE     = 75           # NIFTY lot size (check current SEBI notification)
 SHORT_STEPS  = 6            # ATM ± 6 steps = ±300 pts
-BUY_LOTS     = 2            # Fixed long lots per spec
+BUY_LOTS     = 1            # Far monthly long leg — always 1L per side
 
 INSTRUMENT_KEY  = "NSE_INDEX|Nifty 50"
 UPSTOX_AUTH_URL = "https://api.upstox.com/v2/login/authorization/dialog"
@@ -777,6 +782,69 @@ def calc_wing_lots(legs_context, spot, sigma, wing_strike, wing_T,
 calc_wing_pe_lots = calc_wing_lots
 
 
+def optimize_deep_otm_lots(spot, sigma,
+                            ce_side_legs, pe_side_legs,
+                            deep_ce_strike, deep_ce_ltp, deep_ce_api_gamma,
+                            deep_pe_strike, deep_pe_ltp, deep_pe_api_gamma,
+                            lot_size, wing_T,
+                            min_lots=1, max_lots=12,
+                            max_premium_spend=None, r=0.065):
+    """
+    Joint optimizer: find (qty_ce, qty_pe) for deep OTM wings that symmetrize
+    net gamma on both sides simultaneously — flattens the intraday blue P&L line.
+
+    Objective: minimize (total_gamma_CE_side - total_gamma_PE_side)²
+    Constraint (optional): (qty_ce × ce_ltp + qty_pe × pe_ltp) × lot_size ≤ max_premium_spend
+
+    Uses scipy L-BFGS-B when available; falls back to independent calc_wing_lots.
+    """
+    # Resolve deep OTM gammas (API first, then BS)
+    g_deep_ce = (deep_ce_api_gamma if deep_ce_api_gamma > 0
+                 else bs_gamma(spot, deep_ce_strike, wing_T, sigma, r))
+    g_deep_pe = (deep_pe_api_gamma if deep_pe_api_gamma > 0
+                 else bs_gamma(spot, deep_pe_strike, wing_T, sigma, r))
+
+    # Net gamma of each side from existing legs (negative = net short gamma)
+    net_g_ce = net_gamma_lots(ce_side_legs, spot, sigma, r)
+    net_g_pe = net_gamma_lots(pe_side_legs, spot, sigma, r)
+
+    if not _SCIPY_OK or g_deep_ce <= 0 or g_deep_pe <= 0:
+        # Fallback: independent per-side solving
+        q_ce = calc_wing_lots(ce_side_legs, spot, sigma, deep_ce_strike, wing_T,
+                              gamma_fraction=1.0, min_lots=min_lots, max_lots=max_lots,
+                              wing_api_gamma=deep_ce_api_gamma)
+        q_pe = calc_wing_lots(pe_side_legs, spot, sigma, deep_pe_strike, wing_T,
+                              gamma_fraction=1.0, min_lots=min_lots, max_lots=max_lots,
+                              wing_api_gamma=deep_pe_api_gamma)
+        return q_ce, q_pe
+
+    def objective(x):
+        qty_ce, qty_pe = x[0], x[1]
+        # Total gamma after adding deep OTM wing buys
+        total_g_ce = net_g_ce + qty_ce * g_deep_ce
+        total_g_pe = net_g_pe + qty_pe * g_deep_pe
+        # Symmetry: squared difference → drives both sides to equal gamma exposure
+        gamma_diff = (total_g_ce - total_g_pe) ** 2
+        # Premium budget penalty
+        cost_penalty = 0.0
+        if max_premium_spend is not None and max_premium_spend > 0:
+            cost = (qty_ce * deep_ce_ltp + qty_pe * deep_pe_ltp) * lot_size
+            if cost > max_premium_spend:
+                cost_penalty = ((cost - max_premium_spend) / max_premium_spend) ** 2 * 1e6
+        return gamma_diff + cost_penalty
+
+    result = _scipy_minimize(
+        objective,
+        x0=[max(min_lots, int(-net_g_ce / g_deep_ce)),
+            max(min_lots, int(-net_g_pe / g_deep_pe))],
+        bounds=[(min_lots, max_lots), (min_lots, max_lots)],
+        method='L-BFGS-B'
+    )
+    qty_ce = max(min_lots, min(max_lots, int(round(result.x[0]))))
+    qty_pe = max(min_lots, min(max_lots, int(round(result.x[1]))))
+    return qty_ce, qty_pe
+
+
 def nearest_chain_strike(chain_map, target, direction="below"):
     """
     Return the nearest strike in chain_map to target.
@@ -1218,9 +1286,6 @@ with col_p1:
 with col_p2:
     ltp_ratio = st.slider("Long LTP target (% of Sell LTP)", 30, 80, 50, 5,
                           help="Far strike selected where LTP ≈ this % of the sold LTP")
-
-# Far (monthly) buy lots always match sell lots — 1:1 diagonal ratio
-BUY_LOTS = sell_lots
 
 # ─────────────────────────────────────────────
 # EXPIRY DATES
@@ -2089,40 +2154,35 @@ _wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
 _wing_ce_lots   = sell_lots
 _wing_pe_lots   = sell_lots
 
-# ── Deep OTM wings — BOTH sides gamma-solved independently ───────────────────
-# Reference (Stockmock): SELL 2L CE/PE → deep CE 4L (+900) + deep PE 7L (−2100)
-# Both lots are gamma-solved from their respective side legs.
-# CE side: SELL near CE + BUY far CE + BUY wing CE +500
-# PE side: SELL near PE + BUY far PE + BUY wing PE -500
+# ── Deep OTM wings — joint gamma optimizer (symmetrizes blue line) ───────────
+# Jointly solves CE and PE deep OTM lots so net gamma is equal on both sides.
+# Uses scipy L-BFGS-B; falls back to independent solving if scipy unavailable.
 
 _deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(
     near_ce, sell_ltp=sell_ce_ltp, pct_lo=0.05, pct_hi=0.10,
     min_strike=sell_ce_strike + 900)
+_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
+    near_pe, sell_ltp=sell_pe_ltp, pct_lo=0.05, pct_hi=0.10,
+    max_strike=sell_pe_strike - 900)
+
 _ce_side_legs = [
     {"strike":sell_ce_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(sell_ce_strike), 0)},
     {"strike":buy_ce_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_ce_gamma.get(float(buy_ce_strike), 0)},
     {"strike":_wing_ce_strike,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(_wing_ce_strike), 0)},
 ]
-_deep_ce_lots = calc_wing_lots(
-    _ce_side_legs, spot, _sigma_std,
-    wing_strike=_deep_ce_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=sell_lots * 6,
-    wing_api_gamma=near_ce_gamma.get(float(_deep_ce_strike), 0)
-)
-
-_deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
-    near_pe, sell_ltp=sell_pe_ltp, pct_lo=0.05, pct_hi=0.10,
-    max_strike=sell_pe_strike - 900)
 _pe_side_legs = [
     {"strike":sell_pe_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std, "api_gamma": near_pe_gamma.get(float(sell_pe_strike), 0)},
     {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_pe_gamma.get(float(buy_pe_strike), 0)},
     {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_pe_gamma.get(float(_wing_pe_strike), 0)},
 ]
-_deep_pe_lots = calc_wing_lots(
-    _pe_side_legs, spot, _sigma_std,
-    wing_strike=_deep_pe_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=sell_lots * 6,
-    wing_api_gamma=near_pe_gamma.get(float(_deep_pe_strike), 0)
+
+_deep_ce_lots, _deep_pe_lots = optimize_deep_otm_lots(
+    spot, _sigma_std,
+    _ce_side_legs, _pe_side_legs,
+    _deep_ce_strike, _deep_ce_ltp, near_ce_gamma.get(float(_deep_ce_strike), 0),
+    _deep_pe_strike, _deep_pe_ltp, near_pe_gamma.get(float(_deep_pe_strike), 0),
+    lot_size=LOT_SIZE, wing_T=_T_near_std,
+    min_lots=1, max_lots=sell_lots * 6,
 )
 
 legs = [
@@ -2307,36 +2367,33 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
         _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
 
-        # Deep OTM wings — BOTH sides gamma-solved independently (same logic as standard section)
+        # Deep OTM wings — joint gamma optimizer (same as standard section)
         _T_hv = max(_hv_sell_dte, 1) / 365.0
         _hv_sell_lots = 2       # HV always sells 2 lots
 
         _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
             _hv_sell_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.05, pct_hi=0.10,
             min_strike=_hv_ce["strike"] + 900)
+        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
+            _hv_sell_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.05, pct_hi=0.10,
+            max_strike=_hv_pe["strike"] - 900)
+
         _hv_ce_side_legs = [
             {"strike":_hv_ce["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce["strike"]), 0)},
             {"strike":_hv_ce2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce2_strike), 0)},
         ]
-        _hv_deep_ce_lots = calc_wing_lots(
-            _hv_ce_side_legs, spot, _sigma,
-            wing_strike=_hv_deep_ce_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=_hv_sell_lots * 6,
-            wing_api_gamma=_hv_sell_ce_gamma.get(float(_hv_deep_ce_strike), 0)
-        )
-
-        _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
-            _hv_sell_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.05, pct_hi=0.10,
-            max_strike=_hv_pe["strike"] - 900)
         _hv_pe_side_legs = [
             {"strike":_hv_pe["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe["strike"]), 0)},
             {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe2_strike), 0)},
         ]
-        _hv_deep_pe_lots = calc_wing_lots(
-            _hv_pe_side_legs, spot, _sigma,
-            wing_strike=_hv_deep_pe_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=_hv_sell_lots * 6,
-            wing_api_gamma=_hv_sell_pe_gamma.get(float(_hv_deep_pe_strike), 0)
+
+        _hv_deep_ce_lots, _hv_deep_pe_lots = optimize_deep_otm_lots(
+            spot, _sigma,
+            _hv_ce_side_legs, _hv_pe_side_legs,
+            _hv_deep_ce_strike, _hv_deep_ce_ltp, _hv_sell_ce_gamma.get(float(_hv_deep_ce_strike), 0),
+            _hv_deep_pe_strike, _hv_deep_pe_ltp, _hv_sell_pe_gamma.get(float(_hv_deep_pe_strike), 0),
+            lot_size=LOT_SIZE, wing_T=_T_hv,
+            min_lots=1, max_lots=_hv_sell_lots * 6,
         )
 
         # Far expiry selection: DTE >= 2 × sell_DTE
