@@ -2084,7 +2084,7 @@ _pe_side_legs = [
 _deep_pe_lots = calc_wing_lots(
     _pe_side_legs, spot, _sigma_std,
     wing_strike=_deep_pe_strike, wing_T=_T_near_std,
-    gamma_fraction=1.0, min_lots=1, max_lots=10
+    gamma_fraction=1.0, min_lots=1, max_lots=sell_lots * 6
 )
 
 legs = [
@@ -2275,19 +2275,20 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
             _hv_sell_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.05, pct_hi=0.10,
             min_strike=_hv_ce["strike"] + 900)
-        _hv_deep_ce_lots = 2   # fixed = sell lots
+        _hv_sell_lots = 2       # HV always sells 2 lots
+        _hv_deep_ce_lots = _hv_sell_lots   # fixed = sell lots
 
         _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
             _hv_sell_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.05, pct_hi=0.10,
             max_strike=_hv_pe["strike"] - 900)
         _hv_pe_side_legs = [
-            {"strike":_hv_pe["strike"], "lots":2, "is_sell":True,  "T":_T_hv},
-            {"strike":_hv_pe2_strike,   "lots":1, "is_sell":False, "T":_T_hv},
+            {"strike":_hv_pe["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv},
+            {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv},
         ]
         _hv_deep_pe_lots = calc_wing_lots(
             _hv_pe_side_legs, spot, _sigma,
             wing_strike=_hv_deep_pe_strike, wing_T=_T_hv,
-            gamma_fraction=1.0, min_lots=1, max_lots=10
+            gamma_fraction=1.0, min_lots=1, max_lots=_hv_sell_lots * 6
         )
 
         # Far expiry selection: DTE >= 2 × sell_DTE
