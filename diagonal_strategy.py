@@ -842,6 +842,40 @@ def optimize_deep_otm_lots(spot, sigma,
     return qty_ce, qty_pe
 
 
+def solve_wing_lots_total_gamma(spot, sigma,
+                                all_legs,
+                                deep_ce_strike, deep_ce_api_gamma,
+                                deep_pe_strike, deep_pe_api_gamma,
+                                wing_T,
+                                min_lots=1, max_lots=24, r=0.065):
+    """
+    Analytical solver for symmetric deep OTM wing lots.
+
+    Computes total net gamma of the ENTIRE position (CE + PE combined),
+    then finds a single lot count q (same for CE and PE wings) such that:
+
+        total_net_gamma + q × (g_deep_ce + g_deep_pe) = 0
+        => q = ceil(-total_net_gamma / (g_deep_ce + g_deep_pe))
+
+    Gamma is option-type-agnostic (BS gamma is identical for CE and PE at
+    same strike/T/sigma), so mixing CE/PE legs in all_legs is correct.
+    Symmetric lots (same q on both sides) preserves delta neutrality.
+    """
+    g_deep_ce = (deep_ce_api_gamma if deep_ce_api_gamma > 0
+                 else bs_gamma(spot, deep_ce_strike, wing_T, sigma, r))
+    g_deep_pe = (deep_pe_api_gamma if deep_pe_api_gamma > 0
+                 else bs_gamma(spot, deep_pe_strike, wing_T, sigma, r))
+
+    total_net_g = net_gamma_lots(all_legs, spot, sigma, r)  # negative = net short
+    g_sum = g_deep_ce + g_deep_pe
+    if g_sum <= 0:
+        return min_lots, min_lots
+
+    q = int(math.ceil(-total_net_g / g_sum))
+    q = max(min_lots, min(max_lots, q))
+    return q, q
+
+
 def nearest_chain_strike(chain_map, target, direction="below"):
     """
     Return the nearest strike in chain_map to target.
@@ -2158,25 +2192,23 @@ _deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
     far_pe, sell_ltp=sell_pe_ltp, pct_lo=0.05, pct_hi=0.10,
     max_strike=sell_pe_strike - 900)  # Far OTM PE
 
-# Existing legs for gamma context (note: includes existing far longs)
-_ce_side_legs = [
+# All pre-wing legs — CE + PE combined for total net gamma calculation
+_all_pre_legs = [
     {"strike":sell_ce_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(sell_ce_strike), 0)},
-    {"strike":buy_ce_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_ce_gamma.get(float(buy_ce_strike), 0)},
-    {"strike":_wing_ce_strike,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(_wing_ce_strike), 0)},
-]
-_pe_side_legs = [
     {"strike":sell_pe_strike, "lots":sell_lots,    "is_sell":True,  "T":_T_near_std, "api_gamma": near_pe_gamma.get(float(sell_pe_strike), 0)},
+    {"strike":buy_ce_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_ce_gamma.get(float(buy_ce_strike), 0)},
     {"strike":buy_pe_strike,  "lots":BUY_LOTS,     "is_sell":False, "T":_T_far_std,  "api_gamma": far_pe_gamma.get(float(buy_pe_strike), 0)},
+    {"strike":_wing_ce_strike,"lots":_wing_ce_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_ce_gamma.get(float(_wing_ce_strike), 0)},
     {"strike":_wing_pe_strike,"lots":_wing_pe_lots,"is_sell":False, "T":_T_near_std, "api_gamma": near_pe_gamma.get(float(_wing_pe_strike), 0)},
 ]
 
-# Solve for optimal FAR leg quantities (additional far leg buys)
-_deep_ce_lots, _deep_pe_lots = optimize_deep_otm_lots(
+# Solve symmetric wing lots: zero out total net gamma of entire position
+_deep_ce_lots, _deep_pe_lots = solve_wing_lots_total_gamma(
     spot, _sigma_std,
-    _ce_side_legs, _pe_side_legs,
-    _deep_ce_strike, _deep_ce_ltp, far_ce_gamma.get(float(_deep_ce_strike), 0),
-    _deep_pe_strike, _deep_pe_ltp, far_pe_gamma.get(float(_deep_pe_strike), 0),
-    lot_size=LOT_SIZE, wing_T=_T_far_std,  # NOTE: Using Far T
+    _all_pre_legs,
+    _deep_ce_strike, far_ce_gamma.get(float(_deep_ce_strike), 0),
+    _deep_pe_strike, far_pe_gamma.get(float(_deep_pe_strike), 0),
+    wing_T=_T_far_std,
     min_lots=1, max_lots=sell_lots * 6,
 )
 
@@ -2400,23 +2432,25 @@ if _vix_ok and _eff_vix >= 15.0:
             _hv_far_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.04, pct_hi=0.12,
             max_strike=_hv_pe["strike"] - 900)
 
-        # Gamma context: near sell + near wing buy (far buy leg added separately)
-        _hv_ce_side_legs = [
-            {"strike":_hv_ce["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce["strike"]), 0)},
-            {"strike":_hv_ce2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce2_strike), 0)},
-        ]
-        _hv_pe_side_legs = [
-            {"strike":_hv_pe["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe["strike"]), 0)},
-            {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe2_strike), 0)},
+        # All pre-wing legs (CE + PE combined) — far buy included for correct total gamma
+        _hv_ce_buy_strike = float(_hv_ce["strike"])
+        _hv_pe_buy_strike = float(_hv_pe["strike"])
+        _hv_all_pre_legs = [
+            {"strike":_hv_ce["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv,    "api_gamma": _hv_sell_ce_gamma.get(_hv_ce_buy_strike, 0)},
+            {"strike":_hv_pe["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv,    "api_gamma": _hv_sell_pe_gamma.get(_hv_pe_buy_strike, 0)},
+            {"strike":_hv_ce2_strike,   "lots":1,             "is_sell":False, "T":_T_hv,    "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce2_strike), 0)},
+            {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv,    "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe2_strike), 0)},
+            {"strike":_hv_ce["strike"], "lots":BUY_LOTS,      "is_sell":False, "T":_T_hv_far,"api_gamma": _hv_far_ce_gamma.get(_hv_ce_buy_strike, 0)},
+            {"strike":_hv_pe["strike"], "lots":BUY_LOTS,      "is_sell":False, "T":_T_hv_far,"api_gamma": _hv_far_pe_gamma.get(_hv_pe_buy_strike, 0)},
         ]
 
-        # Solve lots using FAR chain gamma and far DTE — mirrors standard strategy
-        _hv_deep_ce_lots, _hv_deep_pe_lots = optimize_deep_otm_lots(
+        # Solve symmetric lots: zero out total net gamma of entire HV position
+        _hv_deep_ce_lots, _hv_deep_pe_lots = solve_wing_lots_total_gamma(
             spot, _sigma,
-            _hv_ce_side_legs, _hv_pe_side_legs,
-            _hv_deep_ce_strike, _hv_deep_ce_ltp, _hv_far_ce_gamma.get(float(_hv_deep_ce_strike), 0),
-            _hv_deep_pe_strike, _hv_deep_pe_ltp, _hv_far_pe_gamma.get(float(_hv_deep_pe_strike), 0),
-            lot_size=LOT_SIZE, wing_T=_T_hv_far,   # far DTE for accurate gamma
+            _hv_all_pre_legs,
+            _hv_deep_ce_strike, _hv_far_ce_gamma.get(float(_hv_deep_ce_strike), 0),
+            _hv_deep_pe_strike, _hv_far_pe_gamma.get(float(_hv_deep_pe_strike), 0),
+            wing_T=_T_hv_far,
             min_lots=1, max_lots=_hv_sell_lots * 6,
         )
 
