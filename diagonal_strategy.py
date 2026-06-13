@@ -2178,8 +2178,8 @@ _wing_ce_strike = int(round((sell_ce_strike + 500) / STEP) * STEP)
 _wing_pe_strike = int(round((sell_pe_strike - 500) / STEP) * STEP)
 _wing_ce_ltp    = near_ce.get(float(_wing_ce_strike), 0)
 _wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
-_wing_ce_lots   = sell_lots
-_wing_pe_lots   = sell_lots
+_wing_ce_lots   = BUY_LOTS   # 1L per side — user spec: 2L sell, 1L wing buy, 1L far buy
+_wing_pe_lots   = BUY_LOTS
 
 # ── Deep OTM wings — USING FAR LEGS (Long expiry) for gamma taper ──────────
 # Jointly solves CE and PE deep OTM lots so net gamma is equal on both sides.
