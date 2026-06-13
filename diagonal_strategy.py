@@ -2363,17 +2363,44 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
         _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
 
-        # Deep OTM wings — joint gamma optimizer (same as standard section)
         _T_hv = max(_hv_sell_dte, 1) / 365.0
         _hv_sell_lots = 2       # HV always sells 2 lots
 
+        # ── Far expiry — resolve FIRST so deep OTM wings use far chain ──────
+        _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
+        _hv_far_dte = (
+            (datetime.strptime(_hv_far_exp, "%Y-%m-%d").date() - now.date()).days
+            if _hv_far_exp else 0
+        )
+        _T_hv_far = max(_hv_far_dte, 1) / 365.0
+
+        # Fetch far chain — reuse existing if same expiry, else fetch fresh
+        if _hv_far_exp and _hv_far_exp == far_exp:
+            _hv_far_ce, _hv_far_pe = far_ce, far_pe
+            _hv_far_ce_gamma, _hv_far_pe_gamma = far_ce_gamma, far_pe_gamma
+        elif _hv_far_exp:
+            with st.spinner(f"Loading far chain {_hv_far_exp}…"):
+                _hv_far_raw, _hv_far_err = fetch_chain(token, _hv_far_exp)
+            if _hv_far_raw:
+                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _, _hv_far_ce_gamma, _hv_far_pe_gamma = parse_chain(_hv_far_raw)
+            else:
+                _hv_far_ce, _hv_far_pe = {}, {}
+                _hv_far_ce_gamma, _hv_far_pe_gamma = {}, {}
+        else:
+            _hv_far_ce, _hv_far_pe = {}, {}
+            _hv_far_ce_gamma, _hv_far_pe_gamma = {}, {}
+
+        # ── Deep OTM wings — FAR chain, gamma solved against far DTE ────────
+        # CE wing must be strictly above sell CE (extreme far OTM calls)
+        # PE wing must be strictly below sell PE (extreme far OTM puts)
         _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
-            _hv_sell_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.05, pct_hi=0.10,
+            _hv_far_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.04, pct_hi=0.12,
             min_strike=_hv_ce["strike"] + 900)
         _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
-            _hv_sell_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.05, pct_hi=0.10,
+            _hv_far_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.04, pct_hi=0.12,
             max_strike=_hv_pe["strike"] - 900)
 
+        # Gamma context: near sell + near wing buy (far buy leg added separately)
         _hv_ce_side_legs = [
             {"strike":_hv_ce["strike"], "lots":_hv_sell_lots, "is_sell":True,  "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce["strike"]), 0)},
             {"strike":_hv_ce2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_ce_gamma.get(float(_hv_ce2_strike), 0)},
@@ -2383,34 +2410,15 @@ if _vix_ok and _eff_vix >= 15.0:
             {"strike":_hv_pe2_strike,   "lots":1,             "is_sell":False, "T":_T_hv, "api_gamma": _hv_sell_pe_gamma.get(float(_hv_pe2_strike), 0)},
         ]
 
+        # Solve lots using FAR chain gamma and far DTE — mirrors standard strategy
         _hv_deep_ce_lots, _hv_deep_pe_lots = optimize_deep_otm_lots(
             spot, _sigma,
             _hv_ce_side_legs, _hv_pe_side_legs,
-            _hv_deep_ce_strike, _hv_deep_ce_ltp, _hv_sell_ce_gamma.get(float(_hv_deep_ce_strike), 0),
-            _hv_deep_pe_strike, _hv_deep_pe_ltp, _hv_sell_pe_gamma.get(float(_hv_deep_pe_strike), 0),
-            lot_size=LOT_SIZE, wing_T=_T_hv,
+            _hv_deep_ce_strike, _hv_deep_ce_ltp, _hv_far_ce_gamma.get(float(_hv_deep_ce_strike), 0),
+            _hv_deep_pe_strike, _hv_deep_pe_ltp, _hv_far_pe_gamma.get(float(_hv_deep_pe_strike), 0),
+            lot_size=LOT_SIZE, wing_T=_T_hv_far,   # far DTE for accurate gamma
             min_lots=1, max_lots=_hv_sell_lots * 6,
         )
-
-        # Far expiry selection: DTE >= 2 × sell_DTE
-        _hv_far_exp = select_hv_far_expiry(all_exp, _hv_sell_exp, _hv_sell_dte)
-        _hv_far_dte = (
-            (datetime.strptime(_hv_far_exp, "%Y-%m-%d").date() - now.date()).days
-            if _hv_far_exp else 0
-        )
-
-        # Fetch far chain — reuse existing if same expiry, else fetch fresh
-        if _hv_far_exp and _hv_far_exp == far_exp:
-            _hv_far_ce, _hv_far_pe = far_ce, far_pe
-        elif _hv_far_exp:
-            with st.spinner(f"Loading far chain {_hv_far_exp}…"):
-                _hv_far_raw, _hv_far_err = fetch_chain(token, _hv_far_exp)
-            if _hv_far_raw:
-                _, _, _hv_far_ce, _hv_far_pe, _, _, _, _, _, _ = parse_chain(_hv_far_raw)
-            else:
-                _hv_far_ce, _hv_far_pe = {}, {}
-        else:
-            _hv_far_ce, _hv_far_pe = {}, {}
 
         # Buy LTPs (same strike, far expiry)
         _hv_ce_buy_ltp = _hv_far_ce.get(float(_hv_ce["strike"]), 0)
