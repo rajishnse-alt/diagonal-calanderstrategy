@@ -1402,14 +1402,14 @@ if _vix_ok and spot:
         f"<span style='font-family:var(--mono);font-size:12px;color:white;'>±{_daily_pts:.0f} pts</span>"
         f"<span style='color:var(--border);'>│</span>"
         f"<span style='color:var(--muted);font-size:10px;'>1σ&nbsp;({_exp_1s:.0f}pts):</span>"
-        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>{_range_hi_1s}</span>"
-        f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
         f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>{_range_lo_1s}</span>"
+        f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>{_range_hi_1s}</span>"
         f"<span style='color:var(--border);'>│</span>"
         f"<span style='color:var(--muted);font-size:10px;'>2σ&nbsp;({_exp_2s:.0f}pts):</span>"
-        f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>{_range_hi_2s}</span>"
-        f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
         f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>{_range_lo_2s}</span>"
+        f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
+        f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>{_range_hi_2s}</span>"
         f"</div>",
         unsafe_allow_html=True,
     )
