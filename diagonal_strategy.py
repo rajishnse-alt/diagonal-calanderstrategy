@@ -1385,6 +1385,35 @@ else:
     _daily_vix = _exp_1s = _exp_2s = 0.0
     _steps_1s  = _steps_2s = SHORT_STEPS
 
+# ── Probable range banner (VIX × √DTE) ───────────────────────────────────────
+if _vix_ok and spot:
+    _range_hi_1s = int(round((atm + _exp_1s) / STEP) * STEP)
+    _range_lo_1s = int(round((atm - _exp_1s) / STEP) * STEP)
+    _range_hi_2s = int(round((atm + _exp_2s) / STEP) * STEP)
+    _range_lo_2s = int(round((atm - _exp_2s) / STEP) * STEP)
+    _daily_pts   = spot * (_eff_vix / 100) / math.sqrt(252)
+    st.markdown(
+        f"<div style='background:rgba(255,201,64,0.07);border:1px solid rgba(255,201,64,0.25);"
+        f"border-radius:6px;padding:.35rem .8rem;margin:.25rem 0 .4rem;display:flex;"
+        f"flex-wrap:wrap;align-items:center;gap:.6rem;'>"
+        f"<span style='color:var(--gold);font-weight:700;font-size:11px;letter-spacing:.5px;'>"
+        f"📐 RANGE · {near_exp} &nbsp;<span style='color:var(--muted);font-weight:400;'>({_days_to_exp}d)</span></span>"
+        f"<span style='color:var(--muted);font-size:10px;'>Daily&nbsp;1σ:</span>"
+        f"<span style='font-family:var(--mono);font-size:12px;color:white;'>±{_daily_pts:.0f} pts</span>"
+        f"<span style='color:var(--border);'>│</span>"
+        f"<span style='color:var(--muted);font-size:10px;'>1σ&nbsp;({_exp_1s:.0f}pts):</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>{_range_hi_1s}</span>"
+        f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>{_range_lo_1s}</span>"
+        f"<span style='color:var(--border);'>│</span>"
+        f"<span style='color:var(--muted);font-size:10px;'>2σ&nbsp;({_exp_2s:.0f}pts):</span>"
+        f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>{_range_hi_2s}</span>"
+        f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
+        f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>{_range_lo_2s}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
 # Seed session_state with VIX default only when VIX value changes
 # (preserves user override across auto-refreshes, resets when VIX shifts)
 _vix_default = _steps_1s  # VIX-implied steps (or fallback SHORT_STEPS)
@@ -2462,11 +2491,11 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_ce_collect = (_hv_ce["ltp"] * _hv_sell_lots
                           - _hv_ce2_ltp * 1
                           - _hv_deep_ce_ltp * _hv_deep_ce_lots
-                          - _hv_ce_buy_ltp  * _hv_sell_lots) * LOT_SIZE
+                          - _hv_ce_buy_ltp  * BUY_LOTS) * LOT_SIZE
         _hv_pe_collect = (_hv_pe["ltp"] * _hv_sell_lots
                           - _hv_pe2_ltp * 1
                           - _hv_deep_pe_ltp * _hv_deep_pe_lots
-                          - _hv_pe_buy_ltp  * _hv_sell_lots) * LOT_SIZE
+                          - _hv_pe_buy_ltp  * BUY_LOTS) * LOT_SIZE
         _hv_net        = _hv_ce_collect + _hv_pe_collect
 
         # ── Display ────────────────────────────────────────────────────────
@@ -2496,7 +2525,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
-                f"<span class='lbl'>BUY {_hv_sell_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
+                f"<span class='lbl'>BUY {BUY_LOTS}L &nbsp;<span class='strike-pill-buy'>{_hv_ce['strike']}</span> &nbsp;"
                 f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
                 f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce_buy_ltp:.2f}</span>"
@@ -2534,7 +2563,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Far buy
                 f"<div style='display:flex;justify-content:space-between;margin:.3rem 0;padding-top:.3rem;border-top:1px solid var(--border);'>"
-                f"<span class='lbl'>BUY {_hv_sell_lots}L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
+                f"<span class='lbl'>BUY {BUY_LOTS}L &nbsp;<span class='strike-pill-buy'>{_hv_pe['strike']}</span> &nbsp;"
                 f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {_hv_far_exp or 'N/A'}</span>"
                 f"&nbsp;<span style='color:var(--muted);font-size:9px;'>DTE {_hv_far_dte}d</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe_buy_ltp:.2f}</span>"
