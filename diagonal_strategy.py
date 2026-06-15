@@ -1392,6 +1392,12 @@ if _vix_ok and spot:
     _range_hi_2s = int(round((atm + _exp_2s) / STEP) * STEP)
     _range_lo_2s = int(round((atm - _exp_2s) / STEP) * STEP)
     _daily_pts   = spot * (_eff_vix / 100) / math.sqrt(252)
+    # LTPs at range strikes from near chain
+    _ltp_hi_1s = near_ce.get(float(_range_hi_1s), 0)
+    _ltp_lo_1s = near_pe.get(float(_range_lo_1s), 0)
+    _ltp_hi_2s = near_ce.get(float(_range_hi_2s), 0)
+    _ltp_lo_2s = near_pe.get(float(_range_lo_2s), 0)
+    def _ltp_str(v): return f"₹{v:.1f}" if v else "—"
     st.markdown(
         f"<div style='background:rgba(255,201,64,0.07);border:1px solid rgba(255,201,64,0.25);"
         f"border-radius:6px;padding:.35rem .8rem;margin:.25rem 0 .4rem;display:flex;"
@@ -1403,13 +1409,17 @@ if _vix_ok and spot:
         f"<span style='color:var(--border);'>│</span>"
         f"<span style='color:var(--muted);font-size:10px;'>1σ&nbsp;({_exp_1s:.0f}pts):</span>"
         f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--pe);'>{_range_lo_1s}</span>"
+        f"<span style='color:var(--muted);font-size:10px;'>({_ltp_str(_ltp_lo_1s)})</span>"
         f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
         f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ce);'>{_range_hi_1s}</span>"
+        f"<span style='color:var(--muted);font-size:10px;'>({_ltp_str(_ltp_hi_1s)})</span>"
         f"<span style='color:var(--border);'>│</span>"
         f"<span style='color:var(--muted);font-size:10px;'>2σ&nbsp;({_exp_2s:.0f}pts):</span>"
         f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>{_range_lo_2s}</span>"
+        f"<span style='color:var(--muted);font-size:10px;'>({_ltp_str(_ltp_lo_2s)})</span>"
         f"<span style='color:var(--muted);font-size:11px;'>↔</span>"
         f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>{_range_hi_2s}</span>"
+        f"<span style='color:var(--muted);font-size:10px;'>({_ltp_str(_ltp_hi_2s)})</span>"
         f"</div>",
         unsafe_allow_html=True,
     )
