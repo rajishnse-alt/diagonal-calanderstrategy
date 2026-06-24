@@ -14,6 +14,11 @@ import streamlit as st
 import requests
 import math
 import time
+try:
+    from streamlit_autorefresh import st_autorefresh as _st_autorefresh
+    _AUTOREFRESH_OK = True
+except ImportError:
+    _AUTOREFRESH_OK = False
 import base64
 import csv
 import io
@@ -204,7 +209,7 @@ GITHUB_REPO     = "diagonal-calanderstrategy"
 GITHUB_BRANCH   = "main"
 PCR_CSV_PATH    = "pcr_data/pcr_log.csv"
 PCR_RETENTION   = 35   # days to keep
-PCR_LOG_INTERVAL= 60   # seconds between writes (1 min)
+PCR_LOG_INTERVAL= 180  # seconds — overridden by user slider at runtime
 PCR_COLUMNS     = [
     "timestamp","date","expiry_type","expiry","spot","atm",
     "pcr_range","pcr_atm","ce_oi_L","pe_oi_L","atm_ce_oi_L","atm_pe_oi_L",
@@ -1324,12 +1329,23 @@ st.markdown(
 # PARAMETERS
 # ─────────────────────────────────────────────
 st.markdown("<div class='sec-hdr'>⚙️ Parameters</div>", unsafe_allow_html=True)
-col_p1, col_p2 = st.columns([2, 2])
+col_p1, col_p2, col_p3 = st.columns([2, 2, 1])
 with col_p1:
     sell_lots = st.number_input("Short Leg Lots (SELL)", min_value=1, max_value=20, value=2)
 with col_p2:
     ltp_ratio = st.slider("Long LTP target (% of Sell LTP)", 30, 80, 50, 5,
                           help="Far strike selected where LTP ≈ this % of the sold LTP")
+with col_p3:
+    _refresh_mins = st.selectbox("🔄 Refresh", [1, 2, 3, 5, 10], index=2,
+                                 help="Auto-refresh interval in minutes")
+_refresh_secs = _refresh_mins * 60
+PCR_LOG_INTERVAL = _refresh_secs   # align PCR logging to refresh cadence
+
+# ── Auto-refresh ──────────────────────────────────────────────────────────────
+if _AUTOREFRESH_OK:
+    _st_autorefresh(interval=_refresh_secs * 1000, key="auto_refresh")
+else:
+    st.caption(f"⚠️ Install `streamlit-autorefresh` for auto-refresh every {_refresh_mins} min.")
 
 # ─────────────────────────────────────────────
 # EXPIRY DATES
@@ -1605,7 +1621,7 @@ else:
             "src": _spp_src,
         }
 
-# ── PCR logging to GitHub CSV (throttled: market hours, once per 1 min) ─────
+# ── PCR logging to GitHub CSV (throttled: market hours, once per refresh interval) ─────
 _gh_tok = None
 try:
     _gh_tok = st.secrets["github"]["token"]
@@ -2807,7 +2823,7 @@ else:
     if _chart:
         st.markdown(_chart, unsafe_allow_html=True)
     else:
-        st.caption("No intraday data yet — PCR is recorded every 1 min during market hours.")
+        st.caption(f"No intraday data yet — PCR is recorded every {_refresh_mins} min during market hours.")
 
     # ── Recent readings table (last 20 near + last 20 far) ────────────────
     _ph1, _ph2 = st.columns(2)
