@@ -204,7 +204,7 @@ GITHUB_REPO     = "diagonal-calanderstrategy"
 GITHUB_BRANCH   = "main"
 PCR_CSV_PATH    = "pcr_data/pcr_log.csv"
 PCR_RETENTION   = 35   # days to keep
-PCR_LOG_INTERVAL= 180  # seconds between writes (3 min)
+PCR_LOG_INTERVAL= 60   # seconds between writes (1 min)
 PCR_COLUMNS     = [
     "timestamp","date","expiry_type","expiry","spot","atm",
     "pcr_range","pcr_atm","ce_oi_L","pe_oi_L","atm_ce_oi_L","atm_pe_oi_L",
@@ -399,7 +399,12 @@ def _get_oi(md):
     return 0.0
 
 def _get_oi_chg(md):
-    """Try every known Upstox field name for intraday OI change."""
+    """
+    Upstox option chain does NOT provide an intraday OI change field.
+    Compute it as: current OI - prev_oi (previous day close OI).
+    Falls back to explicit change fields if ever added by Upstox.
+    """
+    # Prefer explicit change fields (future-proof)
     for key in ("oi_day_change", "change_oi", "day_change_oi", "oi_change", "oiChange", "changeOi"):
         v = md.get(key)
         if v is not None:
@@ -407,6 +412,14 @@ def _get_oi_chg(md):
                 return float(v)
             except Exception:
                 pass
+    # Compute from oi - prev_oi (most reliable for Upstox v2)
+    try:
+        oi      = float(md.get("oi") or md.get("open_interest") or 0)
+        prev_oi = float(md.get("prev_oi") or md.get("previous_oi") or 0)
+        if oi > 0 or prev_oi > 0:
+            return oi - prev_oi
+    except Exception:
+        pass
     return 0.0
 
 
@@ -1371,6 +1384,29 @@ if fe or not far_raw:
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
 
+# ── Intraday OI baseline tracking ─────────────────────────────────────────────
+# Upstox chain has no intraday OI change field — we snapshot OI on first load
+# of the day and diff against it on every 3-min refresh.
+# Key = date + near_exp so baseline resets when expiry changes.
+_oi_base_key = f"{now.date().isoformat()}_{near_exp}"
+_oi_bl       = st.session_state.get("oi_baseline", {})
+if _oi_bl.get("key") != _oi_base_key:
+    # First load of this day/expiry — store as baseline
+    st.session_state["oi_baseline"] = {
+        "key": _oi_base_key,
+        "ce":  dict(near_ce_oi),
+        "pe":  dict(near_pe_oi),
+    }
+    _base_ce_oi = dict(near_ce_oi)
+    _base_pe_oi = dict(near_pe_oi)
+else:
+    _base_ce_oi = _oi_bl["ce"]
+    _base_pe_oi = _oi_bl["pe"]
+
+# Per-strike intraday OI change (positive = OI added since session start)
+_intra_ce_oi_chg = {s: near_ce_oi.get(s, 0) - _base_ce_oi.get(s, 0) for s in near_ce_oi}
+_intra_pe_oi_chg = {s: near_pe_oi.get(s, 0) - _base_pe_oi.get(s, 0) for s in near_pe_oi}
+
 # ── VIX derived values (spot-dependent, computed after chain load) ───────────
 _days_to_exp = max(
     (datetime.strptime(near_exp, "%Y-%m-%d").date() - now.date()).days, 1
@@ -1503,13 +1539,13 @@ _spot_up        = _spot_chg >  20   # +20pt threshold to filter noise
 _spot_dn        = _spot_chg < -20
 _spot_flat      = not _spot_up and not _spot_dn
 
-# Net OI change across ATM±10 strikes
-_net_ce_oi_chg  = sum(near_ce_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
-_net_pe_oi_chg  = sum(near_pe_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
+# Net OI change across ATM±10 strikes (session-tracked: current - day-start baseline)
+_net_ce_oi_chg  = sum(_intra_ce_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
+_net_pe_oi_chg  = sum(_intra_pe_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
 
 # ATM-specific net OI change
-_atm_ce_oi_chg  = near_ce_oi_chg.get(float(atm), 0)
-_atm_pe_oi_chg  = near_pe_oi_chg.get(float(atm), 0)
+_atm_ce_oi_chg  = _intra_ce_oi_chg.get(float(atm), 0)
+_atm_pe_oi_chg  = _intra_pe_oi_chg.get(float(atm), 0)
 
 def _oi_signal(oi_chg, opt_type, spot_up, spot_dn):
     """
@@ -1569,7 +1605,7 @@ else:
             "src": _spp_src,
         }
 
-# ── PCR logging to GitHub CSV (throttled: market hours, once per 3 min) ─────
+# ── PCR logging to GitHub CSV (throttled: market hours, once per 1 min) ─────
 _gh_tok = None
 try:
     _gh_tok = st.secrets["github"]["token"]
@@ -2771,7 +2807,7 @@ else:
     if _chart:
         st.markdown(_chart, unsafe_allow_html=True)
     else:
-        st.caption("No intraday data yet — PCR is recorded every 3 min during market hours.")
+        st.caption("No intraday data yet — PCR is recorded every 1 min during market hours.")
 
     # ── Recent readings table (last 20 near + last 20 far) ────────────────
     _ph1, _ph2 = st.columns(2)
