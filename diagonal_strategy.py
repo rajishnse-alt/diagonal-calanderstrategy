@@ -1496,6 +1496,48 @@ _far_atm_ce_oi = far_ce_oi.get(float(atm), 0)
 _far_atm_pe_oi = far_pe_oi.get(float(atm), 0)
 _far_atm_pcr   = (_far_atm_pe_oi / _far_atm_ce_oi) if _far_atm_ce_oi > 0 else 0.0
 
+# ── OI Buildup / Short Covering classification ────────────────────────────
+# Uses intraday spot direction vs NIFTY day open + net OI change across range
+_spot_chg       = (spot - _nifty_day_open) if (_nifty_day_open and spot) else 0.0
+_spot_up        = _spot_chg >  20   # +20pt threshold to filter noise
+_spot_dn        = _spot_chg < -20
+_spot_flat      = not _spot_up and not _spot_dn
+
+# Net OI change across ATM±10 strikes
+_net_ce_oi_chg  = sum(near_ce_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
+_net_pe_oi_chg  = sum(near_pe_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
+
+# ATM-specific net OI change
+_atm_ce_oi_chg  = near_ce_oi_chg.get(float(atm), 0)
+_atm_pe_oi_chg  = near_pe_oi_chg.get(float(atm), 0)
+
+def _oi_signal(oi_chg, opt_type, spot_up, spot_dn):
+    """
+    Returns (label, color) using OI direction × spot direction.
+    CE: price moves WITH spot. PE: price moves AGAINST spot.
+    OI↑ + price↑ → Long Buildup (buyers dominant)
+    OI↑ + price↓ → Short Buildup (writers dominant)
+    OI↓ + price↑ → Short Covering (shorts buying back)
+    OI↓ + price↓ → Long Unwinding (longs exiting)
+    """
+    if not spot_up and not spot_dn:
+        return ("—", "var(--muted)")
+    oi_up = oi_chg > 0
+    oi_dn = oi_chg < 0
+    if opt_type == "CE":
+        price_up = spot_up
+    else:          # PE price moves inverse to spot
+        price_up = spot_dn
+    if oi_up and price_up:  return ("Long Buildup",   "#00e676")
+    if oi_up and not price_up: return ("Short Buildup",  "#ff5252")
+    if oi_dn and price_up:  return ("Short Covering", "#69f0ae")
+    return                         ("Long Unwinding",  "#ff8a65")
+
+_ce_signal_lbl, _ce_signal_col = _oi_signal(_net_ce_oi_chg, "CE", _spot_up, _spot_dn)
+_pe_signal_lbl, _pe_signal_col = _oi_signal(_net_pe_oi_chg, "PE", _spot_up, _spot_dn)
+_atm_ce_sig_lbl, _atm_ce_sig_col = _oi_signal(_atm_ce_oi_chg, "CE", _spot_up, _spot_dn)
+_atm_pe_sig_lbl, _atm_pe_sig_col = _oi_signal(_atm_pe_oi_chg, "PE", _spot_up, _spot_dn)
+
 # SPP (UIP concept) — computed ONCE per calendar day, keyed ONLY by date.
 # ATM is anchored to NIFTY day-open price (pre-market / 9:15 open) so it
 # never shifts intraday even if spot crosses a strike boundary or app restarts.
@@ -1610,12 +1652,19 @@ with pb1:
             f"<div class='lbl'>"
             f"<span style='color:{_pcr_dir_col};font-weight:700;'>{_pcr_chg:.2f}{_pcr_dir_sym}{_pcr:.2f}</span>"
             f" &nbsp;·&nbsp; CE:ATM+10 | PE:ATM-10<br>"
-            f"CE OI <b>{_tot_ce_oi/1e5:.1f}L</b> &nbsp;·&nbsp; PE OI <b>{_tot_pe_oi/1e5:.1f}L</b>"
+            f"CE OI <b>{_tot_ce_oi/1e5:.1f}L</b> "
+            f"<span style='font-size:9px;font-weight:700;color:{_ce_signal_col};'>[{_ce_signal_lbl}]</span>"
+            f" &nbsp;·&nbsp; PE OI <b>{_tot_pe_oi/1e5:.1f}L</b> "
+            f"<span style='font-size:9px;font-weight:700;color:{_pe_signal_col};'>[{_pe_signal_lbl}]</span>"
             f"</div>"
             f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
             f"<span class='lbl'>ATM <span class='strike-pill-ce'>{atm}</span> PCR &nbsp;</span>"
             f"<span style='font-family:var(--mono);font-size:14px;font-weight:700;color:{_atm_pcr_col};'>{_atm_pcr_str}</span>"
-            f"<span class='lbl'> &nbsp;CE {_atm_ce_oi/1e5:.1f}L / PE {_atm_pe_oi/1e5:.1f}L</span>"
+            f"<span class='lbl'> &nbsp;CE {_atm_ce_oi/1e5:.1f}L "
+            f"<span style='font-size:9px;font-weight:700;color:{_atm_ce_sig_col};'>[{_atm_ce_sig_lbl}]</span>"
+            f" / PE {_atm_pe_oi/1e5:.1f}L "
+            f"<span style='font-size:9px;font-weight:700;color:{_atm_pe_sig_col};'>[{_atm_pe_sig_lbl}]</span>"
+            f"</span>"
             f"</div></div>",
             unsafe_allow_html=True)
 
