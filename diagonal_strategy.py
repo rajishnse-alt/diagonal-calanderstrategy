@@ -251,24 +251,72 @@ def _gh_hdr(tok):
             "Accept": "application/vnd.github.v3+json"}
 
 
-# ── SPP disk cache helpers ───────────────────────────────────────────────────
+# ── SPP GitHub + disk cache helpers ─────────────────────────────────────────
+def _spp_gh_get(gh_tok):
+    """Fetch spp_cache.json from GitHub. Returns (dict, sha) or ({}, None)."""
+    if not gh_tok:
+        return {}, None
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+            f"/contents/{SPP_CACHE_FILE}",
+            headers=_gh_hdr(gh_tok),
+            params={"ref": GITHUB_BRANCH},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            d = r.json()
+            data = json.loads(base64.b64decode(d["content"]).decode("utf-8"))
+            cutoff = (datetime.now(IST) - timedelta(days=35)).date().isoformat()
+            pruned = {k: v for k, v in data.items() if k.split("|")[0] >= cutoff}
+            return pruned, d["sha"]
+        if r.status_code == 404:
+            return {}, None   # file doesn't exist yet
+    except Exception:
+        pass
+    return {}, None
+
+
+def _spp_gh_put(gh_tok, store: dict, sha):
+    """Write spp_cache.json to GitHub. sha=None creates the file."""
+    if not gh_tok:
+        return False
+    try:
+        content = json.dumps(store, indent=2)
+        payload = {
+            "message": f"SPP cache update {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}",
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+            f"/contents/{SPP_CACHE_FILE}",
+            json=payload,
+            headers=_gh_hdr(gh_tok),
+            timeout=30,
+        )
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
 def _spp_load_disk():
-    """Load SPP cache from local JSON file into a dict. Returns {} on missing/corrupt."""
+    """Fallback: load from local disk when GitHub is unavailable."""
     try:
         if os.path.exists(SPP_CACHE_FILE):
             with open(SPP_CACHE_FILE, "r") as f:
                 data = json.load(f)
-            # Prune entries older than 35 days to keep file small
             cutoff = (datetime.now(IST) - timedelta(days=35)).date().isoformat()
-            pruned = {k: v for k, v in data.items() if k.split("|")[0] >= cutoff}
-            return pruned
+            return {k: v for k, v in data.items() if k.split("|")[0] >= cutoff}
     except Exception:
         pass
     return {}
 
 
 def _spp_save_disk(store: dict):
-    """Persist SPP cache dict to local JSON file."""
+    """Fallback: save to local disk (ephemeral on cloud, but useful locally)."""
     try:
         os.makedirs(os.path.dirname(SPP_CACHE_FILE), exist_ok=True)
         with open(SPP_CACHE_FILE, "w") as f:
@@ -1273,6 +1321,13 @@ _ak = st.secrets["upstox"]["api_key"]
 _as = st.secrets["upstox"]["api_secret"]
 _ru = st.secrets["upstox"]["redirect_uri"]
 
+# GitHub token — needed early for SPP cache bootstrap (before PCR section)
+_gh_tok_early = None
+try:
+    _gh_tok_early = st.secrets["github"]["token"]
+except Exception:
+    pass
+
 # Pre-load baked token if present in secrets
 if "access_token" not in st.session_state:
     try:
@@ -1664,14 +1719,19 @@ _atm_ce_sig_lbl, _atm_ce_sig_col = _oi_signal(_atm_ce_oi_chg, "CE", _spot_up, _s
 _atm_pe_sig_lbl, _atm_pe_sig_col = _oi_signal(_atm_pe_oi_chg, "PE", _spot_up, _spot_dn)
 
 # SPP (UIP concept) — computed ONCE per calendar day per instrument+expiry.
-# Cache is TWO-LEVEL: session_state (fast, in-memory) + disk JSON (survives restarts).
-# Key: "YYYY-MM-DD|INSTRUMENT|expiry"  — historical entries are preserved in the JSON.
+# Cache is THREE-LEVEL: session_state → GitHub JSON → local disk fallback.
+# Key: "YYYY-MM-DD|INSTRUMENT|expiry"  — all historical entries preserved in GitHub.
 _today_str  = now.date().isoformat()
 
-# ① Bootstrap session_state cache from disk on first page load of this session
+# ① Bootstrap session_state cache from GitHub (or disk fallback) on first page load
 if "spp_cache_loaded" not in st.session_state:
-    _disk_store = _spp_load_disk()
-    st.session_state["spp_cache"] = _disk_store
+    _gh_store, _gh_spp_sha = _spp_gh_get(_gh_tok_early)
+    if _gh_store:
+        st.session_state["spp_cache"] = _gh_store
+    else:
+        # GitHub unavailable — fall back to local disk
+        st.session_state["spp_cache"] = _spp_load_disk()
+    st.session_state["spp_gh_sha"] = _gh_spp_sha   # sha needed for updates
     st.session_state["spp_cache_loaded"] = True
 
 _spp_store  = st.session_state["spp_cache"]          # live reference
@@ -1703,17 +1763,21 @@ else:
             "ce_oi_L": _spp_ce_oi_L, "pe_oi_L": _spp_pe_oi_L,
             "src": _spp_src,
         }
-        # ② Store in session_state (fast path for subsequent refreshes)
+        # ② Store in session_state (fast path for subsequent refreshes this session)
         _spp_store[_spp_key] = _entry
-        # ③ Persist to disk so it survives page reloads / app restarts
-        _spp_save_disk(_spp_store)
+        # ③ Persist to GitHub (survives cloud restarts; accumulates historical data)
+        _cur_sha = st.session_state.get("spp_gh_sha")
+        _ok = _spp_gh_put(_gh_tok_early, _spp_store, _cur_sha)
+        if _ok:
+            # Re-fetch sha so next write doesn't conflict
+            _, _new_sha = _spp_gh_get(_gh_tok_early)
+            st.session_state["spp_gh_sha"] = _new_sha
+        else:
+            # GitHub write failed — fall back to disk
+            _spp_save_disk(_spp_store)
 
 # ── PCR logging to GitHub CSV (throttled: market hours, once per refresh interval) ─────
-_gh_tok = None
-try:
-    _gh_tok = st.secrets["github"]["token"]
-except Exception:
-    pass
+_gh_tok = _gh_tok_early   # already read at top of main body
 
 _pcr_log_ok = (
     _gh_tok
