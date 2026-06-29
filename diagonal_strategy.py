@@ -164,6 +164,32 @@ SHORT_STEPS  = 6            # ATM ± 6 steps = ±300 pts
 BUY_LOTS     = 1            # Far monthly long leg — always 1L per side
 
 INSTRUMENT_KEY  = "NSE_INDEX|Nifty 50"
+
+# ── Instrument registry ──────────────────────────────────────────────────────
+INSTRUMENT_CONFIGS = {
+    "NIFTY": {
+        "key":     "NSE_INDEX|Nifty 50",
+        "step":    50,
+        "lot":     75,
+        "symbol":  "NIFTY",
+        "pcr_csv": "pcr_data/pcr_log_nifty.csv",
+    },
+    "BANKNIFTY": {
+        "key":     "NSE_INDEX|Nifty Bank",
+        "step":    100,
+        "lot":     15,
+        "symbol":  "BANKNIFTY",
+        "pcr_csv": "pcr_data/pcr_log_banknifty.csv",
+    },
+    "SENSEX": {
+        "key":     "BSE_INDEX|SENSEX",
+        "step":    100,
+        "lot":     10,
+        "symbol":  "SENSEX",
+        "pcr_csv": "pcr_data/pcr_log_sensex.csv",
+    },
+}
+
 UPSTOX_AUTH_URL = "https://api.upstox.com/v2/login/authorization/dialog"
 UPSTOX_TOKEN_URL= "https://api.upstox.com/v2/login/authorization/token"
 UPSTOX_OC_URLS  = [
@@ -629,16 +655,16 @@ def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_d
     return pcr, pcr_chg, tot_ce, tot_pe, spcl, ce_atm, pe_atm, sentiment
 
 
-def fetch_vix_and_nifty_open(tok):
+def fetch_vix_and_nifty_open(tok, spot_key="NSE_INDEX|Nifty 50"):
     """
-    Single call: fetch India VIX (open + LTP) AND NIFTY 50 day-open price.
+    Single call: fetch India VIX (open + LTP) AND spot instrument day-open price.
     Returns (open_vix, curr_vix, nifty_day_open, err).
     nifty_day_open is the day's OHLC open — used to anchor SPP ATM for the day.
     """
     try:
         r = requests.get(
             "https://api.upstox.com/v2/market-quote/quotes",
-            params={"instrument_key": "NSE_INDEX|India VIX,NSE_INDEX|Nifty 50"},
+            params={"instrument_key": f"NSE_INDEX|India VIX,{spot_key}"},
             headers=hdr(tok), timeout=10,
         )
         if r.status_code == 401:
@@ -648,8 +674,8 @@ def fetch_vix_and_nifty_open(tok):
             data = d.get("data", {})
             vd = (data.get("NSE_INDEX:India VIX")
                   or data.get("NSE_INDEX|India VIX"))
-            nd = (data.get("NSE_INDEX:Nifty 50")
-                  or data.get("NSE_INDEX|Nifty 50"))
+            _spot_key_c = spot_key.replace("|", ":")
+            nd = (data.get(_spot_key_c) or data.get(spot_key))
             open_vix      = float((vd or {}).get("ohlc", {}).get("open") or 0) if vd else None
             curr_vix      = float((vd or {}).get("last_price") or 0)           if vd else None
             nifty_day_open= float((nd or {}).get("ohlc", {}).get("open") or 0) if nd else None
@@ -1273,8 +1299,26 @@ if "access_token" not in st.session_state:
 token = st.session_state["access_token"]
 del _ak, _as, _ru   # no further need; prevent accidental render
 
+# ── Instrument selector ───────────────────────────────────────────────────────
+_inst_names  = list(INSTRUMENT_CONFIGS.keys())
+_inst_choice = st.selectbox(
+    "📈 Instrument",
+    _inst_names,
+    index=_inst_names.index(st.session_state.get("instrument", "NIFTY")),
+    key="instrument",
+)
+_INST        = INSTRUMENT_CONFIGS[_inst_choice]
+# Override runtime constants for selected instrument
+STEP            = _INST["step"]
+LOT_SIZE        = _INST["lot"]
+SYMBOL          = _INST["symbol"]
+INSTRUMENT_KEY  = _INST["key"]
+PCR_CSV_PATH    = _INST["pcr_csv"]
+WING_OFFSET     = 10 * STEP   # ±10 steps (500 NIFTY, 1000 BNIFTY/SENSEX)
+DEEP_OTM_OFFSET = 18 * STEP   # deep OTM min distance
+
 # ── VIX (early fetch — needed for strategy banner) ──────────────────────────
-_open_vix, _curr_vix, _nifty_day_open, _vix_err_early = fetch_vix_and_nifty_open(token)
+_open_vix, _curr_vix, _nifty_day_open, _vix_err_early = fetch_vix_and_nifty_open(token, spot_key=INSTRUMENT_KEY)
 if _vix_err_early == "token_expired":
     del st.session_state["access_token"]; st.rerun()
 
@@ -1404,7 +1448,7 @@ _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_c
 # Upstox chain has no intraday OI change field — we snapshot OI on first load
 # of the day and diff against it on every 3-min refresh.
 # Key = date + near_exp so baseline resets when expiry changes.
-_oi_base_key = f"{now.date().isoformat()}_{near_exp}"
+_oi_base_key = f"{now.date().isoformat()}_{near_exp}_{_inst_choice}"
 _oi_bl       = st.session_state.get("oi_baseline", {})
 if _oi_bl.get("key") != _oi_base_key:
     # First load of this day/expiry — store as baseline
@@ -2314,8 +2358,8 @@ _sigma_std  = (_eff_vix / 100.0) if _vix_ok else 0.15
 
 # ── Wing hedge legs (using FAR EXPIRY for gamma taper) ────────────────────
 # Standard ±500 wings (still near expiry)
-_wing_ce_strike = int(round((sell_ce_strike + 500) / STEP) * STEP)
-_wing_pe_strike = int(round((sell_pe_strike - 500) / STEP) * STEP)
+_wing_ce_strike = int(round((sell_ce_strike + WING_OFFSET) / STEP) * STEP)
+_wing_pe_strike = int(round((sell_pe_strike - WING_OFFSET) / STEP) * STEP)
 _wing_ce_ltp    = near_ce.get(float(_wing_ce_strike), 0)
 _wing_pe_ltp    = near_pe.get(float(_wing_pe_strike), 0)
 _wing_ce_lots   = BUY_LOTS   # 1L per side — user spec: 2L sell, 1L wing buy, 1L far buy
@@ -2327,10 +2371,10 @@ _wing_pe_lots   = BUY_LOTS
 
 _deep_ce_strike, _deep_ce_ltp = find_deep_otm_strike(
     far_ce, sell_ltp=sell_ce_ltp, pct_lo=0.05, pct_hi=0.10,
-    min_strike=sell_ce_strike + 900)  # Far OTM CE
+    min_strike=sell_ce_strike + DEEP_OTM_OFFSET)  # Far OTM CE
 _deep_pe_strike, _deep_pe_ltp = find_deep_otm_strike(
     far_pe, sell_ltp=sell_pe_ltp, pct_lo=0.05, pct_hi=0.10,
-    max_strike=sell_pe_strike - 900)  # Far OTM PE
+    max_strike=sell_pe_strike - DEEP_OTM_OFFSET)  # Far OTM PE
 
 # All pre-wing legs — CE + PE combined for total net gamma calculation
 _all_pre_legs = [
@@ -2360,8 +2404,8 @@ legs = [
     {"opt_type":"CE","strike":buy_ce_strike,  "ltp":buy_ce_ltp,  "lots":BUY_LOTS,      "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far CE"},
     {"opt_type":"PE","strike":buy_pe_strike,  "ltp":buy_pe_ltp,  "lots":BUY_LOTS,      "is_sell":False,"is_near":False, "T":_T_far_std,  "label":"BUY far PE"},
     # Near ±500 wings
-    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing CE +500"},
-    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":"BUY wing PE -500"},
+    {"opt_type":"CE","strike":_wing_ce_strike,"ltp":_wing_ce_ltp,"lots":_wing_ce_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY wing CE +{WING_OFFSET}"},
+    {"opt_type":"PE","strike":_wing_pe_strike,"ltp":_wing_pe_ltp,"lots":_wing_pe_lots, "is_sell":False,"is_near":True,  "T":_T_near_std, "label":f"BUY wing PE -{WING_OFFSET}"},
     # Deep OTM wings (γ-taper) — FAR EXPIRY (Long leg taper)
     {"opt_type":"CE","strike":_deep_ce_strike,"ltp":_deep_ce_ltp,"lots":_deep_ce_lots,"is_sell":False,"is_near":False,"T":_T_far_std,"label":f"BUY deep CE {_deep_ce_lots}L (far) γ-solved"},
     {"opt_type":"PE","strike":_deep_pe_strike,"ltp":_deep_pe_ltp,"lots":_deep_pe_lots,"is_sell":False,"is_near":False,"T":_T_far_std,"label":f"BUY deep PE {_deep_pe_lots}L (far) γ-solved"},
@@ -2416,22 +2460,22 @@ st.markdown(
     f"<div><span class='lbl'>BUY {_wing_ce_lots}L CE</span> "
     f"<span class='strike-pill-buy'>{_wing_ce_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_wing_ce_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;+500</span></div>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;+{WING_OFFSET}</span></div>"
     f"<div><span class='lbl'>BUY {_wing_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_wing_pe_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_wing_pe_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;−500</span></div>"
+    f"<span style='font-size:9px;color:var(--muted);'> &nbsp;−{WING_OFFSET}</span></div>"
     # Deep OTM γ-taper (Far expiry)
     f"<div style='border-left:2px solid #4d9fff;padding-left:.5rem;'>"
     f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_ce_lots}L CE</span> "
     f"<span class='strike-pill-buy'>{_deep_ce_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--ce);font-weight:700;'>₹{_deep_ce_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;+900 γ-solved · {_deep_ce_lots}L (far)</span></div>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;+{DEEP_OTM_OFFSET} γ-solved · {_deep_ce_lots}L (far)</span></div>"
     f"<div style='border-left:2px solid #4d9fff;padding-left:.5rem;'>"
     f"<span class='lbl' style='color:#4d9fff;'>BUY {_deep_pe_lots}L PE</span> "
     f"<span class='strike-pill'>{_deep_pe_strike}</span> "
     f"<span style='font-family:var(--mono);font-size:13px;color:var(--pe);font-weight:700;'>₹{_deep_pe_ltp:.2f}</span>"
-    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;−1000 γ-solved · {_deep_pe_lots}L (far)</span></div>"
+    f"<span style='font-size:9px;color:#4d9fff;'> &nbsp;−{DEEP_OTM_OFFSET} γ-solved · {_deep_pe_lots}L (far)</span></div>"
     f"</div>"
     f"<div style='margin-top:.3rem;font-size:9px;color:var(--muted);'>"
     f"These legs cap intraday gamma — the blue dashed line in the chart should stay flat within the 1σ daily band.</div>"
@@ -2530,8 +2574,8 @@ if _vix_ok and _eff_vix >= 15.0:
         _hv_pe  = _hv_pe_cands[0]   # primary PE sell
 
         # Near wing: CE +500 / PE -500
-        _hv_ce2_strike = int(round((_hv_ce["strike"] + 500) / STEP) * STEP)
-        _hv_pe2_strike = int(round((_hv_pe["strike"] - 500) / STEP) * STEP)
+        _hv_ce2_strike = int(round((_hv_ce["strike"] + WING_OFFSET) / STEP) * STEP)
+        _hv_pe2_strike = int(round((_hv_pe["strike"] - WING_OFFSET) / STEP) * STEP)
         _hv_ce2_ltp    = _hv_sell_ce.get(float(_hv_ce2_strike), 0)
         _hv_pe2_ltp    = _hv_sell_pe.get(float(_hv_pe2_strike), 0)
 
@@ -2567,10 +2611,10 @@ if _vix_ok and _eff_vix >= 15.0:
         # PE wing must be strictly below sell PE (extreme far OTM puts)
         _hv_deep_ce_strike, _hv_deep_ce_ltp = find_deep_otm_strike(
             _hv_far_ce, sell_ltp=_hv_ce["ltp"], pct_lo=0.04, pct_hi=0.12,
-            min_strike=_hv_ce["strike"] + 900)
+            min_strike=_hv_ce["strike"] + DEEP_OTM_OFFSET)
         _hv_deep_pe_strike, _hv_deep_pe_ltp = find_deep_otm_strike(
             _hv_far_pe, sell_ltp=_hv_pe["ltp"], pct_lo=0.04, pct_hi=0.12,
-            max_strike=_hv_pe["strike"] - 900)
+            max_strike=_hv_pe["strike"] - DEEP_OTM_OFFSET)
 
         # All pre-wing legs (CE + PE combined) — far buy included for correct total gamma
         _hv_ce_buy_strike = float(_hv_ce["strike"])
@@ -2625,7 +2669,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Near +500 hedge
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
-                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_ce2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(+500 hedge)</span></span>"
+                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_ce2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(+{WING_OFFSET} hedge)</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_ce2_ltp:.2f}</span>"
                 f"</div>"
                 # Deep OTM CE wing (γ-taper)
@@ -2663,7 +2707,7 @@ if _vix_ok and _eff_vix >= 15.0:
                 f"</div>"
                 # Near -500 hedge
                 f"<div style='display:flex;justify-content:space-between;margin:.2rem 0;'>"
-                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_pe2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(-500 hedge)</span></span>"
+                f"<span class='lbl'>BUY 1L &nbsp;<span class='strike-pill-buy'>{_hv_pe2_strike}</span> <span style='color:var(--muted);font-size:9px;'>(-{WING_OFFSET} hedge)</span></span>"
                 f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:var(--bull);'>₹{_hv_pe2_ltp:.2f}</span>"
                 f"</div>"
                 # Deep OTM PE wing (γ-taper)
@@ -2699,12 +2743,12 @@ if _vix_ok and _eff_vix >= 15.0:
             f"'>{'Credit' if _hv_net>=0 else 'Debit'} ₹{abs(_hv_net):,.0f}</span></div>"
             f"<div><span class='lbl'>"
             f"SELL: CE {_hv_ce['strike']}×2L + PE {_hv_pe['strike']}×2L @ {_hv_sell_exp} (DTE {_hv_sell_dte}d)"
-            f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} (+500) + PE {_hv_pe2_strike} (-500) @ {_hv_sell_exp}"
+            f"&nbsp;·&nbsp; BUY hedge: CE {_hv_ce2_strike} (+{WING_OFFSET}) + PE {_hv_pe2_strike} (-{WING_OFFSET}) @ {_hv_sell_exp}"
             f"&nbsp;·&nbsp; 🪽 deep OTM: CE {_hv_deep_ce_strike}×{_hv_deep_ce_lots}L ₹{_hv_deep_ce_ltp:.2f} + PE {_hv_deep_pe_strike}×{_hv_deep_pe_lots}L ₹{_hv_deep_pe_ltp:.2f} (γ-taper)"
             f"&nbsp;·&nbsp; BUY monthly: CE {_hv_ce['strike']} + PE {_hv_pe['strike']} @ {_hv_far_exp or 'N/A'} (DTE {_hv_far_dte}d ≥ {_hv_sell_dte*3}d needed)</span><br>"
             f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);'>"
-            f"δ: CE sell {_hv_ce['delta']:.3f} · CE+500 {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
-            f"PE sell {_hv_pe['delta']:.3f} · PE-500 {_hv_pe2_bs_delta:.3f}"
+            f"δ: CE sell {_hv_ce['delta']:.3f} · CE+{WING_OFFSET} {_hv_ce2_bs_delta:.3f} &nbsp;|&nbsp; "
+            f"PE sell {_hv_pe['delta']:.3f} · PE-{WING_OFFSET} {_hv_pe2_bs_delta:.3f}"
             f"</span></div>"
             f"</div></div>",
             unsafe_allow_html=True,
