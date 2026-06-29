@@ -14,6 +14,8 @@ import streamlit as st
 import requests
 import math
 import time
+import json
+import os
 try:
     from streamlit_autorefresh import st_autorefresh as _st_autorefresh
     _AUTOREFRESH_OK = True
@@ -234,6 +236,7 @@ GITHUB_OWNER    = "rajishnse-alt"
 GITHUB_REPO     = "diagonal-calanderstrategy"
 GITHUB_BRANCH   = "main"
 PCR_CSV_PATH    = "pcr_data/pcr_log.csv"
+SPP_CACHE_FILE  = "pcr_data/spp_cache.json"   # persisted SPP history (survives restarts)
 PCR_RETENTION   = 35   # days to keep
 PCR_LOG_INTERVAL= 180  # seconds — overridden by user slider at runtime
 PCR_COLUMNS     = [
@@ -246,6 +249,32 @@ PCR_COLUMNS     = [
 def _gh_hdr(tok):
     return {"Authorization": f"token {tok}",
             "Accept": "application/vnd.github.v3+json"}
+
+
+# ── SPP disk cache helpers ───────────────────────────────────────────────────
+def _spp_load_disk():
+    """Load SPP cache from local JSON file into a dict. Returns {} on missing/corrupt."""
+    try:
+        if os.path.exists(SPP_CACHE_FILE):
+            with open(SPP_CACHE_FILE, "r") as f:
+                data = json.load(f)
+            # Prune entries older than 35 days to keep file small
+            cutoff = (datetime.now(IST) - timedelta(days=35)).date().isoformat()
+            pruned = {k: v for k, v in data.items() if k.split("|")[0] >= cutoff}
+            return pruned
+    except Exception:
+        pass
+    return {}
+
+
+def _spp_save_disk(store: dict):
+    """Persist SPP cache dict to local JSON file."""
+    try:
+        os.makedirs(os.path.dirname(SPP_CACHE_FILE), exist_ok=True)
+        with open(SPP_CACHE_FILE, "w") as f:
+            json.dump(store, f, indent=2)
+    except Exception:
+        pass
 
 
 def gh_get_csv(gh_tok):
@@ -1634,36 +1663,50 @@ _pe_signal_lbl, _pe_signal_col = _oi_signal(_net_pe_oi_chg, "PE", _spot_up, _spo
 _atm_ce_sig_lbl, _atm_ce_sig_col = _oi_signal(_atm_ce_oi_chg, "CE", _spot_up, _spot_dn)
 _atm_pe_sig_lbl, _atm_pe_sig_col = _oi_signal(_atm_pe_oi_chg, "PE", _spot_up, _spot_dn)
 
-# SPP (UIP concept) — computed ONCE per calendar day, keyed ONLY by date.
-# ATM is anchored to NIFTY day-open price (pre-market / 9:15 open) so it
-# never shifts intraday even if spot crosses a strike boundary or app restarts.
-_today_str = now.date().isoformat()
-_spp_cache = st.session_state.get("spp_cache", {})
-if _spp_cache.get("date") == _today_str and _spp_cache.get("expiry") == near_exp:
-    # Locked for the day + expiry — restore cached values
-    _spp        = _spp_cache["spp"]
-    _spp_atm    = _spp_cache["atm"]
-    _spp_ce_h   = _spp_cache["ce_h"]
-    _spp_ce_l   = _spp_cache["ce_l"]
-    _spp_pe_h   = _spp_cache["pe_h"]
-    _spp_pe_l   = _spp_cache["pe_l"]
-    _spp_ce_oi_L= _spp_cache["ce_oi_L"]
-    _spp_pe_oi_L= _spp_cache["pe_oi_L"]
-    _spp_src    = _spp_cache["src"]
+# SPP (UIP concept) — computed ONCE per calendar day per instrument+expiry.
+# Cache is TWO-LEVEL: session_state (fast, in-memory) + disk JSON (survives restarts).
+# Key: "YYYY-MM-DD|INSTRUMENT|expiry"  — historical entries are preserved in the JSON.
+_today_str  = now.date().isoformat()
+
+# ① Bootstrap session_state cache from disk on first page load of this session
+if "spp_cache_loaded" not in st.session_state:
+    _disk_store = _spp_load_disk()
+    st.session_state["spp_cache"] = _disk_store
+    st.session_state["spp_cache_loaded"] = True
+
+_spp_store  = st.session_state["spp_cache"]          # live reference
+_spp_key    = f"{_today_str}|{_inst_choice}|{near_exp}"
+_spp_cached = _spp_store.get(_spp_key, {})
+
+if _spp_cached:
+    # Hit — use cached value (no API call, no spinner)
+    _spp        = _spp_cached["spp"]
+    _spp_atm    = _spp_cached["atm"]
+    _spp_ce_h   = _spp_cached["ce_h"]
+    _spp_ce_l   = _spp_cached["ce_l"]
+    _spp_pe_h   = _spp_cached["pe_h"]
+    _spp_pe_l   = _spp_cached["pe_l"]
+    _spp_ce_oi_L= _spp_cached["ce_oi_L"]
+    _spp_pe_oi_L= _spp_cached["pe_oi_L"]
+    _spp_src    = _spp_cached["src"]
 else:
-    # First call of the day — use day-open ATM, fall back to current spot ATM
+    # Miss — compute once for this instrument+expiry today
     _spp_atm = _open_atm if _open_atm else atm
-    with st.spinner(f"Computing SPP (open ATM={_spp_atm})…"):
+    with st.spinner(f"Computing SPP for {_inst_choice} (open ATM={_spp_atm})…"):
         _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
             calc_spp(near_exp, _spp_atm, tok=token, chain_data=near_raw)
     if _spp is not None:
-        st.session_state["spp_cache"] = {
-            "date": _today_str, "expiry": near_exp, "atm": _spp_atm,
-            "spp": _spp, "ce_h": _spp_ce_h, "ce_l": _spp_ce_l,
+        _entry = {
+            "spp": _spp, "atm": _spp_atm,
+            "ce_h": _spp_ce_h, "ce_l": _spp_ce_l,
             "pe_h": _spp_pe_h, "pe_l": _spp_pe_l,
             "ce_oi_L": _spp_ce_oi_L, "pe_oi_L": _spp_pe_oi_L,
             "src": _spp_src,
         }
+        # ② Store in session_state (fast path for subsequent refreshes)
+        _spp_store[_spp_key] = _entry
+        # ③ Persist to disk so it survives page reloads / app restarts
+        _spp_save_disk(_spp_store)
 
 # ── PCR logging to GitHub CSV (throttled: market hours, once per refresh interval) ─────
 _gh_tok = None
