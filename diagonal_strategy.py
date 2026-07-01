@@ -1435,6 +1435,17 @@ st.markdown(
     f"Trigger: <code style='background:var(--border);padding:1px 5px;border-radius:3px;"
     f"font-size:10px;'>{_active_strat['trigger']}</code>"
     + (f" &nbsp;·&nbsp; VIX <b style='color:{_sc};'>{_eff_vix:.2f}</b>" if _vix_ok else "")
+    + (
+        f"<br><span style='color:#5a7090;'>"
+        f"{'<b style=\"color:#00e676;\">&lt;13 &#8377;28-35</b>' if _eff_vix < 13 else '&lt;13 &#8377;28-35'}"
+        f" &nbsp;·&nbsp; "
+        f"{'<b style=\"color:#ffc940;\">14-18 &#8377;32-45</b>' if 14 <= _eff_vix <= 18 else '14-18 &#8377;32-45'}"
+        f" &nbsp;·&nbsp; "
+        f"{'<b style=\"color:#ff5252;\">&gt;19 &#8377;50+</b>' if _eff_vix > 19 else '&gt;19 &#8377;50+'}"
+        f"</span>"
+        if _vix_ok else
+        f"<br><span style='color:#5a7090;'>&lt;13 &#8377;28-35 &nbsp;·&nbsp; 14-18 &#8377;32-45 &nbsp;·&nbsp; &gt;19 &#8377;50+</span>"
+    )
     + f"</div></div>"
     f"<div style='flex:1;min-width:280px;'>"
     f"<div style='font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;"
