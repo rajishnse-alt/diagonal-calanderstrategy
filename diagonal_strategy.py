@@ -1770,6 +1770,17 @@ _spp_store  = st.session_state["spp_cache"]          # live reference
 _spp_key    = f"{_today_str}|{_inst_choice}|{near_exp}"
 _spp_cached = _spp_store.get(_spp_key, {})
 
+# Invalidate cache if it was computed before 09:05 IST and market has since opened
+_spp_open_today = now.replace(hour=9, minute=5, second=0, microsecond=0)
+if _spp_cached:
+    try:
+        _spp_cached_dt = datetime.fromisoformat(_spp_cached.get("ts", "")).replace(tzinfo=IST)
+    except Exception:
+        _spp_cached_dt = None
+    if _spp_cached_dt is None or (_spp_cached_dt < _spp_open_today and now >= _spp_open_today):
+        del _spp_store[_spp_key]
+        _spp_cached = {}
+
 if _spp_cached:
     # Hit — use cached value (no API call, no spinner)
     _spp        = _spp_cached["spp"]
@@ -1794,6 +1805,7 @@ else:
             "pe_h": _spp_pe_h, "pe_l": _spp_pe_l,
             "ce_oi_L": _spp_ce_oi_L, "pe_oi_L": _spp_pe_oi_L,
             "src": _spp_src,
+            "ts": now.isoformat(),
         }
         # ② Store in session_state (fast path for subsequent refreshes this session)
         _spp_store[_spp_key] = _entry
