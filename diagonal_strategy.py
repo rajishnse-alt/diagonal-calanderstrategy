@@ -1394,7 +1394,8 @@ _inst_choice = st.selectbox(
 _INST        = INSTRUMENT_CONFIGS[_inst_choice]
 # Override runtime constants for selected instrument
 STEP            = _INST["step"]
-LOT_SIZE        = _INST["lot"]
+# Use live lot from session_state (updated each run from chain API); fall back to config
+LOT_SIZE        = st.session_state.get(f"live_lot_{_inst_choice}", _INST["lot"])
 SYMBOL          = _INST["symbol"]
 INSTRUMENT_KEY  = _INST["key"]
 PCR_CSV_PATH    = _INST["pcr_csv"]
@@ -1416,6 +1417,16 @@ else:
 # Open ATM — anchored to NIFTY day-open price, falls back to current spot
 _open_atm = (int(round(_nifty_day_open / STEP) * STEP)
              if _nifty_day_open and _nifty_day_open > 0 else None)
+
+# ── VIX premium ranges scaled by lot size relative to NIFTY ─────────────────
+# Use live NIFTY lot cached from last NIFTY chain fetch; fall back to config
+_NIFTY_REF_LOT = st.session_state.get("live_lot_NIFTY", INSTRUMENT_CONFIGS["NIFTY"]["lot"])
+_vix_lot_scale = _NIFTY_REF_LOT / max(LOT_SIZE, 1)
+# Round to nearest 5 for readability
+def _vp(x): return int(round(x * _vix_lot_scale / 5) * 5)
+_vp_lo_l, _vp_lo_h   = _vp(28), _vp(35)   # VIX < 13
+_vp_mid_l, _vp_mid_h = _vp(32), _vp(45)   # VIX 14-18
+_vp_hi                = _vp(50)             # VIX > 19
 
 # ── Strategy banner (rendered inline — no st.empty() placeholder) ────────────
 _active_strat = STRATEGY_REGISTRY[0] if (_vix_ok and _eff_vix > 15.0) else STRATEGY_REGISTRY[1]
@@ -1442,30 +1453,30 @@ st.markdown(
     + (
         "<div style='display:flex;flex-direction:column;gap:3px;'>"
         + (
-            "<div style='background:#003318;border-left:3px solid #00e676;border-radius:4px;"
-            "padding:2px 8px;font-size:12px;font-weight:700;color:#00e676;'>"
-            "&lt;13 &#8594; &#8377;28-35</div>"
+            f"<div style='background:#003318;border-left:3px solid #00e676;border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:700;color:#00e676;'>"
+            f"&lt;13 &#8594; &#8377;{_vp_lo_l}-{_vp_lo_h}</div>"
             if _eff_vix < 13 else
-            "<div style='color:#5a7090;font-size:11px;padding:2px 8px;'>&lt;13 &#8594; &#8377;28-35</div>"
+            f"<div style='color:#5a7090;font-size:11px;padding:2px 8px;'>&lt;13 &#8594; &#8377;{_vp_lo_l}-{_vp_lo_h}</div>"
         )
         + (
-            "<div style='background:#2a1e00;border-left:3px solid #ffc940;border-radius:4px;"
-            "padding:2px 8px;font-size:12px;font-weight:700;color:#ffc940;'>"
-            "14-18 &#8594; &#8377;32-45</div>"
+            f"<div style='background:#2a1e00;border-left:3px solid #ffc940;border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:700;color:#ffc940;'>"
+            f"14-18 &#8594; &#8377;{_vp_mid_l}-{_vp_mid_h}</div>"
             if 13 <= _eff_vix <= 19 else
-            "<div style='color:#5a7090;font-size:11px;padding:2px 8px;'>14-18 &#8594; &#8377;32-45</div>"
+            f"<div style='color:#5a7090;font-size:11px;padding:2px 8px;'>14-18 &#8594; &#8377;{_vp_mid_l}-{_vp_mid_h}</div>"
         )
         + (
-            "<div style='background:#2a0808;border-left:3px solid #ff5252;border-radius:4px;"
-            "padding:2px 8px;font-size:12px;font-weight:700;color:#ff5252;'>"
-            "&gt;19 &#8594; &#8377;50+</div>"
+            f"<div style='background:#2a0808;border-left:3px solid #ff5252;border-radius:4px;"
+            f"padding:2px 8px;font-size:12px;font-weight:700;color:#ff5252;'>"
+            f"&gt;19 &#8594; &#8377;{_vp_hi}+</div>"
             if _eff_vix > 19 else
-            "<div style='color:#5a7090;font-size:11px;padding:2px 8px;'>&gt;19 &#8594; &#8377;50+</div>"
+            f"<div style='color:#5a7090;font-size:11px;padding:2px 8px;'>&gt;19 &#8594; &#8377;{_vp_hi}+</div>"
         )
         + "</div>"
         if _vix_ok else
-        "<div style='color:#5a7090;font-size:11px;'>"
-        "&lt;13 &#8377;28-35<br>14-18 &#8377;32-45<br>&gt;19 &#8377;50+</div>"
+        f"<div style='color:#5a7090;font-size:11px;'>"
+        f"&lt;13 &#8377;{_vp_lo_l}-{_vp_lo_h}<br>14-18 &#8377;{_vp_mid_l}-{_vp_mid_h}<br>&gt;19 &#8377;{_vp_hi}+</div>"
     )
     + f"</div>"
     f"<div style='flex:1;min-width:280px;'>"
@@ -1556,6 +1567,19 @@ if ne or not near_raw:
     st.error(f"Near chain error: {ne}"); st.stop()
 if fe or not far_raw:
     st.error(f"Far chain error: {fe}"); st.stop()
+
+# ── Live lot size from chain (auto-tracks exchange changes) ──────────────────
+for _cl_row in near_raw:
+    _cl_lot = _cl_row.get("lot_size")
+    if _cl_lot:
+        try:
+            _cl_lot_int = int(float(_cl_lot))
+            if _cl_lot_int > 0:
+                LOT_SIZE = _cl_lot_int
+                st.session_state[f"live_lot_{_inst_choice}"] = _cl_lot_int
+                break
+        except Exception:
+            pass
 
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
