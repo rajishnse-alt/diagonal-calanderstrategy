@@ -1639,8 +1639,6 @@ st.markdown(
     f"Gap <b style='color:white'>{fw-nw:.1f} wks</b></p>",
     unsafe_allow_html=True,
 )
-if fw < 4.5:
-    st.warning(f"⚠️ Far expiry is only {fw:.1f} weeks away — strategy works best with 5+ weeks gap.")
 
 # ─────────────────────────────────────────────
 # LOAD CHAINS
