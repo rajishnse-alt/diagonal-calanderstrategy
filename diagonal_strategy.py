@@ -1589,27 +1589,59 @@ _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_c
 # From chain snapshot (single daily bar): VWAP ≈ (High + Low + LTP) / 3
 _atm_ce_vwap = _atm_pe_vwap = None
 _atm_ce_vol  = _atm_pe_vol  = None
+
+def _md_get_h(md):
+    """Try all known Upstox field names for day high."""
+    for k in ("high", "high_price", "day_high", "ohlc_high"):
+        v = md.get(k)
+        if v is not None:
+            try:
+                f = float(v)
+                if f > 0: return f
+            except Exception: pass
+    ohlc = md.get("ohlc") or {}
+    v = ohlc.get("high") or ohlc.get("high_price")
+    try: return float(v) if v else 0.0
+    except Exception: return 0.0
+
+def _md_get_l(md):
+    """Try all known Upstox field names for day low."""
+    for k in ("low", "low_price", "day_low", "ohlc_low"):
+        v = md.get(k)
+        if v is not None:
+            try:
+                f = float(v)
+                if f > 0: return f
+            except Exception: pass
+    ohlc = md.get("ohlc") or {}
+    v = ohlc.get("low") or ohlc.get("low_price")
+    try: return float(v) if v else 0.0
+    except Exception: return 0.0
+
 for _vw_row in near_raw:
     try:
         if int(float(_vw_row.get("strike_price", 0))) == int(atm):
             _c_md = (_vw_row.get("call_options") or {}).get("market_data") or {}
             _p_md = (_vw_row.get("put_options")  or {}).get("market_data") or {}
             # CE
-            _c_h = float(_c_md.get("high") or _c_md.get("day_high") or 0)
-            _c_l = float(_c_md.get("low")  or _c_md.get("day_low")  or 0)
-            _c_c = float(_c_md.get("ltp")  or 0)
+            _c_h = _md_get_h(_c_md)
+            _c_l = _md_get_l(_c_md)
+            _c_c = float(_c_md.get("ltp") or 0)
             _c_v = float(_c_md.get("volume") or _c_md.get("vol") or 0)
             if _c_h > 0 and _c_l > 0 and _c_c > 0:
                 _atm_ce_vwap = (_c_h + _c_l + _c_c) / 3
             if _c_v > 0: _atm_ce_vol = _c_v
             # PE
-            _p_h = float(_p_md.get("high") or _p_md.get("day_high") or 0)
-            _p_l = float(_p_md.get("low")  or _p_md.get("day_low")  or 0)
-            _p_c = float(_p_md.get("ltp")  or 0)
+            _p_h = _md_get_h(_p_md)
+            _p_l = _md_get_l(_p_md)
+            _p_c = float(_p_md.get("ltp") or 0)
             _p_v = float(_p_md.get("volume") or _p_md.get("vol") or 0)
             if _p_h > 0 and _p_l > 0 and _p_c > 0:
                 _atm_pe_vwap = (_p_h + _p_l + _p_c) / 3
             if _p_v > 0: _atm_pe_vol = _p_v
+            # Store raw keys for debugging
+            st.session_state["_dbg_atm_ce_md_keys"] = list(_c_md.keys())
+            st.session_state["_dbg_atm_ce_md"] = {k: _c_md[k] for k in list(_c_md.keys())[:20]}
             break
     except Exception:
         pass
@@ -1755,6 +1787,11 @@ with r1c2:
         f"</div>",
         unsafe_allow_html=True
     )
+
+# Debug: show raw market_data keys so we can find correct field names for H/L
+if st.session_state.get("_dbg_atm_ce_md_keys") and _atm_ce_vwap is None:
+    with st.expander("⚙️ Debug: ATM CE market_data keys (VWAP missing)", expanded=False):
+        st.json(st.session_state.get("_dbg_atm_ce_md", {}))
 
 # Row 1b — PCR + SPCL (near chain, using exact atm_tracker formulas)
 try:
