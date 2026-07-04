@@ -1631,24 +1631,27 @@ _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_c
 
 # ── ATM CE/PE VWAP — from Upstox v3 intraday 1-min candles ──────────────────
 # Cache key: changes when date, instrument, or ATM strike changes
+# Only cache successful (non-None) results so failures retry on next refresh
 _vwap_cache_key = f"{now.date().isoformat()}_{_inst_choice}_{atm}_{near_exp}"
 _vwap_cached    = st.session_state.get("atm_vwap_cache", {})
-if _vwap_cached.get("key") == _vwap_cache_key and token:
-    _atm_ce_vwap = _vwap_cached.get("ce_vwap")
-    _atm_pe_vwap = _vwap_cached.get("pe_vwap")
-    _atm_ce_vol  = _vwap_cached.get("ce_vol")
-    _atm_pe_vol  = _vwap_cached.get("pe_vol")
+_vwap_hit = (_vwap_cached.get("key") == _vwap_cache_key
+             and _vwap_cached.get("ce_vwap") is not None)
+if _vwap_hit:
+    _atm_ce_vwap = _vwap_cached["ce_vwap"]
+    _atm_pe_vwap = _vwap_cached["pe_vwap"]
+    _atm_ce_vol  = _vwap_cached["ce_vol"]
+    _atm_pe_vol  = _vwap_cached["pe_vol"]
 else:
     _atm_ce_vwap = _atm_pe_vwap = _atm_ce_vol = _atm_pe_vol = None
     if token:
-        # Fetch regardless of market status — when closed, Upstox returns last session's candles
         _atm_ce_vwap, _atm_pe_vwap, _atm_ce_vol, _atm_pe_vol = \
             fetch_atm_vwap(token, near_raw, atm)
-        st.session_state["atm_vwap_cache"] = {
-            "key": _vwap_cache_key,
-            "ce_vwap": _atm_ce_vwap, "pe_vwap": _atm_pe_vwap,
-            "ce_vol": _atm_ce_vol,   "pe_vol": _atm_pe_vol,
-        }
+        if _atm_ce_vwap is not None:   # only cache on success
+            st.session_state["atm_vwap_cache"] = {
+                "key": _vwap_cache_key,
+                "ce_vwap": _atm_ce_vwap, "pe_vwap": _atm_pe_vwap,
+                "ce_vol": _atm_ce_vol,   "pe_vol": _atm_pe_vol,
+            }
 
 # ── Intraday OI baseline tracking ─────────────────────────────────────────────
 # Upstox chain has no intraday OI change field — we snapshot OI on first load
