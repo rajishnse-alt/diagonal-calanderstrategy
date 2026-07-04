@@ -1785,10 +1785,31 @@ with r1c2:
     _atm_pe_ltp = near_pe.get(float(atm), 0)
     def _fmt_v(v): return f"₹{v:.1f}" if v else "—"
     def _fmt_vol(v): return f"{int(v):,}" if v else "—"
-    # LTP vs VWAP direction indicator
     def _ltp_vs_vwap(ltp, vwap):
         if not vwap or not ltp: return ""
         return "<span style='color:var(--bull);'>▲</span>" if ltp > vwap else "<span style='color:var(--bear);'>▼</span>"
+
+    # Straddle sum vs VWAP sum → market regime
+    _straddle_ltp  = _atm_ce_ltp + _atm_pe_ltp
+    _straddle_vwap = (_atm_ce_vwap + _atm_pe_vwap) if (_atm_ce_vwap and _atm_pe_vwap) else None
+    if _straddle_vwap:
+        _is_sideways  = _straddle_ltp < _straddle_vwap
+        _regime_label = "SIDEWAYS" if _is_sideways else "TRENDING"
+        _regime_col   = "var(--gold)"  if _is_sideways else "var(--bear)"
+        _regime_bg    = "var(--gold-dim)" if _is_sideways else "var(--bear-dim)"
+        _regime_icon  = "↔" if _is_sideways else "↗"
+        _regime_hint  = f"Straddle ₹{_straddle_ltp:.1f} {'&lt;' if _is_sideways else '&gt;'} VWAP ₹{_straddle_vwap:.1f}"
+        _regime_html  = (
+            f"<div style='margin-top:8px;padding:4px 8px;border-radius:5px;"
+            f"background:{_regime_bg};border-left:3px solid {_regime_col};'>"
+            f"<span style='color:{_regime_col};font-weight:700;font-size:12px;'>"
+            f"{_regime_icon} {_regime_label}</span>"
+            f"<span style='color:var(--muted);font-size:10px;margin-left:6px;'>{_regime_hint}</span>"
+            f"</div>"
+        )
+    else:
+        _regime_html = ""
+
     st.markdown(
         f"<div class='card card-gold'>"
         f"<div class='lbl'>ATM Strike</div>"
@@ -1809,6 +1830,7 @@ with r1c2:
         f"<div style='color:var(--muted);font-size:10px;'>Vol&nbsp;&nbsp; {_fmt_vol(_atm_pe_vol)}</div>"
         f"</div>"
         f"</div>"
+        + _regime_html +
         f"</div>",
         unsafe_allow_html=True
     )
