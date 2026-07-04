@@ -631,6 +631,51 @@ def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
         return None
 
 
+def fetch_atm_vwap(tok, chain_data, atm_strike):
+    """
+    Fetch 1-min intraday candles for ATM CE and PE via Upstox v3 API and
+    compute VWAP = Σ((H+L+C)/3 × Vol) / Σ(Vol) for the current trading day.
+    Returns (ce_vwap, pe_vwap, ce_vol_total, pe_vol_total) — any may be None.
+    """
+    ce_inst = pe_inst = None
+    for row in chain_data:
+        if int(float(row.get("strike_price", 0))) == int(atm_strike):
+            ce_inst = (row.get("call_options") or {}).get("instrument_key")
+            pe_inst = (row.get("put_options")  or {}).get("instrument_key")
+            break
+
+    def _vwap_for(inst_key):
+        if not inst_key:
+            return None, None
+        try:
+            enc = urllib.parse.quote(inst_key, safe="")
+            r = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
+                headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
+                timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if not candles:
+                return None, None
+            cum_tp_vol = 0.0
+            cum_vol    = 0.0
+            for c in candles:
+                # [timestamp, open, high, low, close, volume, oi]
+                h, l, cl, vol = float(c[2]), float(c[3]), float(c[4]), float(c[5])
+                if vol > 0:
+                    cum_tp_vol += ((h + l + cl) / 3) * vol
+                    cum_vol    += vol
+            if cum_vol > 0:
+                return cum_tp_vol / cum_vol, cum_vol
+            return None, None
+        except Exception:
+            return None, None
+
+    ce_vwap, ce_vol = _vwap_for(ce_inst)
+    pe_vwap, pe_vol = _vwap_for(pe_inst)
+    return ce_vwap, pe_vwap, ce_vol, pe_vol
+
+
 def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
     """
     SPP (UIP concept):
@@ -1584,67 +1629,25 @@ for _cl_row in near_raw:
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
 
-# ── ATM CE/PE VWAP — computed from day H, L, LTP (typical price) ────────────
-# VWAP = Σ(Typical Price × Volume) / Σ(Volume)
-# From chain snapshot (single daily bar): VWAP ≈ (High + Low + LTP) / 3
-_atm_ce_vwap = _atm_pe_vwap = None
-_atm_ce_vol  = _atm_pe_vol  = None
-
-def _md_get_h(md):
-    """Try all known Upstox field names for day high."""
-    for k in ("high", "high_price", "day_high", "ohlc_high"):
-        v = md.get(k)
-        if v is not None:
-            try:
-                f = float(v)
-                if f > 0: return f
-            except Exception: pass
-    ohlc = md.get("ohlc") or {}
-    v = ohlc.get("high") or ohlc.get("high_price")
-    try: return float(v) if v else 0.0
-    except Exception: return 0.0
-
-def _md_get_l(md):
-    """Try all known Upstox field names for day low."""
-    for k in ("low", "low_price", "day_low", "ohlc_low"):
-        v = md.get(k)
-        if v is not None:
-            try:
-                f = float(v)
-                if f > 0: return f
-            except Exception: pass
-    ohlc = md.get("ohlc") or {}
-    v = ohlc.get("low") or ohlc.get("low_price")
-    try: return float(v) if v else 0.0
-    except Exception: return 0.0
-
-for _vw_row in near_raw:
-    try:
-        if int(float(_vw_row.get("strike_price", 0))) == int(atm):
-            _c_md = (_vw_row.get("call_options") or {}).get("market_data") or {}
-            _p_md = (_vw_row.get("put_options")  or {}).get("market_data") or {}
-            # CE
-            _c_h = _md_get_h(_c_md)
-            _c_l = _md_get_l(_c_md)
-            _c_c = float(_c_md.get("ltp") or 0)
-            _c_v = float(_c_md.get("volume") or _c_md.get("vol") or 0)
-            if _c_h > 0 and _c_l > 0 and _c_c > 0:
-                _atm_ce_vwap = (_c_h + _c_l + _c_c) / 3
-            if _c_v > 0: _atm_ce_vol = _c_v
-            # PE
-            _p_h = _md_get_h(_p_md)
-            _p_l = _md_get_l(_p_md)
-            _p_c = float(_p_md.get("ltp") or 0)
-            _p_v = float(_p_md.get("volume") or _p_md.get("vol") or 0)
-            if _p_h > 0 and _p_l > 0 and _p_c > 0:
-                _atm_pe_vwap = (_p_h + _p_l + _p_c) / 3
-            if _p_v > 0: _atm_pe_vol = _p_v
-            # Store raw keys for debugging
-            st.session_state["_dbg_atm_ce_md_keys"] = list(_c_md.keys())
-            st.session_state["_dbg_atm_ce_md"] = {k: _c_md[k] for k in list(_c_md.keys())[:20]}
-            break
-    except Exception:
-        pass
+# ── ATM CE/PE VWAP — from Upstox v3 intraday 1-min candles ──────────────────
+# Cache key: changes when date, instrument, or ATM strike changes
+_vwap_cache_key = f"{now.date().isoformat()}_{_inst_choice}_{atm}_{near_exp}"
+_vwap_cached    = st.session_state.get("atm_vwap_cache", {})
+if _vwap_cached.get("key") == _vwap_cache_key and token:
+    _atm_ce_vwap = _vwap_cached.get("ce_vwap")
+    _atm_pe_vwap = _vwap_cached.get("pe_vwap")
+    _atm_ce_vol  = _vwap_cached.get("ce_vol")
+    _atm_pe_vol  = _vwap_cached.get("pe_vol")
+else:
+    _atm_ce_vwap = _atm_pe_vwap = _atm_ce_vol = _atm_pe_vol = None
+    if token and mkt_open:
+        _atm_ce_vwap, _atm_pe_vwap, _atm_ce_vol, _atm_pe_vol = \
+            fetch_atm_vwap(token, near_raw, atm)
+        st.session_state["atm_vwap_cache"] = {
+            "key": _vwap_cache_key,
+            "ce_vwap": _atm_ce_vwap, "pe_vwap": _atm_pe_vwap,
+            "ce_vol": _atm_ce_vol,   "pe_vol": _atm_pe_vol,
+        }
 
 # ── Intraday OI baseline tracking ─────────────────────────────────────────────
 # Upstox chain has no intraday OI change field — we snapshot OI on first load
@@ -1787,11 +1790,6 @@ with r1c2:
         f"</div>",
         unsafe_allow_html=True
     )
-
-# Debug: show raw market_data keys so we can find correct field names for H/L
-if st.session_state.get("_dbg_atm_ce_md_keys") and _atm_ce_vwap is None:
-    with st.expander("⚙️ Debug: ATM CE market_data keys (VWAP missing)", expanded=False):
-        st.json(st.session_state.get("_dbg_atm_ce_md", {}))
 
 # Row 1b — PCR + SPCL (near chain, using exact atm_tracker formulas)
 try:
