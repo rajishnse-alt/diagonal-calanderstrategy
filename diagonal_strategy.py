@@ -633,9 +633,11 @@ def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
 
 def fetch_atm_vwap(tok, chain_data, atm_strike):
     """
-    Fetch 1-min intraday candles for ATM CE and PE via Upstox v3 API and
-    compute VWAP = Σ((H+L+C)/3 × Vol) / Σ(Vol) for the current trading day.
-    Returns (ce_vwap, pe_vwap, ce_vol_total, pe_vol_total) — any may be None.
+    Compute VWAP = Σ((H+L+C)/3 × Vol) / Σ(Vol) for ATM CE and PE.
+    1. Tries Upstox v3 intraday 1-min API (current session).
+    2. If empty (market closed / weekend), falls back to v2 historical
+       1-minute candles for the previous business day.
+    Returns (ce_vwap, pe_vwap, ce_vol, pe_vol) — any may be None.
     """
     ce_inst = pe_inst = None
     for row in chain_data:
@@ -644,32 +646,48 @@ def fetch_atm_vwap(tok, chain_data, atm_strike):
             pe_inst = (row.get("put_options")  or {}).get("instrument_key")
             break
 
-    def _vwap_for(inst_key):
-        if not inst_key:
-            return None, None
-        try:
-            enc = urllib.parse.quote(inst_key, safe="")
-            r = requests.get(
-                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
-                headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
-                timeout=10,
-            )
-            candles = (r.json().get("data") or {}).get("candles") or []
-            if not candles:
-                return None, None
-            cum_tp_vol = 0.0
-            cum_vol    = 0.0
-            for c in candles:
-                # [timestamp, open, high, low, close, volume, oi]
+    _hdrs = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+
+    def _compute_vwap(candles):
+        cum_tp_vol = cum_vol = 0.0
+        for c in candles:
+            try:
                 h, l, cl, vol = float(c[2]), float(c[3]), float(c[4]), float(c[5])
                 if vol > 0:
                     cum_tp_vol += ((h + l + cl) / 3) * vol
                     cum_vol    += vol
-            if cum_vol > 0:
-                return cum_tp_vol / cum_vol, cum_vol
+            except Exception:
+                pass
+        return (cum_tp_vol / cum_vol, cum_vol) if cum_vol > 0 else (None, None)
+
+    def _vwap_for(inst_key):
+        if not inst_key:
             return None, None
+        enc = urllib.parse.quote(inst_key, safe="")
+        # 1. Intraday v3 (today's session)
+        try:
+            r = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
+                headers=_hdrs, timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if candles:
+                return _compute_vwap(candles)
         except Exception:
-            return None, None
+            pass
+        # 2. Historical v2 fallback — previous business day 1-min candles
+        try:
+            prev_day = _prev_biz_day().strftime("%Y-%m-%d")
+            r = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{prev_day}/{prev_day}",
+                headers=_hdrs, timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if candles:
+                return _compute_vwap(candles)
+        except Exception:
+            pass
+        return None, None
 
     ce_vwap, ce_vol = _vwap_for(ce_inst)
     pe_vwap, pe_vol = _vwap_for(pe_inst)
