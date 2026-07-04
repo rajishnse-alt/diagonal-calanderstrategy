@@ -1584,6 +1584,21 @@ for _cl_row in near_raw:
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
 
+# ── ATM CE/PE VWAP from near chain raw data ──────────────────────────────────
+_atm_ce_vwap = _atm_pe_vwap = None
+for _vw_row in near_raw:
+    try:
+        if int(float(_vw_row.get("strike_price", 0))) == int(atm):
+            _c_md = (_vw_row.get("call_options") or {}).get("market_data") or {}
+            _p_md = (_vw_row.get("put_options")  or {}).get("market_data") or {}
+            _cv = float(_c_md.get("vwap") or 0)
+            _pv = float(_p_md.get("vwap") or 0)
+            if _cv > 0: _atm_ce_vwap = _cv
+            if _pv > 0: _atm_pe_vwap = _pv
+            break
+    except Exception:
+        pass
+
 # ── Intraday OI baseline tracking ─────────────────────────────────────────────
 # Upstox chain has no intraday OI change field — we snapshot OI on first load
 # of the day and diff against it on every 3-min refresh.
@@ -1694,8 +1709,30 @@ with r1c1:
     st.markdown(f"<div class='card'><div class='lbl'>NIFTY Spot</div>"
                 f"<div class='val-big'>₹{spot:,.2f}</div></div>", unsafe_allow_html=True)
 with r1c2:
-    st.markdown(f"<div class='card card-gold'><div class='lbl'>ATM Strike</div>"
-                f"<div class='val-big val-gold'>{atm}</div></div>", unsafe_allow_html=True)
+    _atm_ce_ltp = near_ce.get(float(atm), 0)
+    _atm_pe_ltp = near_pe.get(float(atm), 0)
+    def _fmt_vwap(v): return f"₹{v:.1f}" if v else "—"
+    st.markdown(
+        f"<div class='card card-gold'>"
+        f"<div class='lbl'>ATM Strike</div>"
+        f"<div class='val-big val-gold' style='margin-bottom:6px;'>{atm}</div>"
+        f"<div style='display:flex;gap:12px;font-family:var(--mono);font-size:12px;'>"
+        # CE column
+        f"<div style='flex:1;'>"
+        f"<div style='font-size:10px;color:var(--ce);letter-spacing:1px;font-weight:700;'>CE</div>"
+        f"<div style='color:var(--ce);font-size:14px;font-weight:700;'>₹{_atm_ce_ltp:.1f}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_vwap(_atm_ce_vwap)}</div>"
+        f"</div>"
+        # PE column
+        f"<div style='flex:1;'>"
+        f"<div style='font-size:10px;color:var(--pe);letter-spacing:1px;font-weight:700;'>PE</div>"
+        f"<div style='color:var(--pe);font-size:14px;font-weight:700;'>₹{_atm_pe_ltp:.1f}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_vwap(_atm_pe_vwap)}</div>"
+        f"</div>"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
 # Row 1b — PCR + SPCL (near chain, using exact atm_tracker formulas)
 try:
