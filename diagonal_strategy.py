@@ -1849,8 +1849,18 @@ if _vp_tgt_l:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
 # Buy 1 lot: far expiry ATM straddle
-_far_atm_ce_ltp   = far_ce.get(float(atm), 0)
-_far_atm_pe_ltp   = far_pe.get(float(atm), 0)
+# Scan nearby strikes in far chain — far expiry may not list every near-chain strike
+def _nearest_far_ltp(far_map, base, step, max_steps=10):
+    """Return (strike, ltp) of nearest strike with valid LTP around base."""
+    for i in range(0, max_steps + 1):
+        for delta in ([0] if i == 0 else [i * step, -i * step]):
+            ltp = far_map.get(float(base + delta), 0)
+            if ltp > 0:
+                return int(base + delta), ltp
+    return int(base), 0.0
+
+_far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP)
+_far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP)
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
 _buy_target_70    = (_3lot_sell_total * 0.70) if _3lot_sell_total else None
 _buy_ok           = bool(_buy_target_70 and _far_atm_straddle >= _buy_target_70)
@@ -2301,7 +2311,7 @@ with pb3:
             f"<div class='lbl' style='color:var(--bull);'>BUY 1 lot far &nbsp;·&nbsp; {far_exp} ({fw:.1f}w)</div>"
             f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:{_buy_val_col};'>₹{_far_atm_straddle:.2f}</div>"
             f"<div class='lbl' style='margin-top:2px;'>"
-            f"ATM {_pill_ce(atm)} ₹{_far_atm_ce_ltp:.2f} + {_pill_pe(atm)} ₹{_far_atm_pe_ltp:.2f}"
+            f"CE {_pill_ce(_far_atm_ce_strike)} ₹{_far_atm_ce_ltp:.2f} + PE {_pill_pe(_far_atm_pe_strike)} ₹{_far_atm_pe_ltp:.2f}"
             f"</div>"
             f"<div style='font-size:10px;margin-top:2px;color:{_buy_chk_col};font-weight:700;'>{_buy_chk_txt}</div>"
             f"</div>"
