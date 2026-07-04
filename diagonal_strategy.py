@@ -1798,39 +1798,41 @@ with r1c2:
         _regime_col   = "var(--gold)"  if _is_sideways else "var(--bear)"
         _regime_bg    = "var(--gold-dim)" if _is_sideways else "var(--bear-dim)"
         _regime_icon  = "↔" if _is_sideways else "↗"
-        _regime_hint  = f"Straddle ₹{_straddle_ltp:.1f} {'&lt;' if _is_sideways else '&gt;'} VWAP ₹{_straddle_vwap:.1f}"
-        _regime_html  = (
-            f"<div style='margin-top:8px;padding:4px 8px;border-radius:5px;"
-            f"background:{_regime_bg};border-left:3px solid {_regime_col};'>"
-            f"<span style='color:{_regime_col};font-weight:700;font-size:12px;'>"
-            f"{_regime_icon} {_regime_label}</span>"
-            f"<span style='color:var(--muted);font-size:10px;margin-left:6px;'>{_regime_hint}</span>"
-            f"</div>"
-        )
+
     else:
-        _regime_html = ""
+        pass
 
     st.markdown(
         f"<div class='card card-gold'>"
         f"<div class='lbl'>ATM Strike</div>"
         f"<div class='val-big val-gold' style='margin-bottom:6px;'>{atm}</div>"
-        f"<div style='display:flex;gap:12px;font-family:var(--mono);font-size:12px;'>"
+        f"<div style='display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;'>"
         # CE column
-        f"<div style='flex:1;border-right:1px solid var(--border);padding-right:10px;'>"
+        f"<div style='flex:1;'>"
         f"<div style='font-size:10px;color:var(--ce);letter-spacing:1px;font-weight:700;margin-bottom:3px;'>CE</div>"
         f"<div style='color:var(--ce);font-size:14px;font-weight:700;'>₹{_atm_ce_ltp:.1f} {_ltp_vs_vwap(_atm_ce_ltp, _atm_ce_vwap)}</div>"
         f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_v(_atm_ce_vwap)}</div>"
-        f"<div style='color:var(--muted);font-size:10px;'>Vol&nbsp;&nbsp; {_fmt_vol(_atm_ce_vol)}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>Vol {_fmt_vol(_atm_ce_vol)}</div>"
         f"</div>"
+        # Centre regime badge
+        + (
+            f"<div style='text-align:center;padding:4px 6px;border-radius:6px;"
+            f"background:{_regime_bg};border:1px solid {_regime_col};min-width:64px;'>"
+            f"<div style='color:{_regime_col};font-size:14px;line-height:1;'>{_regime_icon}</div>"
+            f"<div style='color:{_regime_col};font-size:9px;font-weight:700;letter-spacing:1px;'>{_regime_label}</div>"
+            f"<div style='color:var(--muted);font-size:8px;margin-top:2px;'>₹{_straddle_ltp:.0f} vs ₹{_straddle_vwap:.0f}</div>"
+            f"</div>"
+            if _straddle_vwap else
+            f"<div style='min-width:64px;text-align:center;color:var(--muted);font-size:10px;'>—</div>"
+        )
         # PE column
-        f"<div style='flex:1;padding-left:2px;'>"
+        + f"<div style='flex:1;text-align:right;'>"
         f"<div style='font-size:10px;color:var(--pe);letter-spacing:1px;font-weight:700;margin-bottom:3px;'>PE</div>"
         f"<div style='color:var(--pe);font-size:14px;font-weight:700;'>₹{_atm_pe_ltp:.1f} {_ltp_vs_vwap(_atm_pe_ltp, _atm_pe_vwap)}</div>"
         f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_v(_atm_pe_vwap)}</div>"
-        f"<div style='color:var(--muted);font-size:10px;'>Vol&nbsp;&nbsp; {_fmt_vol(_atm_pe_vol)}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>Vol {_fmt_vol(_atm_pe_vol)}</div>"
         f"</div>"
         f"</div>"
-        + _regime_html +
         f"</div>",
         unsafe_allow_html=True
     )
