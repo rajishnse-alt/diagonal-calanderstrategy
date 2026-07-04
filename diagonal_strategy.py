@@ -2277,6 +2277,41 @@ with pb3:
     def _pill_ce(s): return f"<span class='strike-pill-ce'>{s}</span>"
     def _pill_pe(s): return f"<span class='strike-pill'>{s}</span>"
 
+    # Pre-compute 3-lot diagonal HTML (avoids backslash-in-f-string errors)
+    if _3lot_sell_total:
+        _buy_val_col  = "var(--bull)" if _buy_ok else "var(--gold)"
+        _buy_chk_col  = "var(--bull)" if _buy_ok else "var(--bear)"
+        _buy_chk_txt  = (
+            f"{'✓' if _buy_ok else '✗'} {_buy_ratio_pct:.0f}% of sell total "
+            f"(need ≥70% = ₹{_buy_target_70:.1f})"
+            if _buy_ratio_pct else "—"
+        )
+        _3lot_diag_html = (
+            f"<div style='margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"
+            f"display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;'>"
+            f"<div style='flex:1;min-width:140px;'>"
+            f"<div class='lbl' style='color:var(--bear);'>SELL 3 lots &nbsp;·&nbsp; {_vp_tgt_band}</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--bear);'>₹{_3lot_sell_total:.2f}</div>"
+            f"<div class='lbl' style='margin-top:2px;'>"
+            f"CE {_pill_ce(_3lot_ce_strike)} ₹{_3lot_ce_ltp:.2f} + PE {_pill_pe(_3lot_pe_strike)} ₹{_3lot_pe_ltp:.2f} × 3"
+            f"</div>"
+            f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
+            f"Target: {_vix_str_label}/3 = ₹{_3lot_sell_total/3:.1f}/lot"
+            f"</div>"
+            f"</div>"
+            f"<div style='flex:1;min-width:140px;border-left:1px solid var(--border);padding-left:12px;'>"
+            f"<div class='lbl' style='color:var(--bull);'>BUY 1 lot far &nbsp;·&nbsp; {far_exp} ({fw:.1f}w)</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:{_buy_val_col};'>₹{_far_atm_straddle:.2f}</div>"
+            f"<div class='lbl' style='margin-top:2px;'>"
+            f"ATM {_pill_ce(atm)} ₹{_far_atm_ce_ltp:.2f} + {_pill_pe(atm)} ₹{_far_atm_pe_ltp:.2f}"
+            f"</div>"
+            f"<div style='font-size:10px;margin-top:2px;color:{_buy_chk_col};font-weight:700;'>{_buy_chk_txt}</div>"
+            f"</div>"
+            f"</div>"
+        )
+    else:
+        _3lot_diag_html = ""
+
     st.markdown(
         f"<div class='card' style='border-left:4px solid var(--bear);'>"
         # Row 1: two methods side by side
@@ -2305,40 +2340,7 @@ with pb3:
         f"</div>"
         f"</div>"
         # ── 3-Sell / 1-Buy Diagonal section ──────────────────────────────────
-        + (
-            f"<div style='margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"
-            f"display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;'>"
-            # SELL 3 lots
-            f"<div style='flex:1;min-width:140px;'>"
-            f"<div class='lbl' style='color:var(--bear);'>SELL 3 lots &nbsp;·&nbsp; {_vp_tgt_band}</div>"
-            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--bear);'>₹{_3lot_sell_total:.2f}</div>"
-            f"<div class='lbl' style='margin-top:2px;'>"
-            f"CE {_pill_ce(_3lot_ce_strike)} ₹{_3lot_ce_ltp:.2f} + PE {_pill_pe(_3lot_pe_strike)} ₹{_3lot_pe_ltp:.2f} × 3"
-            f"</div>"
-            f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
-            f"Target: {_vix_str_label}/3 = ₹{_3lot_sell_total/3:.1f}/lot"
-            f"</div>"
-            f"</div>"
-            # BUY 1 lot
-            f"<div style='flex:1;min-width:140px;border-left:1px solid var(--border);padding-left:12px;'>"
-            f"<div class='lbl' style='color:var(--bull);'>BUY 1 lot far &nbsp;·&nbsp; {far_exp} ({fw:.1f}w)</div>"
-            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;"
-            f"color:{\"var(--bull)\" if _buy_ok else \"var(--gold)\"};'>₹{_far_atm_straddle:.2f}</div>"
-            f"<div class='lbl' style='margin-top:2px;'>"
-            f"ATM {_pill_ce(atm)} ₹{_far_atm_ce_ltp:.2f} + {_pill_pe(atm)} ₹{_far_atm_pe_ltp:.2f}"
-            f"</div>"
-            f"<div style='font-size:10px;margin-top:2px;"
-            f"color:{\"var(--bull)\" if _buy_ok else \"var(--bear)\"};font-weight:700;'>"
-            + (
-                f"{'✓' if _buy_ok else '✗'} {_buy_ratio_pct:.0f}% of sell total "
-                f"(need ≥70% = ₹{_buy_target_70:.1f})"
-                if _buy_ratio_pct else "—"
-            )
-            + f"</div>"
-            f"</div>"
-            f"</div>"
-            if _3lot_sell_total else ""
-        )
+        + _3lot_diag_html
         + f"</div>",
         unsafe_allow_html=True)
 with pb4:
