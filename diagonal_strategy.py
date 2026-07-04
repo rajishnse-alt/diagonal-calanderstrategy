@@ -1733,6 +1733,7 @@ if _vix_ok and spot:
 else:
     _daily_vix = _exp_1s = _exp_2s = 0.0
     _steps_1s  = _steps_2s = SHORT_STEPS
+    _range_hi_1s = _range_lo_1s = _ltp_hi_1s = _ltp_lo_1s = None
 
 # ── Probable range banner (VIX × √DTE) ───────────────────────────────────────
 if _vix_ok and spot:
@@ -2231,12 +2232,15 @@ with pb3:
     _sell_ce_ltp2 = near_ce.get(float(sell_ce_strike), 0)
     _sell_pe_ltp2 = near_pe.get(float(sell_pe_strike), 0)
     _strangle_val = _sell_ce_ltp2 + _sell_pe_ltp2
-    # VIX-based strangle target (2× per-leg range)
+
+    # ── Method 1: 1σ Range strangle ──────────────────────────────────────────
+    _range_strangle_val = ((_ltp_hi_1s or 0) + (_ltp_lo_1s or 0)) if _range_hi_1s else None
+
+    # ── Method 2: VIX premium strangle (current sell strikes) ─────────────────
     if _vix_ok and _vp_tgt_l:
         _vix_strangle_lo = _vp_tgt_l * 2
         _vix_strangle_hi = (_vp_tgt_h * 2) if _vp_tgt_h else None
         _vix_str_label   = f"₹{_vix_strangle_lo:.0f}–{_vix_strangle_hi:.0f}" if _vix_strangle_hi else f"₹{_vix_strangle_lo:.0f}+"
-        # Check actual strangle vs VIX target
         _in_range = _vix_strangle_lo <= _strangle_val <= (_vix_strangle_hi or float("inf"))
         _above    = _strangle_val > (_vix_strangle_hi or _vix_strangle_lo)
         _tgt_col  = "var(--bull)" if _in_range else ("var(--bear)" if _above else "var(--gold)")
@@ -2244,26 +2248,35 @@ with pb3:
     else:
         _vix_str_label = _tgt_col = _tgt_icon = None
 
+    def _pill_ce(s): return f"<span class='strike-pill-ce'>{s}</span>"
+    def _pill_pe(s): return f"<span class='strike-pill'>{s}</span>"
+
     st.markdown(
         f"<div class='card' style='border-left:4px solid var(--bear);'>"
-        f"<div style='display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;'>"
-        f"<div>"
-        f"<div class='lbl'>Sell Strangle Premium</div>"
-        f"<div class='val-big val-bear' style='margin:0;'>₹{_strangle_val:.2f}</div>"
-        f"</div>"
+        # Row 1: two methods side by side
+        f"<div style='display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;'>"
+        # Method 1 — 1σ Range
         + (
-            f"<div style='border-left:1px solid var(--border);padding-left:12px;'>"
-            f"<div class='lbl'>{_vp_tgt_band} VIX Strangle</div>"
-            f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--gold);'>"
-            f"{_vix_str_label} <span style='font-size:14px;color:{_tgt_col};'>{_tgt_icon}</span>"
+            f"<div style='flex:1;min-width:160px;'>"
+            f"<div class='lbl'>① 1σ Range Strangle</div>"
+            f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--text);'>₹{_range_strangle_val:.2f}</div>"
+            f"<div class='lbl' style='margin-top:2px;'>"
+            f"CE {_pill_ce(_range_hi_1s)} ₹{_ltp_hi_1s:.2f} + PE {_pill_pe(_range_lo_1s)} ₹{_ltp_lo_1s:.2f}"
             f"</div>"
             f"</div>"
-            if _vix_str_label else ""
+            if _range_strangle_val else ""
         )
+        # Method 2 — VIX Premium
+        + f"<div style='flex:1;min-width:160px;border-left:1px solid var(--border);padding-left:14px;'>"
+        f"<div class='lbl'>② VIX Premium Strangle &nbsp;<span style='color:var(--gold);'>{_vp_tgt_band}</span></div>"
+        f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--bear);'>"
+        f"₹{_strangle_val:.2f}"
+        + (f" <span style='font-size:12px;color:{_tgt_col};'>vs {_vix_str_label} {_tgt_icon}</span>" if _vix_str_label else "")
         + f"</div>"
-        f"<div class='lbl' style='margin-top:4px;'>"
-        f"CE <span class='strike-pill-ce'>{sell_ce_strike}</span> ₹{_sell_ce_ltp2:.2f} &nbsp;+&nbsp; "
-        f"PE <span class='strike-pill'>{sell_pe_strike}</span> ₹{_sell_pe_ltp2:.2f}"
+        f"<div class='lbl' style='margin-top:2px;'>"
+        f"CE {_pill_ce(sell_ce_strike)} ₹{_sell_ce_ltp2:.2f} + PE {_pill_pe(sell_pe_strike)} ₹{_sell_pe_ltp2:.2f}"
+        f"</div>"
+        f"</div>"
         f"</div>"
         f"</div>",
         unsafe_allow_html=True)
