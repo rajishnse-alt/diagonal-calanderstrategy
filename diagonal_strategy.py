@@ -1584,17 +1584,32 @@ for _cl_row in near_raw:
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
 
-# ── ATM CE/PE VWAP from near chain raw data ──────────────────────────────────
+# ── ATM CE/PE VWAP — computed from day H, L, LTP (typical price) ────────────
+# VWAP = Σ(Typical Price × Volume) / Σ(Volume)
+# From chain snapshot (single daily bar): VWAP ≈ (High + Low + LTP) / 3
 _atm_ce_vwap = _atm_pe_vwap = None
+_atm_ce_vol  = _atm_pe_vol  = None
 for _vw_row in near_raw:
     try:
         if int(float(_vw_row.get("strike_price", 0))) == int(atm):
             _c_md = (_vw_row.get("call_options") or {}).get("market_data") or {}
             _p_md = (_vw_row.get("put_options")  or {}).get("market_data") or {}
-            _cv = float(_c_md.get("vwap") or 0)
-            _pv = float(_p_md.get("vwap") or 0)
-            if _cv > 0: _atm_ce_vwap = _cv
-            if _pv > 0: _atm_pe_vwap = _pv
+            # CE
+            _c_h = float(_c_md.get("high") or _c_md.get("day_high") or 0)
+            _c_l = float(_c_md.get("low")  or _c_md.get("day_low")  or 0)
+            _c_c = float(_c_md.get("ltp")  or 0)
+            _c_v = float(_c_md.get("volume") or _c_md.get("vol") or 0)
+            if _c_h > 0 and _c_l > 0 and _c_c > 0:
+                _atm_ce_vwap = (_c_h + _c_l + _c_c) / 3
+            if _c_v > 0: _atm_ce_vol = _c_v
+            # PE
+            _p_h = float(_p_md.get("high") or _p_md.get("day_high") or 0)
+            _p_l = float(_p_md.get("low")  or _p_md.get("day_low")  or 0)
+            _p_c = float(_p_md.get("ltp")  or 0)
+            _p_v = float(_p_md.get("volume") or _p_md.get("vol") or 0)
+            if _p_h > 0 and _p_l > 0 and _p_c > 0:
+                _atm_pe_vwap = (_p_h + _p_l + _p_c) / 3
+            if _p_v > 0: _atm_pe_vol = _p_v
             break
     except Exception:
         pass
@@ -1711,23 +1726,30 @@ with r1c1:
 with r1c2:
     _atm_ce_ltp = near_ce.get(float(atm), 0)
     _atm_pe_ltp = near_pe.get(float(atm), 0)
-    def _fmt_vwap(v): return f"₹{v:.1f}" if v else "—"
+    def _fmt_v(v): return f"₹{v:.1f}" if v else "—"
+    def _fmt_vol(v): return f"{int(v):,}" if v else "—"
+    # LTP vs VWAP direction indicator
+    def _ltp_vs_vwap(ltp, vwap):
+        if not vwap or not ltp: return ""
+        return "<span style='color:var(--bull);'>▲</span>" if ltp > vwap else "<span style='color:var(--bear);'>▼</span>"
     st.markdown(
         f"<div class='card card-gold'>"
         f"<div class='lbl'>ATM Strike</div>"
         f"<div class='val-big val-gold' style='margin-bottom:6px;'>{atm}</div>"
         f"<div style='display:flex;gap:12px;font-family:var(--mono);font-size:12px;'>"
         # CE column
-        f"<div style='flex:1;'>"
-        f"<div style='font-size:10px;color:var(--ce);letter-spacing:1px;font-weight:700;'>CE</div>"
-        f"<div style='color:var(--ce);font-size:14px;font-weight:700;'>₹{_atm_ce_ltp:.1f}</div>"
-        f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_vwap(_atm_ce_vwap)}</div>"
+        f"<div style='flex:1;border-right:1px solid var(--border);padding-right:10px;'>"
+        f"<div style='font-size:10px;color:var(--ce);letter-spacing:1px;font-weight:700;margin-bottom:3px;'>CE</div>"
+        f"<div style='color:var(--ce);font-size:14px;font-weight:700;'>₹{_atm_ce_ltp:.1f} {_ltp_vs_vwap(_atm_ce_ltp, _atm_ce_vwap)}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_v(_atm_ce_vwap)}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>Vol&nbsp;&nbsp; {_fmt_vol(_atm_ce_vol)}</div>"
         f"</div>"
         # PE column
-        f"<div style='flex:1;'>"
-        f"<div style='font-size:10px;color:var(--pe);letter-spacing:1px;font-weight:700;'>PE</div>"
-        f"<div style='color:var(--pe);font-size:14px;font-weight:700;'>₹{_atm_pe_ltp:.1f}</div>"
-        f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_vwap(_atm_pe_vwap)}</div>"
+        f"<div style='flex:1;padding-left:2px;'>"
+        f"<div style='font-size:10px;color:var(--pe);letter-spacing:1px;font-weight:700;margin-bottom:3px;'>PE</div>"
+        f"<div style='color:var(--pe);font-size:14px;font-weight:700;'>₹{_atm_pe_ltp:.1f} {_ltp_vs_vwap(_atm_pe_ltp, _atm_pe_vwap)}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>VWAP {_fmt_v(_atm_pe_vwap)}</div>"
+        f"<div style='color:var(--muted);font-size:10px;'>Vol&nbsp;&nbsp; {_fmt_vol(_atm_pe_vol)}</div>"
         f"</div>"
         f"</div>"
         f"</div>",
