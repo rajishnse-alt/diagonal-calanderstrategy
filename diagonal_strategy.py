@@ -1850,17 +1850,31 @@ if _vp_tgt_l:
 
 # Buy 1 lot: far expiry ATM straddle
 # Scan nearby strikes in far chain — far expiry may not list every near-chain strike
-def _nearest_far_ltp(far_map, base, step, max_steps=10):
-    """Return (strike, ltp) of nearest strike with valid LTP around base."""
-    for i in range(0, max_steps + 1):
-        for delta in ([0] if i == 0 else [i * step, -i * step]):
-            ltp = far_map.get(float(base + delta), 0)
+def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=10):
+    """Return (strike, ltp) of nearest strike with valid LTP.
+    direction=1  → scan OTM CE side (base+step, base+2*step, ...)
+    direction=-1 → scan OTM PE side (base-step, base-2*step, ...)
+    direction=0  → scan outward both sides (original behaviour)
+    Falls back to ATM itself if nothing found in scanned direction.
+    """
+    if direction == 0:
+        for i in range(0, max_steps + 1):
+            for delta in ([0] if i == 0 else [i * step, -i * step]):
+                ltp = far_map.get(float(base + delta), 0)
+                if ltp > 0:
+                    return int(base + delta), ltp
+    else:
+        # Try ATM first, then walk strictly in the given direction
+        for i in range(0, max_steps + 1):
+            strike = base + direction * i * step
+            ltp = far_map.get(float(strike), 0)
             if ltp > 0:
-                return int(base + delta), ltp
+                return int(strike), ltp
     return int(base), 0.0
 
-_far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP)
-_far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP)
+# CE: scan upward from ATM (OTM call side); PE: scan downward from ATM (OTM put side)
+_far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP, direction=1)
+_far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP, direction=-1)
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
 _buy_target_70    = (_3lot_sell_total * 0.70) if _3lot_sell_total else None
 _buy_target_300   = (_3lot_sell_total * 3.00) if _3lot_sell_total else None
