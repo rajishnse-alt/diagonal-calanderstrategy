@@ -1863,7 +1863,9 @@ _far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP)
 _far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP)
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
 _buy_target_70    = (_3lot_sell_total * 0.70) if _3lot_sell_total else None
-_buy_ok           = bool(_buy_target_70 and _far_atm_straddle >= _buy_target_70)
+_buy_target_80    = (_3lot_sell_total * 0.80) if _3lot_sell_total else None
+_buy_ok           = bool(_buy_target_70 and _buy_target_80
+                         and _buy_target_70 <= _far_atm_straddle <= _buy_target_80)
 _buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
 # ─────────────────────────────────────────────
@@ -2287,11 +2289,12 @@ with pb3:
 
     # Pre-compute 3-lot diagonal HTML (avoids backslash-in-f-string errors)
     if _3lot_sell_total:
-        _buy_val_col  = "var(--bull)" if _buy_ok else "var(--gold)"
-        _buy_chk_col  = "var(--bull)" if _buy_ok else "var(--bear)"
+        _buy_too_high = bool(_buy_target_80 and _far_atm_straddle > _buy_target_80)
+        _buy_val_col  = "var(--bull)" if _buy_ok else ("var(--gold)" if _buy_too_high else "var(--bear)")
+        _buy_chk_col  = "var(--bull)" if _buy_ok else ("var(--gold)" if _buy_too_high else "var(--bear)")
         _buy_chk_txt  = (
             f"{'✓' if _buy_ok else '✗'} {_buy_ratio_pct:.0f}% of sell total "
-            f"(need ≥70% = ₹{_buy_target_70:.1f})"
+            f"(need 70–80% = ₹{_buy_target_70:.1f}–₹{_buy_target_80:.1f})"
             if _buy_ratio_pct else "—"
         )
         _3lot_diag_html = (
