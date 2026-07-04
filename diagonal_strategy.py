@@ -1620,7 +1620,7 @@ if exp_err or not all_exp:
 
 today         = datetime.now(IST).date()
 near_cutoff   = today + timedelta(weeks=3)
-far_cutoff    = today + timedelta(weeks=3)
+far_cutoff    = today + timedelta(weeks=2)
 near_expiries = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() <= near_cutoff] or all_exp[:2]
 far_expiries  = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() >= far_cutoff]  or all_exp[4:]
 
@@ -1628,7 +1628,7 @@ col_e1, col_e2 = st.columns(2)
 with col_e1:
     near_exp = st.selectbox(f"📅 Current Expiry — SELL ({len(near_expiries)} available)", near_expiries)
 with col_e2:
-    far_exp  = st.selectbox(f"📅 Far Expiry — BUY ≥3 weeks ({len(far_expiries)} available)", far_expiries)
+    far_exp  = st.selectbox(f"📅 Far Expiry — BUY ≥2 weeks ({len(far_expiries)} available)", far_expiries)
 
 nw = weeks_out(near_exp)
 fw = weeks_out(far_exp)
