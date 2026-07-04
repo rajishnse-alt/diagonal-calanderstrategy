@@ -890,6 +890,32 @@ def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ra
     return base_steps, int(sell_strike), sell_ltp, cands, False
 
 
+def find_strike_by_premium(near_map, atm, step, opt_type, tgt_low, tgt_high, max_steps=25):
+    """
+    Scan OTM strikes and return the one whose LTP falls within [tgt_low, tgt_high].
+    CE scans upward from ATM, PE scans downward.
+    If no strike is in range, returns the one closest to the midpoint.
+    Returns (strike, ltp, in_range).
+    """
+    direction = 1 if opt_type == "CE" else -1
+    tgt_mid   = (tgt_low + (tgt_high if tgt_high else tgt_low * 1.5)) / 2
+    best_strike = best_ltp = None
+    best_dist   = float("inf")
+    in_range    = False
+    for i in range(1, max_steps + 1):
+        s   = atm + direction * i * step
+        ltp = near_map.get(float(s), 0)
+        if ltp <= 0:
+            continue
+        within = tgt_low <= ltp <= (tgt_high if tgt_high else float("inf"))
+        dist   = abs(ltp - tgt_mid)
+        if within and (not in_range or dist < best_dist):
+            best_strike, best_ltp, best_dist, in_range = s, ltp, dist, True
+        elif not in_range and dist < best_dist:
+            best_strike, best_ltp, best_dist = s, ltp, dist
+    return (int(best_strike), best_ltp, in_range) if best_strike else (None, None, False)
+
+
 def bs_price(S, K, T, sigma, opt_type="CE", r=0.065):
     """Black-Scholes option price."""
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
@@ -1758,14 +1784,49 @@ if st.session_state.get("_last_vix_default") != _vix_default:
 # read the current value from session_state here so strike calc uses it
 short_steps = st.session_state.get("short_steps_val", _vix_default)
 
+# ── VIX target premium range (per leg) ───────────────────────────────────────
+if _vix_ok:
+    if _eff_vix < 13:
+        _vp_tgt_l, _vp_tgt_h = _vp_lo_l, _vp_lo_h
+        _vp_tgt_band = f"VIX &lt;13"
+    elif _eff_vix <= 19:
+        _vp_tgt_l, _vp_tgt_h = _vp_mid_l, _vp_mid_h
+        _vp_tgt_band = f"VIX 14-18"
+    else:
+        _vp_tgt_l, _vp_tgt_h = _vp_hi, None
+        _vp_tgt_band = f"VIX &gt;19"
+else:
+    _vp_tgt_l = _vp_tgt_h = None
+    _vp_tgt_band = ""
+
 # ─────────────────────────────────────────────
-# AUTO-ADJUST SELL STRIKES — CE and PE independently
-# Walk toward ATM until long LTP <= sell LTP (ratio makes sense)
+# SELL STRIKES — chosen by VIX target premium when VIX is available,
+# else fall back to step-based auto_adjust
 # ─────────────────────────────────────────────
-ce_steps, sell_ce_strike, sell_ce_ltp, ce_cands, ce_adjusted = \
-    auto_adjust_sell_strike(short_steps, atm, near_ce, far_ce, "CE", ltp_ratio)
-pe_steps, sell_pe_strike, sell_pe_ltp, pe_cands, pe_adjusted = \
-    auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio)
+_vix_ce_strike = _vix_pe_strike = None
+_vix_ce_ltp    = _vix_pe_ltp    = None
+_vix_ce_in_range = _vix_pe_in_range = False
+
+if _vp_tgt_l:
+    _vix_ce_strike, _vix_ce_ltp, _vix_ce_in_range = \
+        find_strike_by_premium(near_ce, atm, STEP, "CE", _vp_tgt_l, _vp_tgt_h)
+    _vix_pe_strike, _vix_pe_ltp, _vix_pe_in_range = \
+        find_strike_by_premium(near_pe, atm, STEP, "PE", _vp_tgt_l, _vp_tgt_h)
+
+# Use VIX-premium strike if found, else fall back to step-based selection
+if _vix_ce_strike and _vix_pe_strike:
+    sell_ce_strike, sell_ce_ltp = _vix_ce_strike, _vix_ce_ltp
+    sell_pe_strike, sell_pe_ltp = _vix_pe_strike, _vix_pe_ltp
+    ce_steps = abs(sell_ce_strike - atm) // STEP
+    pe_steps = abs(sell_pe_strike - atm) // STEP
+    ce_cands = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
+    pe_cands = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
+    ce_adjusted = pe_adjusted = False
+else:
+    ce_steps, sell_ce_strike, sell_ce_ltp, ce_cands, ce_adjusted = \
+        auto_adjust_sell_strike(short_steps, atm, near_ce, far_ce, "CE", ltp_ratio)
+    pe_steps, sell_pe_strike, sell_pe_ltp, pe_cands, pe_adjusted = \
+        auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio)
 
 best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
 best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
@@ -2170,14 +2231,41 @@ with pb3:
     _sell_ce_ltp2 = near_ce.get(float(sell_ce_strike), 0)
     _sell_pe_ltp2 = near_pe.get(float(sell_pe_strike), 0)
     _strangle_val = _sell_ce_ltp2 + _sell_pe_ltp2
+    # VIX-based strangle target (2× per-leg range)
+    if _vix_ok and _vp_tgt_l:
+        _vix_strangle_lo = _vp_tgt_l * 2
+        _vix_strangle_hi = (_vp_tgt_h * 2) if _vp_tgt_h else None
+        _vix_str_label   = f"₹{_vix_strangle_lo:.0f}–{_vix_strangle_hi:.0f}" if _vix_strangle_hi else f"₹{_vix_strangle_lo:.0f}+"
+        # Check actual strangle vs VIX target
+        _in_range = _vix_strangle_lo <= _strangle_val <= (_vix_strangle_hi or float("inf"))
+        _above    = _strangle_val > (_vix_strangle_hi or _vix_strangle_lo)
+        _tgt_col  = "var(--bull)" if _in_range else ("var(--bear)" if _above else "var(--gold)")
+        _tgt_icon = "✓" if _in_range else ("↑" if _above else "↓")
+    else:
+        _vix_str_label = _tgt_col = _tgt_icon = None
+
     st.markdown(
         f"<div class='card' style='border-left:4px solid var(--bear);'>"
+        f"<div style='display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;'>"
+        f"<div>"
         f"<div class='lbl'>Sell Strangle Premium</div>"
-        f"<div class='val-big val-bear'>₹{_strangle_val:.2f}</div>"
-        f"<div class='lbl'>"
+        f"<div class='val-big val-bear' style='margin:0;'>₹{_strangle_val:.2f}</div>"
+        f"</div>"
+        + (
+            f"<div style='border-left:1px solid var(--border);padding-left:12px;'>"
+            f"<div class='lbl'>{_vp_tgt_band} VIX Strangle</div>"
+            f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--gold);'>"
+            f"{_vix_str_label} <span style='font-size:14px;color:{_tgt_col};'>{_tgt_icon}</span>"
+            f"</div>"
+            f"</div>"
+            if _vix_str_label else ""
+        )
+        + f"</div>"
+        f"<div class='lbl' style='margin-top:4px;'>"
         f"CE <span class='strike-pill-ce'>{sell_ce_strike}</span> ₹{_sell_ce_ltp2:.2f} &nbsp;+&nbsp; "
         f"PE <span class='strike-pill'>{sell_pe_strike}</span> ₹{_sell_pe_ltp2:.2f}"
-        f"</div></div>",
+        f"</div>"
+        f"</div>",
         unsafe_allow_html=True)
 with pb4:
     if _spp is not None:
