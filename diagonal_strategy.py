@@ -1620,7 +1620,7 @@ if exp_err or not all_exp:
 
 today         = datetime.now(IST).date()
 near_cutoff   = today + timedelta(weeks=3)
-far_cutoff    = today + timedelta(weeks=5)
+far_cutoff    = today + timedelta(weeks=3)
 near_expiries = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() <= near_cutoff] or all_exp[:2]
 far_expiries  = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() >= far_cutoff]  or all_exp[4:]
 
@@ -1628,7 +1628,7 @@ col_e1, col_e2 = st.columns(2)
 with col_e1:
     near_exp = st.selectbox(f"📅 Current Expiry — SELL ({len(near_expiries)} available)", near_expiries)
 with col_e2:
-    far_exp  = st.selectbox(f"📅 Far Expiry — BUY ≥5 weeks ({len(far_expiries)} available)", far_expiries)
+    far_exp  = st.selectbox(f"📅 Far Expiry — BUY ≥3 weeks ({len(far_expiries)} available)", far_expiries)
 
 nw = weeks_out(near_exp)
 fw = weeks_out(far_exp)
@@ -1831,6 +1831,32 @@ else:
 
 best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
 best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
+
+# ── 3-Lot Sell / 1-Lot Buy diagonal computation ──────────────────────────────
+# Sell 3 lots: per-leg target = VIX_strangle_target / 6
+#              → 3 × (CE + PE) per unit = VIX_strangle_target
+# Buy  1 lot : far expiry ATM straddle ≥ 70% of 3-lot sell total
+_3lot_sell_lots = 3
+_3lot_ce_strike = _3lot_pe_strike = _3lot_ce_ltp = _3lot_pe_ltp = None
+_3lot_sell_total = None
+
+if _vp_tgt_l:
+    _per_leg_3lot_lo = _vp_tgt_l / 3          # = VIX_strangle_lo / 6
+    _per_leg_3lot_hi = (_vp_tgt_h / 3) if _vp_tgt_h else None
+    _3lot_ce_strike, _3lot_ce_ltp, _ = find_strike_by_premium(
+        near_ce, atm, STEP, "CE", _per_leg_3lot_lo, _per_leg_3lot_hi)
+    _3lot_pe_strike, _3lot_pe_ltp, _ = find_strike_by_premium(
+        near_pe, atm, STEP, "PE", _per_leg_3lot_lo, _per_leg_3lot_hi)
+    if _3lot_ce_ltp and _3lot_pe_ltp:
+        _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
+
+# Buy 1 lot: far expiry ATM straddle
+_far_atm_ce_ltp   = far_ce.get(float(atm), 0)
+_far_atm_pe_ltp   = far_pe.get(float(atm), 0)
+_far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
+_buy_target_70    = (_3lot_sell_total * 0.70) if _3lot_sell_total else None
+_buy_ok           = bool(_buy_target_70 and _far_atm_straddle >= _buy_target_70)
+_buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
 # ─────────────────────────────────────────────
 # MARKET SNAPSHOT
@@ -2266,9 +2292,9 @@ with pb3:
             f"</div>"
             if _range_strangle_val else ""
         )
-        # Method 2 — VIX Premium
+        # Method 2 — VIX Premium (1 lot)
         + f"<div style='flex:1;min-width:160px;border-left:1px solid var(--border);padding-left:14px;'>"
-        f"<div class='lbl'>② VIX Premium Strangle &nbsp;<span style='color:var(--gold);'>{_vp_tgt_band}</span></div>"
+        f"<div class='lbl'>② VIX Premium &nbsp;<span style='color:var(--gold);'>{_vp_tgt_band}</span></div>"
         f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--bear);'>"
         f"₹{_strangle_val:.2f}"
         + (f" <span style='font-size:12px;color:{_tgt_col};'>vs {_vix_str_label} {_tgt_icon}</span>" if _vix_str_label else "")
@@ -2278,7 +2304,42 @@ with pb3:
         f"</div>"
         f"</div>"
         f"</div>"
-        f"</div>",
+        # ── 3-Sell / 1-Buy Diagonal section ──────────────────────────────────
+        + (
+            f"<div style='margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"
+            f"display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;'>"
+            # SELL 3 lots
+            f"<div style='flex:1;min-width:140px;'>"
+            f"<div class='lbl' style='color:var(--bear);'>SELL 3 lots &nbsp;·&nbsp; {_vp_tgt_band}</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--bear);'>₹{_3lot_sell_total:.2f}</div>"
+            f"<div class='lbl' style='margin-top:2px;'>"
+            f"CE {_pill_ce(_3lot_ce_strike)} ₹{_3lot_ce_ltp:.2f} + PE {_pill_pe(_3lot_pe_strike)} ₹{_3lot_pe_ltp:.2f} × 3"
+            f"</div>"
+            f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
+            f"Target: {_vix_str_label}/3 = ₹{_3lot_sell_total/3:.1f}/lot"
+            f"</div>"
+            f"</div>"
+            # BUY 1 lot
+            f"<div style='flex:1;min-width:140px;border-left:1px solid var(--border);padding-left:12px;'>"
+            f"<div class='lbl' style='color:var(--bull);'>BUY 1 lot far &nbsp;·&nbsp; {far_exp} ({fw:.1f}w)</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;"
+            f"color:{\"var(--bull)\" if _buy_ok else \"var(--gold)\"};'>₹{_far_atm_straddle:.2f}</div>"
+            f"<div class='lbl' style='margin-top:2px;'>"
+            f"ATM {_pill_ce(atm)} ₹{_far_atm_ce_ltp:.2f} + {_pill_pe(atm)} ₹{_far_atm_pe_ltp:.2f}"
+            f"</div>"
+            f"<div style='font-size:10px;margin-top:2px;"
+            f"color:{\"var(--bull)\" if _buy_ok else \"var(--bear)\"};font-weight:700;'>"
+            + (
+                f"{'✓' if _buy_ok else '✗'} {_buy_ratio_pct:.0f}% of sell total "
+                f"(need ≥70% = ₹{_buy_target_70:.1f})"
+                if _buy_ratio_pct else "—"
+            )
+            + f"</div>"
+            f"</div>"
+            f"</div>"
+            if _3lot_sell_total else ""
+        )
+        + f"</div>",
         unsafe_allow_html=True)
 with pb4:
     if _spp is not None:
