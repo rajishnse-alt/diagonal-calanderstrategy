@@ -1640,7 +1640,8 @@ if _vwap_cached.get("key") == _vwap_cache_key and token:
     _atm_pe_vol  = _vwap_cached.get("pe_vol")
 else:
     _atm_ce_vwap = _atm_pe_vwap = _atm_ce_vol = _atm_pe_vol = None
-    if token and mkt_open:
+    if token:
+        # Fetch regardless of market status — when closed, Upstox returns last session's candles
         _atm_ce_vwap, _atm_pe_vwap, _atm_ce_vol, _atm_pe_vol = \
             fetch_atm_vwap(token, near_raw, atm)
         st.session_state["atm_vwap_cache"] = {
