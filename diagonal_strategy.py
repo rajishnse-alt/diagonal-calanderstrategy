@@ -2490,61 +2490,7 @@ with pb4:
             "<div class='lbl'>H/L data not yet available</div></div>",
             unsafe_allow_html=True)
 
-# Row 2 — CE legs
-r2c1, r2c2 = st.columns(2)
-ce_buy_pct = f"{best_ce['ltp']/sell_ce_ltp*100:.0f}% of sell LTP" if sell_ce_ltp > 0 and best_ce['ltp'] > 0 else ""
-_ce_adj_note = f" &nbsp;<span style='color:var(--gold);font-size:9px;'>⚙️ adj from {short_steps}</span>" if ce_adjusted else ""
-with r2c1:
-    st.markdown(
-        f"<div class='card card-ce'>"
-        f"<div class='lbl'>"
-        f"<span class='date-pill'>📅 {near_exp}</span>"
-        f"&nbsp; CE SELL — ATM+{ce_steps}{_ce_adj_note}"
-        f"</div>"
-        f"<div class='val-big val-ce'>₹{sell_ce_ltp:.2f}</div>"
-        f"<div style='margin-top:4px;'><span class='strike-pill-ce'>{sell_ce_strike}</span></div>"
-        f"</div>", unsafe_allow_html=True)
-with r2c2:
-    _ce_ratio_ok = best_ce['ltp'] <= sell_ce_ltp
-    _ce_ratio_icon = "✅" if _ce_ratio_ok else "⚠️"
-    st.markdown(
-        f"<div class='card card-bull'>"
-        f"<div class='lbl'>"
-        f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {far_exp}</span>"
-        f"&nbsp; CE BUY (far) — best match"
-        f"</div>"
-        f"<div class='val-big val-bull'>₹{best_ce['ltp']:.2f}</div>"
-        f"<div style='margin-top:4px;'><span class='strike-pill-buy'>{int(best_ce['strike'])}</span>"
-        f"&nbsp;<span class='lbl'>{ce_buy_pct} {_ce_ratio_icon}</span></div>"
-        f"</div>", unsafe_allow_html=True)
-
-# Row 3 — PE legs
-r3c1, r3c2 = st.columns(2)
-pe_buy_pct = f"{best_pe['ltp']/sell_pe_ltp*100:.0f}% of sell LTP" if sell_pe_ltp > 0 and best_pe['ltp'] > 0 else ""
-_pe_adj_note = f" &nbsp;<span style='color:var(--gold);font-size:9px;'>⚙️ adj from {short_steps}</span>" if pe_adjusted else ""
-with r3c1:
-    st.markdown(
-        f"<div class='card card-pe'>"
-        f"<div class='lbl'>"
-        f"<span class='date-pill' style='border-color:var(--pe);color:var(--pe);'>📅 {near_exp}</span>"
-        f"&nbsp; PE SELL — ATM-{pe_steps}{_pe_adj_note}"
-        f"</div>"
-        f"<div class='val-big val-pe'>₹{sell_pe_ltp:.2f}</div>"
-        f"<div style='margin-top:4px;'><span class='strike-pill'>{sell_pe_strike}</span></div>"
-        f"</div>", unsafe_allow_html=True)
-with r3c2:
-    _pe_ratio_ok = best_pe['ltp'] <= sell_pe_ltp
-    _pe_ratio_icon = "✅" if _pe_ratio_ok else "⚠️"
-    st.markdown(
-        f"<div class='card card-bull'>"
-        f"<div class='lbl'>"
-        f"<span class='date-pill' style='background:var(--bull-dim);color:var(--bull);border-color:var(--bull);'>📅 {far_exp}</span>"
-        f"&nbsp; PE BUY (far) — best match"
-        f"</div>"
-        f"<div class='val-big val-bull'>₹{best_pe['ltp']:.2f}</div>"
-        f"<div style='margin-top:4px;'><span class='strike-pill-buy'>{int(best_pe['strike'])}</span>"
-        f"&nbsp;<span class='lbl'>{pe_buy_pct} {_pe_ratio_icon}</span></div>"
-        f"</div>", unsafe_allow_html=True)
+# (CE/PE sell-buy rows removed — superseded by the Diagonal Spread card in pb3)
 
 if sell_ce_ltp == 0 or sell_pe_ltp == 0:
     st.warning(f"⚠️ Sell strikes ({sell_ce_strike}/{sell_pe_strike}) have zero LTP — "
