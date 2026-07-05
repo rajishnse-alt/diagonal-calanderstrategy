@@ -2301,71 +2301,119 @@ with pb3:
     def _pill_ce(s): return f"<span class='strike-pill-ce'>{s}</span>"
     def _pill_pe(s): return f"<span class='strike-pill'>{s}</span>"
 
-    # Pre-compute 3-lot diagonal HTML (avoids backslash-in-f-string errors)
+    # ── Pre-compute colour/text vars for diagonal ticket ─────────────────────
     if _3lot_sell_total:
         _buy_too_high = bool(_buy_target_300 and _far_atm_straddle > _buy_target_300)
         _buy_val_col  = "var(--bull)" if _buy_ok else ("var(--gold)" if _buy_too_high else "var(--bear)")
         _buy_chk_col  = "var(--bull)" if _buy_ok else ("var(--gold)" if _buy_too_high else "var(--bear)")
-        _buy_chk_txt  = (
-            f"{'✓' if _buy_ok else '✗'} {_buy_ratio_pct:.0f}% of sell total "
-            f"(need 70%–3× = ₹{_buy_target_70:.1f}–₹{_buy_target_300:.1f})"
-            if _buy_ratio_pct else "—"
-        )
-        _3lot_diag_html = (
-            f"<div style='margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"
-            f"display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;'>"
-            f"<div style='flex:1;min-width:140px;'>"
-            f"<div class='lbl' style='color:var(--bear);'>SELL 3 lots &nbsp;·&nbsp; {_vp_tgt_band}</div>"
-            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--bear);'>₹{_3lot_sell_total:.2f}</div>"
-            f"<div class='lbl' style='margin-top:2px;'>"
-            f"CE {_pill_ce(_3lot_ce_strike)} ₹{_3lot_ce_ltp:.2f} + PE {_pill_pe(_3lot_pe_strike)} ₹{_3lot_pe_ltp:.2f} × 3"
-            f"</div>"
-            f"<div style='font-size:10px;color:var(--muted);margin-top:2px;'>"
-            f"Target: {_vix_str_label}/3 = ₹{_3lot_sell_total/3:.1f}/lot"
-            f"</div>"
-            f"</div>"
-            f"<div style='flex:1;min-width:140px;border-left:1px solid var(--border);padding-left:12px;'>"
-            f"<div class='lbl' style='color:var(--bull);'>BUY 1 lot far &nbsp;·&nbsp; {far_exp} ({fw:.1f}w)</div>"
-            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:{_buy_val_col};'>₹{_far_atm_straddle:.2f}</div>"
-            f"<div class='lbl' style='margin-top:2px;'>"
-            f"CE {_pill_ce(_far_atm_ce_strike)} ₹{_far_atm_ce_ltp:.2f} + PE {_pill_pe(_far_atm_pe_strike)} ₹{_far_atm_pe_ltp:.2f}"
-            f"</div>"
-            f"<div style='font-size:10px;margin-top:2px;color:{_buy_chk_col};font-weight:700;'>{_buy_chk_txt}</div>"
-            f"</div>"
-            f"</div>"
-        )
+        _buy_status   = "✓ OK" if _buy_ok else ("↑ Too high" if _buy_too_high else "↓ Too low")
+        _ratio_txt    = f"{_buy_ratio_pct:.0f}%" if _buy_ratio_pct else "—"
+        _net_debit    = _far_atm_straddle - _3lot_sell_total
+        _3lot_ce_total = 3 * _3lot_ce_ltp
+        _3lot_pe_total = 3 * _3lot_pe_ltp
+        _diag_ok = True
     else:
-        _3lot_diag_html = ""
+        _diag_ok = False
+
+    # ── Reference info bar (small, top of card) ───────────────────────────────
+    _ref_bar = ""
+    if _range_strangle_val:
+        _ref_bar += (
+            f"<span style='color:var(--muted);'>1σ ref:</span> "
+            f"CE {_pill_ce(_range_hi_1s)} + PE {_pill_pe(_range_lo_1s)} "
+            f"<span style='font-family:var(--mono);'>₹{_range_strangle_val:.0f}</span>"
+        )
+    if _vix_str_label:
+        _ref_bar += (
+            f"&nbsp;&nbsp;|&nbsp;&nbsp;"
+            f"<span style='color:var(--muted);'>VIX target:</span> "
+            f"<span style='font-family:var(--mono);color:{_tgt_col};'>{_vix_str_label} {_tgt_icon}</span>"
+            f" at CE {_pill_ce(sell_ce_strike)} + PE {_pill_pe(sell_pe_strike)}"
+            f" <span style='font-family:var(--mono);'>₹{_strangle_val:.0f}</span>"
+        )
+
+    # ── Diagonal ticket HTML ──────────────────────────────────────────────────
+    if _diag_ok:
+        _diag_ticket = f"""
+<div style='margin-top:8px;padding-top:8px;border-top:1px solid var(--border);'>
+  <!-- SELL | BUY grid -->
+  <div style='display:grid;grid-template-columns:1fr 28px 1fr;gap:4px;align-items:start;'>
+
+    <!-- SELL side -->
+    <div style='background:rgba(255,59,48,0.06);border:1px solid rgba(255,59,48,0.25);
+                border-radius:6px;padding:8px 10px;'>
+      <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bear);margin-bottom:6px;'>
+        SELL · NEAR · 3 LOTS EACH
+      </div>
+      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
+        <span style='font-size:11px;'>CALL {_pill_ce(_3lot_ce_strike)}</span>
+        <span style='font-family:var(--mono);font-size:11px;'>₹{_3lot_ce_ltp:.2f} × 3 = ₹{_3lot_ce_total:.2f}</span>
+      </div>
+      <div style='display:flex;justify-content:space-between;align-items:center;'>
+        <span style='font-size:11px;'>PUT &nbsp;{_pill_pe(_3lot_pe_strike)}</span>
+        <span style='font-family:var(--mono);font-size:11px;'>₹{_3lot_pe_ltp:.2f} × 3 = ₹{_3lot_pe_total:.2f}</span>
+      </div>
+      <div style='border-top:1px solid rgba(255,59,48,0.2);margin-top:6px;padding-top:5px;
+                  display:flex;justify-content:space-between;align-items:baseline;'>
+        <span style='font-size:9px;color:var(--muted);'>PREMIUM IN</span>
+        <span style='font-family:var(--mono);font-size:17px;font-weight:700;color:var(--bear);'>
+          ₹{_3lot_sell_total:.2f}
+        </span>
+      </div>
+      <div style='font-size:9px;color:var(--muted);margin-top:2px;'>
+        Target/lot ≈ ₹{_3lot_sell_total/3:.0f} &nbsp;·&nbsp; VIX range {_vix_str_label}/3
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div style='display:flex;align-items:center;justify-content:center;
+                color:var(--muted);font-size:16px;padding-top:32px;'>→</div>
+
+    <!-- BUY side -->
+    <div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);
+                border-radius:6px;padding:8px 10px;'>
+      <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:6px;'>
+        BUY · FAR {far_exp} · 1 LOT EACH
+      </div>
+      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
+        <span style='font-size:11px;'>CALL {_pill_ce(_far_atm_ce_strike)}</span>
+        <span style='font-family:var(--mono);font-size:11px;font-weight:700;'>₹{_far_atm_ce_ltp:.2f}</span>
+      </div>
+      <div style='display:flex;justify-content:space-between;align-items:center;'>
+        <span style='font-size:11px;'>PUT &nbsp;{_pill_pe(_far_atm_pe_strike)}</span>
+        <span style='font-family:var(--mono);font-size:11px;font-weight:700;'>₹{_far_atm_pe_ltp:.2f}</span>
+      </div>
+      <div style='border-top:1px solid rgba(52,199,89,0.2);margin-top:6px;padding-top:5px;
+                  display:flex;justify-content:space-between;align-items:baseline;'>
+        <span style='font-size:9px;color:var(--muted);'>PREMIUM OUT</span>
+        <span style='font-family:var(--mono);font-size:17px;font-weight:700;color:{_buy_val_col};'>
+          ₹{_far_atm_straddle:.2f}
+        </span>
+      </div>
+      <div style='font-size:9px;color:{_buy_chk_col};font-weight:700;margin-top:2px;'>
+        {_ratio_txt} of sell &nbsp;·&nbsp; {_buy_status} &nbsp;(need 70%–300%)
+      </div>
+    </div>
+  </div>
+
+  <!-- Net debit row -->
+  <div style='margin-top:6px;padding:6px 10px;background:var(--surface);border-radius:5px;
+              display:flex;justify-content:space-between;align-items:center;'>
+    <span style='font-size:10px;color:var(--muted);'>NET DEBIT (cost to put on this trade)</span>
+    <span style='font-family:var(--mono);font-size:14px;font-weight:700;'>₹{_net_debit:.2f}</span>
+  </div>
+</div>
+"""
+    else:
+        _diag_ticket = ""
 
     st.markdown(
         f"<div class='card' style='border-left:4px solid var(--bear);'>"
-        # Row 1: two methods side by side
-        f"<div style='display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;'>"
-        # Method 1 — 1σ Range
-        + (
-            f"<div style='flex:1;min-width:160px;'>"
-            f"<div class='lbl'>① 1σ Range Strangle</div>"
-            f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--text);'>₹{_range_strangle_val:.2f}</div>"
-            f"<div class='lbl' style='margin-top:2px;'>"
-            f"CE {_pill_ce(_range_hi_1s)} ₹{_ltp_hi_1s:.2f} + PE {_pill_pe(_range_lo_1s)} ₹{_ltp_lo_1s:.2f}"
-            f"</div>"
-            f"</div>"
-            if _range_strangle_val else ""
-        )
-        # Method 2 — VIX Premium (1 lot)
-        + f"<div style='flex:1;min-width:160px;border-left:1px solid var(--border);padding-left:14px;'>"
-        f"<div class='lbl'>② VIX Premium &nbsp;<span style='color:var(--gold);'>{_vp_tgt_band}</span></div>"
-        f"<div style='font-family:var(--mono);font-size:18px;font-weight:700;color:var(--bear);'>"
-        f"₹{_strangle_val:.2f}"
-        + (f" <span style='font-size:12px;color:{_tgt_col};'>vs {_vix_str_label} {_tgt_icon}</span>" if _vix_str_label else "")
-        + f"</div>"
-        f"<div class='lbl' style='margin-top:2px;'>"
-        f"CE {_pill_ce(sell_ce_strike)} ₹{_sell_ce_ltp2:.2f} + PE {_pill_pe(sell_pe_strike)} ₹{_sell_pe_ltp2:.2f}"
+        f"<div style='font-size:9px;font-weight:600;letter-spacing:.08em;color:var(--bear);margin-bottom:4px;'>"
+        f"DIAGONAL SPREAD &nbsp;·&nbsp; <span style='color:var(--gold);'>{_vp_tgt_band}</span>"
         f"</div>"
-        f"</div>"
-        f"</div>"
-        # ── 3-Sell / 1-Buy Diagonal section ──────────────────────────────────
-        + _3lot_diag_html
+        + (f"<div style='font-size:10px;color:var(--text);line-height:1.6;'>{_ref_bar}</div>" if _ref_bar else "")
+        + _diag_ticket
         + f"</div>",
         unsafe_allow_html=True)
 with pb4:
