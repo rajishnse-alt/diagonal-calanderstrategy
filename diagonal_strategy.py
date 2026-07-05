@@ -841,11 +841,13 @@ def weeks_out(expiry_str):
 # ─────────────────────────────────────────────
 # STRATEGY LOGIC
 # ─────────────────────────────────────────────
-def find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n=8):
+def find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n=8,
+                         oi_map=None, min_oi=100):
     """
     Rank far-expiry strikes by proximity of LTP to (sell_ltp × ratio%).
     CE: only OTM (strike >= atm - STEP).
     PE: only OTM (strike <= atm + STEP).
+    Skips strikes with OI < min_oi (illiquid).
     """
     if sell_ltp <= 0:
         return []
@@ -858,6 +860,9 @@ def find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n=8):
             continue
         if opt_type == "PE" and strike > atm + STEP:
             continue
+        # Liquidity gate
+        if oi_map is not None and oi_map.get(float(strike), 0) < min_oi:
+            continue
         diff_abs = abs(ltp - target)
         diff_pct = diff_abs / target * 100 if target > 0 else 999
         cands.append({"strike": int(strike), "ltp": ltp,
@@ -866,7 +871,8 @@ def find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n=8):
     return cands[:n]
 
 
-def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ratio_pct, n=8):
+def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ratio_pct, n=8,
+                            oi_map=None):
     """
     Walk sell strike toward ATM from base_steps until the best long-leg LTP
     is <= sell LTP (prevents paying more for the hedge than you collect).
@@ -878,7 +884,7 @@ def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ra
         sell_ltp    = near_map.get(float(sell_strike), 0)
         if sell_ltp <= 0:
             continue
-        cands = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n)
+        cands = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n, oi_map=oi_map)
         # Sell LTP must be at least (100/ltp_ratio_pct)× the long LTP
         # e.g. ratio=50% → sell must be ≥ 2× long
         if cands and cands[0]["ltp"] <= sell_ltp * ltp_ratio_pct / 100:
@@ -886,7 +892,7 @@ def auto_adjust_sell_strike(base_steps, atm, near_map, far_map, opt_type, ltp_ra
     # Fallback — return base even if ratio still not met
     sell_strike = (atm + base_steps * STEP) if opt_type == "CE" else (atm - base_steps * STEP)
     sell_ltp    = near_map.get(float(sell_strike), 0)
-    cands       = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n)
+    cands       = find_long_candidates(sell_ltp, far_map, atm, opt_type, ltp_ratio_pct, n, oi_map=oi_map)
     return base_steps, int(sell_strike), sell_ltp, cands, False
 
 
@@ -1818,14 +1824,14 @@ if _vix_ce_strike and _vix_pe_strike:
     sell_pe_strike, sell_pe_ltp = _vix_pe_strike, _vix_pe_ltp
     ce_steps = abs(sell_ce_strike - atm) // STEP
     pe_steps = abs(sell_pe_strike - atm) // STEP
-    ce_cands = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio)
-    pe_cands = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio)
+    ce_cands = find_long_candidates(sell_ce_ltp, far_ce, atm, "CE", ltp_ratio, oi_map=far_ce_oi)
+    pe_cands = find_long_candidates(sell_pe_ltp, far_pe, atm, "PE", ltp_ratio, oi_map=far_pe_oi)
     ce_adjusted = pe_adjusted = False
 else:
     ce_steps, sell_ce_strike, sell_ce_ltp, ce_cands, ce_adjusted = \
-        auto_adjust_sell_strike(short_steps, atm, near_ce, far_ce, "CE", ltp_ratio)
+        auto_adjust_sell_strike(short_steps, atm, near_ce, far_ce, "CE", ltp_ratio, oi_map=far_ce_oi)
     pe_steps, sell_pe_strike, sell_pe_ltp, pe_cands, pe_adjusted = \
-        auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio)
+        auto_adjust_sell_strike(short_steps, atm, near_pe, far_pe, "PE", ltp_ratio, oi_map=far_pe_oi)
 
 best_ce = ce_cands[0] if ce_cands else {"strike": sell_ce_strike, "ltp": 0, "diff_pct": 99}
 best_pe = pe_cands[0] if pe_cands else {"strike": sell_pe_strike, "ltp": 0, "diff_pct": 99}
@@ -1849,22 +1855,29 @@ if _vp_tgt_l:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
 # ── Far-leg: widest OTM strangle where CE+PE ≥ 80% of total sold premium ──────
-def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target, max_steps=25):
+def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target, max_steps=25,
+                         far_ce_oi_map=None, far_pe_oi_map=None, min_oi=100):
     """
     Scan outward from ATM in symmetric steps.
-    Return the widest (most OTM) symmetric strangle where CE_ltp + PE_ltp >= target.
+    Return the widest (most OTM) symmetric strangle where CE_ltp + PE_ltp >= target
+    AND both legs have OI >= min_oi (liquidity gate).
     Falls back to ATM if nothing qualifies.
     """
     best = {"ce_strike": int(base), "ce_ltp": 0.0,
             "pe_strike": int(base), "pe_ltp": 0.0}
-    # ATM straddle check first (n=0)
     for n in range(0, max_steps + 1):
         ce_s = base + n * step
         pe_s = base - n * step
         ce_l = far_ce_map.get(float(ce_s), 0)
         pe_l = far_pe_map.get(float(pe_s), 0)
         if ce_l <= 0 or pe_l <= 0:
-            continue                      # strike missing in far chain — skip
+            continue                      # no LTP — skip
+        # Liquidity gate: skip strikes with negligible open interest
+        if far_ce_oi_map is not None and far_pe_oi_map is not None:
+            ce_oi = far_ce_oi_map.get(float(ce_s), 0)
+            pe_oi = far_pe_oi_map.get(float(pe_s), 0)
+            if ce_oi < min_oi or pe_oi < min_oi:
+                continue                  # illiquid — skip
         if ce_l + pe_l >= target:
             best = {"ce_strike": int(ce_s), "ce_ltp": ce_l,
                     "pe_strike": int(pe_s), "pe_ltp": pe_l}
@@ -1873,7 +1886,8 @@ def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target, max_steps=2
     return best
 
 _far_tgt_premium  = (_3lot_sell_total * 0.80) if _3lot_sell_total else 0
-_far_result       = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_premium)
+_far_result       = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_premium,
+                                         far_ce_oi_map=far_ce_oi, far_pe_oi_map=far_pe_oi)
 _far_atm_ce_strike = _far_result["ce_strike"]
 _far_atm_ce_ltp   = _far_result["ce_ltp"]
 _far_atm_pe_strike = _far_result["pe_strike"]
