@@ -1848,37 +1848,99 @@ if _vp_tgt_l:
     if _3lot_ce_ltp and _3lot_pe_ltp:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
-# Buy 1 lot: far expiry ATM straddle
-# Scan nearby strikes in far chain — far expiry may not list every near-chain strike
-def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=10):
+# ── Far-leg strike selection method ──────────────────────────────────────────
+_far_method_opts = ["VIX 1σ Range", "Delta"]
+_far_method = st.selectbox(
+    "Far leg strike selection",
+    _far_method_opts,
+    index=_far_method_opts.index(
+        st.session_state.get("far_strike_method", "VIX 1σ Range")
+    ),
+    key="far_strike_method",
+    help="VIX 1σ Range: picks strike at ±1σ move for far expiry DTE. Delta: picks strike nearest to target delta.",
+)
+if _far_method == "Delta":
+    _far_delta_tgt = st.slider(
+        "Target delta (absolute)",
+        min_value=0.10, max_value=0.50, step=0.05,
+        value=st.session_state.get("far_delta_tgt", 0.25),
+        key="far_delta_tgt",
+        format="%.2f",
+        help="0.25 ≈ 1σ OTM · 0.15 ≈ 2σ OTM · 0.40 ≈ near ATM",
+    )
+else:
+    _far_delta_tgt = None
+
+# ── Helper: scan far chain for nearest valid LTP ──────────────────────────────
+def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=15):
     """Return (strike, ltp) of nearest strike with valid LTP.
-    direction=1  → scan OTM CE side (base+step, base+2*step, ...)
-    direction=-1 → scan OTM PE side (base-step, base-2*step, ...)
-    direction=0  → scan outward both sides (original behaviour)
-    Falls back to ATM itself if nothing found in scanned direction.
+    direction=1  → scan OTM CE (base+step, base+2*step …)
+    direction=-1 → scan OTM PE (base-step, base-2*step …)
+    direction=0  → scan outward both sides
     """
     if direction == 0:
         for i in range(0, max_steps + 1):
-            for delta in ([0] if i == 0 else [i * step, -i * step]):
-                ltp = far_map.get(float(base + delta), 0)
+            for d in ([0] if i == 0 else [i * step, -i * step]):
+                ltp = far_map.get(float(base + d), 0)
                 if ltp > 0:
-                    return int(base + delta), ltp
+                    return int(base + d), ltp
     else:
-        # Walk strictly OTM (skip ATM i=0) in the given direction
-        for i in range(1, max_steps + 1):
+        for i in range(1, max_steps + 1):       # skip ATM (i=0)
             strike = base + direction * i * step
             ltp = far_map.get(float(strike), 0)
             if ltp > 0:
                 return int(strike), ltp
-        # Nothing OTM found — fall back to ATM
-        ltp = far_map.get(float(base), 0)
+        ltp = far_map.get(float(base), 0)       # fallback: ATM
         if ltp > 0:
             return int(base), ltp
     return int(base), 0.0
 
-# CE: scan upward from ATM (OTM call side); PE: scan downward from ATM (OTM put side)
-_far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP, direction=1)
-_far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP, direction=-1)
+def _find_delta_far(far_map, spot, T, sigma, opt_type, tgt_delta, step, max_steps=30):
+    """Scan far chain for strike whose abs(BS-delta) is closest to tgt_delta."""
+    best_strike, best_ltp, best_diff = int(atm), 0.0, float("inf")
+    direction = 1 if opt_type == "CE" else -1
+    for i in range(1, max_steps + 1):
+        strike = atm + direction * i * step
+        ltp = far_map.get(float(strike), 0)
+        if ltp <= 0:
+            continue
+        d = bs_delta(spot, strike, T, sigma, opt_type)
+        diff = abs(d - tgt_delta)
+        if diff < best_diff:
+            best_diff, best_strike, best_ltp = diff, int(strike), ltp
+        if d < 0.05:            # delta too small — stop scanning further OTM
+            break
+    return best_strike, best_ltp
+
+# ── Select far strikes by chosen method ───────────────────────────────────────
+_far_days_dte = max((datetime.strptime(far_exp, "%Y-%m-%d").date() - now.date()).days, 1)
+_T_far_bs     = _far_days_dte / 365.0
+_sigma_far    = (_eff_vix / 100.0) if _vix_ok else 0.15
+
+if _far_method == "VIX 1σ Range" and _vix_ok and spot:
+    # 1σ move scaled to far expiry DTE
+    _far_1s       = spot * (_eff_vix / 100) * math.sqrt(_far_days_dte / 252)
+    _far_1s_ce    = int(round((atm + _far_1s) / STEP) * STEP)
+    _far_1s_pe    = int(round((atm - _far_1s) / STEP) * STEP)
+    _far_atm_ce_ltp = far_ce.get(float(_far_1s_ce), 0)
+    _far_atm_pe_ltp = far_pe.get(float(_far_1s_pe), 0)
+    # If exact strike missing in far chain, scan nearby
+    if _far_atm_ce_ltp <= 0:
+        _far_1s_ce, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, _far_1s_ce, STEP, direction=1)
+    if _far_atm_pe_ltp <= 0:
+        _far_1s_pe, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, _far_1s_pe, STEP, direction=-1)
+    _far_atm_ce_strike, _far_atm_pe_strike = _far_1s_ce, _far_1s_pe
+
+elif _far_method == "Delta" and _far_delta_tgt:
+    _far_atm_ce_strike, _far_atm_ce_ltp = _find_delta_far(
+        far_ce, spot, _T_far_bs, _sigma_far, "CE", _far_delta_tgt, STEP)
+    _far_atm_pe_strike, _far_atm_pe_ltp = _find_delta_far(
+        far_pe, spot, _T_far_bs, _sigma_far, "PE", _far_delta_tgt, STEP)
+
+else:
+    # Fallback: nearest OTM from ATM
+    _far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP, direction=1)
+    _far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP, direction=-1)
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
 _buy_target_70    = (_3lot_sell_total * 0.70) if _3lot_sell_total else None
 _buy_target_300   = (_3lot_sell_total * 3.00) if _3lot_sell_total else None
@@ -2377,7 +2439,7 @@ with pb3:
     <div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);
                 border-radius:6px;padding:8px 10px;'>
       <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:6px;'>
-        BUY · FAR {far_exp} · 1 LOT EACH
+        BUY · FAR {far_exp} · 1 LOT EACH · {"Δ" + f"{_far_delta_tgt:.2f}" if _far_method == "Delta" else "VIX 1σ"}
       </div>
       <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
         <span style='font-size:11px;'>CALL {_pill_ce(_far_atm_ce_strike)}</span>
