@@ -838,57 +838,30 @@ def weeks_out(expiry_str):
         return 0.0
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _search_nifty_fut_keys(tok, expiry_dates):
+def _build_fut_instrument_keys(expiry_dates):
     """
-    Use Upstox instruments search API to find NIFTY futures instrument keys.
-    Searches for each expiry separately and picks the plain NIFTY index future.
-    Cached 1 h — keys don't change intraday.
+    Construct Upstox instrument keys for NIFTY monthly futures directly from expiry dates.
+    Format: NSE_FO|NIFTY{YY}{MON}FUT  e.g. 2026-07-30 → NSE_FO|NIFTY26JULFUT
     """
+    _MONTHS = {1:"JAN",2:"FEB",3:"MAR",4:"APR",5:"MAY",6:"JUN",
+               7:"JUL",8:"AUG",9:"SEP",10:"OCT",11:"NOV",12:"DEC"}
     keys = {}
-    target = set(expiry_dates)
-    try:
-        r = requests.get(
-            "https://api.upstox.com/v2/market-quote/instruments/search",
-            params={"search_query": "NIFTY", "limit": 50},
-            headers=hdr(tok), timeout=10,
-        )
-        if r.status_code != 200:
-            return {}, f"search HTTP {r.status_code}"
-        items = r.json().get("data", [])
-        for inst in items:
-            itype = (inst.get("instrument_type") or "").upper()
-            seg   = (inst.get("segment") or "").upper()
-            name  = str(inst.get("name") or inst.get("tradingsymbol") or "").upper()
-            if itype not in ("FUTIDX", "FUT"):
-                continue
-            if seg != "NSE_FO":
-                continue
-            # Plain NIFTY only — skip BANKNIFTY, FINNIFTY, MIDCPNIFTY etc
-            if name not in ("NIFTY", "NIFTY 50"):
-                continue
-            raw_exp = inst.get("expiry") or inst.get("expiry_date") or ""
-            if isinstance(raw_exp, (int, float)):
-                from datetime import date as _d
-                exp = str(_d.fromtimestamp(raw_exp / 1000))
-            else:
-                exp = str(raw_exp)[:10]
-            if exp in target:
-                ikey = inst.get("instrument_key") or ""
-                if ikey:
-                    keys[exp] = ikey
-        return keys, None
-    except Exception as e:
-        return {}, str(e)
+    for exp in expiry_dates:
+        try:
+            d = datetime.strptime(exp, "%Y-%m-%d")
+            sym  = f"NIFTY{str(d.year)[2:]}{_MONTHS[d.month]}FUT"
+            keys[exp] = f"NSE_FO|{sym}"
+        except Exception:
+            pass
+    return keys
 
 
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_futures_buildup(tok, expiry_dates):
     """
     Fetch NIFTY futures build-up (Upstox only).
-    1. Instruments search → get keys for target expiries
-    2. Market-quote/quotes → LTP, OHLC, OI
-    3. Classify: Long Build-up / Short Build-up / Short Covering / Long Unwinding
+    Constructs instrument keys from expiry dates → market-quote/quotes → OI + price.
+    Classify: Long Build-up / Short Build-up / Short Covering / Long Unwinding
     """
     def _classify(price_up, oi_up):
         if price_up and oi_up:     return "Long Build-up"
@@ -896,12 +869,12 @@ def fetch_futures_buildup(tok, expiry_dates):
         if not price_up and oi_up: return "Short Build-up"
         return "Long Unwinding"
 
-    fut_keys, err = _search_nifty_fut_keys(tok, expiry_dates)
+    fut_keys = _build_fut_instrument_keys(expiry_dates)
     if not fut_keys:
-        return None, err or "No NIFTY futures found in search"
+        return None, "Could not construct futures instrument keys"
 
     try:
-        keys_param = ",".join(v for v in fut_keys.values() if v)
+        keys_param = ",".join(fut_keys.values())
         r = requests.get(
             "https://api.upstox.com/v2/market-quote/quotes",
             params={"instrument_key": keys_param},
