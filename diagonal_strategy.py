@@ -1912,12 +1912,13 @@ _rd_net_col    = "var(--bull)" if _rd_net >= 0 else "var(--bear)"
 
 # ── Position sizing: capital slider → lot count capped by 1% daily-loss rule ──
 _rd_capital        = st.session_state.get("rd_capital", 500_000)   # default ₹5L
+_rd_sigma          = (_eff_vix / 100.0) if _vix_ok else 0.15       # local sigma (sigma_std defined later)
 
 # Greeks for 1 unit (short 1 near ATM CE + long 2 far OTM CE)
-_rd_near_delta = bs_delta(spot, atm,               _T_near_std, _sigma_std, "CE") if spot and _T_near_std else 0.50
-_rd_far_delta  = bs_delta(spot, _rd_far_ce_strike, _T_far_std,  _sigma_std, "CE") if spot and _T_far_std  else 0.25
-_rd_near_gamma = bs_gamma(spot, atm,               _T_near_std, _sigma_std)        if spot and _T_near_std else 0.0
-_rd_far_gamma  = bs_gamma(spot, _rd_far_ce_strike, _T_far_std,  _sigma_std)        if spot and _T_far_std  else 0.0
+_rd_near_delta = bs_delta(spot, atm,               _T_near_std, _rd_sigma, "CE") if spot and _T_near_std else 0.50
+_rd_far_delta  = bs_delta(spot, _rd_far_ce_strike, _T_far_std,  _rd_sigma, "CE") if spot and _T_far_std  else 0.25
+_rd_near_gamma = bs_gamma(spot, atm,               _T_near_std, _rd_sigma)        if spot and _T_near_std else 0.0
+_rd_far_gamma  = bs_gamma(spot, _rd_far_ce_strike, _T_far_std,  _rd_sigma)        if spot and _T_far_std  else 0.0
 
 _rd_net_delta  = -_rd_near_delta + 2 * _rd_far_delta    # net direction per unit
 _rd_net_gamma  = -_rd_near_gamma + 2 * _rd_far_gamma    # net gamma per unit (usually negative)
@@ -2585,8 +2586,8 @@ if _rd_atm_ce_ltp > 0:
             _wl  = near_ce.get(float(_ws), 0)
             if _wl <= 0:
                 continue
-            _wd  = bs_delta(spot, _ws, _T_near_std, _sigma_std, "CE")
-            _wg  = bs_gamma(spot, _ws, _T_near_std, _sigma_std)
+            _wd  = bs_delta(spot, _ws, _T_near_std, _rd_sigma, "CE")
+            _wg  = bs_gamma(spot, _ws, _T_near_std, _rd_sigma)
             # Minimum lots of this wing to bring combined loss ≤ 1%
             for _wn in range(1, _rd_lots * 6 + 1):
                 _nd = _pos_net_delta + _wn * _wd
