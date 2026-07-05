@@ -2023,7 +2023,7 @@ for _sq_n, _sq_val in _sq_levels:
     else:
         _sq_bord = "rgba(50,215,75,0.45)"; _sq_col = "var(--bull)"; _sq_bg = "rgba(50,215,75,0.07)"
     _sq_pills += (
-        f"<span style='display:inline-block;padding:4px 12px;"
+        f"<span style='display:inline-block;padding:3px 8px;"
         f"background:{_sq_bg};border:1px solid {_sq_bord};border-radius:20px;"
         f"font-family:var(--mono);font-size:13px;font-weight:700;color:{_sq_col};"
         f"{'box-shadow:0 0 6px rgba(255,201,64,0.4);' if _sq_is_pivot else ''}'>"
@@ -2032,27 +2032,25 @@ for _sq_n, _sq_val in _sq_levels:
         f"</span>"
     )
 
-st.markdown(
-    f"<div class='card' style='padding:10px 14px;'>"
-    f"<div style='font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:8px;'>"
-    f"√² LEVELS &nbsp;·&nbsp; √{_sq_base} = {_sq_root} &nbsp;·&nbsp; "
-    f"<span style='color:var(--bull);'>● support</span> &nbsp; "
-    f"<span style='color:var(--bear);'>● resistance</span> &nbsp; "
-    f"<span style='color:var(--gold);'>◆ pivot</span>"
-    f"</div>"
-    f"<div style='display:flex;flex-wrap:wrap;gap:6px;align-items:center;'>"
-    f"{_sq_pills}"
-    f"</div>"
-    f"</div>",
-    unsafe_allow_html=True
-)
 # ── End of square-root levels ──────────────────────────────────────────────────
 
 # Row 1 — Spot + ATM
 r1c1, r1c2 = st.columns(2)
 with r1c1:
-    st.markdown(f"<div class='card'><div class='lbl'>NIFTY Spot</div>"
-                f"<div class='val-big'>₹{spot:,.2f}</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='card'>"
+        f"<div class='lbl'>NIFTY Spot</div>"
+        f"<div class='val-big'>₹{spot:,.2f}</div>"
+        f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+        f"<div style='font-size:8px;color:var(--muted);margin-bottom:5px;'>√² LEVELS &nbsp;·&nbsp; √{_sq_base}={_sq_root} &nbsp;"
+        f"<span style='color:var(--bull);'>● sup</span> &nbsp;"
+        f"<span style='color:var(--bear);'>● res</span> &nbsp;"
+        f"<span style='color:var(--gold);'>◆ pivot</span></div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:4px;'>{_sq_pills}</div>"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 with r1c2:
     _atm_ce_ltp = near_ce.get(float(atm), 0)
     _atm_pe_ltp = near_pe.get(float(atm), 0)
