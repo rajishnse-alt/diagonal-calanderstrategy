@@ -840,14 +840,23 @@ def weeks_out(expiry_str):
 
 @st.cache_data(ttl=86_400, show_spinner=False)
 def _fetch_nse_fo_instruments():
-    """Download Upstox NSE_FO instruments JSON (cached 24 h). Returns list of instrument dicts."""
-    import gzip, io
+    """
+    Download Upstox NSE_FO instruments JSON (cached 24 h).
+    Handles both raw-gzip response and pre-decompressed (requests auto-decode).
+    """
+    import gzip
+    url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz"
     try:
-        r = requests.get(
-            "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz",
-            timeout=20, headers={"Accept-Encoding": "gzip, deflate"}
-        )
-        raw = gzip.decompress(r.content)
+        # stream=True + no Accept-Encoding so we get raw gzip bytes
+        r = requests.get(url, timeout=25, stream=True,
+                         headers={"Accept-Encoding": "identity"})
+        r.raise_for_status()
+        raw = r.content
+        # Try gzip decompress; if content is already JSON, fall through
+        try:
+            raw = gzip.decompress(raw)
+        except Exception:
+            pass   # already plain JSON bytes
         return json.loads(raw.decode("utf-8")), None
     except Exception as e:
         return None, str(e)
@@ -857,7 +866,7 @@ def _nifty_fut_keys_upstox(expiry_dates):
     """
     From the NSE_FO instruments list, return {expiry_str: instrument_key}
     for the given expiry_dates (YYYY-MM-DD list).
-    Matches: segment=NSE_FO, name=NIFTY, instrument_type=FUTIDX.
+    Tries multiple field-name conventions used by Upstox over time.
     """
     instruments, err = _fetch_nse_fo_instruments()
     if not instruments:
@@ -865,12 +874,30 @@ def _nifty_fut_keys_upstox(expiry_dates):
     keys = {}
     target = set(expiry_dates)
     for inst in instruments:
-        if (inst.get("segment") == "NSE_FO"
-                and inst.get("name") == "NIFTY"
-                and inst.get("instrument_type") in ("FUTIDX", "FUT")):
-            exp = str(inst.get("expiry", ""))[:10]   # YYYY-MM-DD
-            if exp in target:
-                keys[exp] = inst.get("instrument_key", "")
+        seg  = inst.get("segment") or inst.get("exchange", "")
+        name = inst.get("name") or inst.get("tradingsymbol", "")
+        itype = inst.get("instrument_type") or inst.get("instrumenttype") or ""
+        # Accept both "NSE_FO" and "NFO" segment labels
+        if seg not in ("NSE_FO", "NFO"):
+            continue
+        if "NIFTY" not in str(name).upper():
+            continue
+        if itype.upper() not in ("FUTIDX", "FUT", "FUTSTK"):
+            continue
+        # Skip BANKNIFTY, FINNIFTY etc — keep plain NIFTY index future
+        if str(name).upper() not in ("NIFTY", "NIFTY 50"):
+            continue
+        # expiry may come as "YYYY-MM-DD" or Unix ms timestamp
+        raw_exp = inst.get("expiry") or inst.get("expiry_date") or ""
+        if isinstance(raw_exp, (int, float)):
+            from datetime import date as _date
+            exp = str(_date.fromtimestamp(raw_exp / 1000))
+        else:
+            exp = str(raw_exp)[:10]
+        if exp in target:
+            ikey = inst.get("instrument_key") or inst.get("instrumentKey") or ""
+            if ikey:
+                keys[exp] = ikey
     return keys, None
 
 
@@ -2249,14 +2276,15 @@ with r1c1:
         f"<span style='color:var(--gold);'>◆ pivot</span></div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:4px;'>{_sq_pills}</div>"
         f"</div>"
-        # Futures build-up
+        # Futures build-up (always show section; show error hint if no data)
+        + f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+        + f"<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>FUTURES BUILD-UP</div>"
         + (
-            f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
-            f"<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>FUTURES BUILD-UP</div>"
-            f"{_fut_html}"
-            f"</div>"
-            if _fut_html else ""
-        )
+            _fut_html if _fut_html
+            else f"<span style='font-size:9px;color:var(--muted);font-style:italic;'>"
+                 f"{'—' if not _fut_err else _fut_err[:60]}</span>"
+          )
+        + f"</div>"
         + f"</div>",
         unsafe_allow_html=True
     )
