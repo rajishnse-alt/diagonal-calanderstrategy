@@ -1926,22 +1926,28 @@ _rd_far_gamma  = bs_gamma(spot, _rd_far_ce_strike, _rd_T_far,  _rd_sigma)       
 _rd_net_delta  = -_rd_near_delta + 2 * _rd_far_delta    # net direction per unit
 _rd_net_gamma  = -_rd_near_gamma + 2 * _rd_far_gamma    # net gamma per unit (usually negative)
 
-# Worst-case intraday loss for 1 unit at 1σ daily move
+# Worst-case intraday loss for 1 unit — DIRECTIONAL (not abs-based):
+# ratio diagonal is net SHORT delta, so UP moves are the risk.
+# Use min(P_up, P_down) rather than abs so buying long calls CAN reduce loss.
 _rd_daily_move    = _daily_pts if (_daily_pts and _daily_pts > 0) else (spot * 0.01 if spot else 100)
-_rd_loss_per_unit = (
-    abs(_rd_net_delta) * _rd_daily_move
-    + 0.5 * abs(_rd_net_gamma) * _rd_daily_move ** 2
-) * LOT_SIZE
+_rd_p_up          =  _rd_net_delta * _rd_daily_move + 0.5 * _rd_net_gamma * _rd_daily_move**2
+_rd_p_down        = -_rd_net_delta * _rd_daily_move + 0.5 * _rd_net_gamma * _rd_daily_move**2
+_rd_loss_per_unit = max(0.0, -min(_rd_p_up, _rd_p_down)) * LOT_SIZE
 _rd_loss_per_unit = max(_rd_loss_per_unit, 1.0)   # guard against divide-by-zero
 
-# Capital-based limit (rough margin = 1.5× sell proceeds + 2× buy cost)
-_rd_margin_per_unit = LOT_SIZE * (_rd_atm_ce_ltp * 1.5 + 2 * _rd_far_ce_ltp)
+# SPAN margin ≈ 4.5% of notional for short near-month NIFTY options
+# (premium × 1.5 underestimates by ~4-5×; this matches real broker margins)
+_rd_margin_per_unit = max(
+    spot * LOT_SIZE * 0.045 if spot else 70_000,
+    LOT_SIZE * _rd_atm_ce_ltp * 2
+)
 _rd_margin_per_unit = max(_rd_margin_per_unit, 1.0)
 
 _rd_max_daily_loss   = _rd_capital * 0.01          # 1% of capital
 _rd_lots_by_risk     = max(1, int(_rd_max_daily_loss / _rd_loss_per_unit))
 _rd_lots_by_capital  = max(1, int(_rd_capital / _rd_margin_per_unit))
-_rd_lots             = min(_rd_lots_by_risk, _rd_lots_by_capital)
+# Capital is the primary driver; wing hedge brings loss ≤ 1%
+_rd_lots             = _rd_lots_by_capital
 
 # Projected daily loss at chosen lot count
 _rd_proj_loss  = _rd_loss_per_unit * _rd_lots
@@ -2566,12 +2572,15 @@ if _rd_atm_ce_ltp > 0:
         format="₹%d",
         help="Minimum ₹2L. Lot count is sized so that worst intraday loss ≤ 1% of this capital.",
     )
-    # Recompute with live slider value
+    # Recompute with live slider value (directional loss + SPAN margin)
     _rd_max_daily_loss  = _rd_capital * 0.01
-    _rd_lots_by_risk    = max(1, int(_rd_max_daily_loss / _rd_loss_per_unit))
-    _rd_margin_per_unit = max(LOT_SIZE * (_rd_atm_ce_ltp * 1.5 + 2 * _rd_far_ce_ltp), 1.0)
+    _rd_margin_per_unit = max(
+        spot * LOT_SIZE * 0.045 if spot else 70_000,
+        LOT_SIZE * _rd_atm_ce_ltp * 2, 1.0
+    )
     _rd_lots_by_capital = max(1, int(_rd_capital / _rd_margin_per_unit))
-    _rd_lots            = min(_rd_lots_by_risk, _rd_lots_by_capital)
+    _rd_lots_by_risk    = max(1, int(_rd_max_daily_loss / _rd_loss_per_unit))
+    _rd_lots            = _rd_lots_by_capital   # capital is primary; wing manages risk
     _rd_proj_loss       = _rd_loss_per_unit * _rd_lots
     _rd_proj_pct        = (_rd_proj_loss / _rd_capital * 100) if _rd_capital else 0
 
@@ -2591,12 +2600,13 @@ if _rd_atm_ce_ltp > 0:
                 continue
             _wd  = bs_delta(spot, _ws, _rd_T_near, _rd_sigma, "CE")
             _wg  = bs_gamma(spot, _ws, _rd_T_near, _rd_sigma)
-            # Minimum lots of this wing to bring combined loss ≤ 1%
-            for _wn in range(1, _rd_lots * 6 + 1):
+            # Minimum lots of this wing to bring combined directional loss ≤ 1%
+            for _wn in range(1, _rd_lots * 8 + 1):
                 _nd = _pos_net_delta + _wn * _wd
                 _ng = _pos_net_gamma + _wn * _wg
-                _nl = (abs(_nd) * _rd_daily_move
-                       + 0.5 * abs(_ng) * _rd_daily_move ** 2) * LOT_SIZE
+                _wp_up   =  _nd * _rd_daily_move + 0.5 * _ng * _rd_daily_move**2
+                _wp_down = -_nd * _rd_daily_move + 0.5 * _ng * _rd_daily_move**2
+                _nl      = max(0.0, -min(_wp_up, _wp_down)) * LOT_SIZE
                 if _nl <= _rd_max_daily_loss:
                     _rd_wing_strike   = int(_ws)
                     _rd_wing_ltp      = _wl
