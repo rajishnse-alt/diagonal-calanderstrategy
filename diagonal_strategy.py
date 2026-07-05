@@ -1864,12 +1864,16 @@ def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=10):
                 if ltp > 0:
                     return int(base + delta), ltp
     else:
-        # Try ATM first, then walk strictly in the given direction
-        for i in range(0, max_steps + 1):
+        # Walk strictly OTM (skip ATM i=0) in the given direction
+        for i in range(1, max_steps + 1):
             strike = base + direction * i * step
             ltp = far_map.get(float(strike), 0)
             if ltp > 0:
                 return int(strike), ltp
+        # Nothing OTM found — fall back to ATM
+        ltp = far_map.get(float(base), 0)
+        if ltp > 0:
+            return int(base), ltp
     return int(base), 0.0
 
 # CE: scan upward from ATM (OTM call side); PE: scan downward from ATM (OTM put side)
