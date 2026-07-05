@@ -1848,86 +1848,41 @@ if _vp_tgt_l:
     if _3lot_ce_ltp and _3lot_pe_ltp:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
-# ── Far-leg strike selection method (read from session_state; UI rendered in pb3) ──
-_far_method    = st.session_state.get("far_strike_method", "VIX 1σ Range")
-_far_delta_tgt = float(st.session_state.get("far_delta_tgt", 0.25)) if _far_method == "Delta" else None
-
-# ── Helper: scan far chain for nearest valid LTP ──────────────────────────────
-def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=15):
-    """Return (strike, ltp) of nearest strike with valid LTP.
-    direction=1  → scan OTM CE (base+step, base+2*step …)
-    direction=-1 → scan OTM PE (base-step, base-2*step …)
-    direction=0  → scan outward both sides
+# ── Far-leg: widest OTM strangle where CE+PE ≥ 80% of total sold premium ──────
+def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target, max_steps=25):
     """
-    if direction == 0:
-        for i in range(0, max_steps + 1):
-            for d in ([0] if i == 0 else [i * step, -i * step]):
-                ltp = far_map.get(float(base + d), 0)
-                if ltp > 0:
-                    return int(base + d), ltp
-    else:
-        for i in range(1, max_steps + 1):       # skip ATM (i=0)
-            strike = base + direction * i * step
-            ltp = far_map.get(float(strike), 0)
-            if ltp > 0:
-                return int(strike), ltp
-        ltp = far_map.get(float(base), 0)       # fallback: ATM
-        if ltp > 0:
-            return int(base), ltp
-    return int(base), 0.0
+    Scan outward from ATM in symmetric steps.
+    Return the widest (most OTM) symmetric strangle where CE_ltp + PE_ltp >= target.
+    Falls back to ATM if nothing qualifies.
+    """
+    best = {"ce_strike": int(base), "ce_ltp": 0.0,
+            "pe_strike": int(base), "pe_ltp": 0.0}
+    # ATM straddle check first (n=0)
+    for n in range(0, max_steps + 1):
+        ce_s = base + n * step
+        pe_s = base - n * step
+        ce_l = far_ce_map.get(float(ce_s), 0)
+        pe_l = far_pe_map.get(float(pe_s), 0)
+        if ce_l <= 0 or pe_l <= 0:
+            continue                      # strike missing in far chain — skip
+        if ce_l + pe_l >= target:
+            best = {"ce_strike": int(ce_s), "ce_ltp": ce_l,
+                    "pe_strike": int(pe_s), "pe_ltp": pe_l}
+        else:
+            break                         # going wider only gets cheaper — stop
+    return best
 
-def _find_delta_far(far_map, spot, T, sigma, opt_type, tgt_delta, step, max_steps=30):
-    """Scan ALL valid strikes in far_map; return the one whose BS-delta is closest to tgt_delta."""
-    best_strike, best_ltp, best_diff = int(atm), 0.0, float("inf")
-    # Only consider OTM strikes (CE: above ATM, PE: below ATM)
-    for strike_f, ltp in far_map.items():
-        if ltp <= 0:
-            continue
-        strike = float(strike_f)
-        if opt_type == "CE" and strike <= atm:
-            continue
-        if opt_type == "PE" and strike >= atm:
-            continue
-        d = bs_delta(spot, strike, T, sigma, opt_type)
-        diff = abs(d - tgt_delta)
-        if diff < best_diff:
-            best_diff, best_strike, best_ltp = diff, int(strike), ltp
-    return best_strike, best_ltp
+_far_tgt_premium  = (_3lot_sell_total * 0.80) if _3lot_sell_total else 0
+_far_result       = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_premium)
+_far_atm_ce_strike = _far_result["ce_strike"]
+_far_atm_ce_ltp   = _far_result["ce_ltp"]
+_far_atm_pe_strike = _far_result["pe_strike"]
+_far_atm_pe_ltp   = _far_result["pe_ltp"]
 
-# ── Select far strikes by chosen method ───────────────────────────────────────
-_far_days_dte = max((datetime.strptime(far_exp, "%Y-%m-%d").date() - now.date()).days, 1)
-_T_far_bs     = _far_days_dte / 365.0
-_sigma_far    = (_eff_vix / 100.0) if _vix_ok else 0.15
-
-if _far_method == "VIX 1σ Range" and _vix_ok and spot:
-    # 1σ move scaled to far expiry DTE
-    _far_1s       = spot * (_eff_vix / 100) * math.sqrt(_far_days_dte / 252)
-    _far_1s_ce    = int(round((atm + _far_1s) / STEP) * STEP)
-    _far_1s_pe    = int(round((atm - _far_1s) / STEP) * STEP)
-    _far_atm_ce_ltp = far_ce.get(float(_far_1s_ce), 0)
-    _far_atm_pe_ltp = far_pe.get(float(_far_1s_pe), 0)
-    # If exact strike missing in far chain, scan nearby
-    if _far_atm_ce_ltp <= 0:
-        _far_1s_ce, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, _far_1s_ce, STEP, direction=1)
-    if _far_atm_pe_ltp <= 0:
-        _far_1s_pe, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, _far_1s_pe, STEP, direction=-1)
-    _far_atm_ce_strike, _far_atm_pe_strike = _far_1s_ce, _far_1s_pe
-
-elif _far_method == "Delta" and _far_delta_tgt:
-    _far_atm_ce_strike, _far_atm_ce_ltp = _find_delta_far(
-        far_ce, spot, _T_far_bs, _sigma_far, "CE", _far_delta_tgt, STEP)
-    _far_atm_pe_strike, _far_atm_pe_ltp = _find_delta_far(
-        far_pe, spot, _T_far_bs, _sigma_far, "PE", _far_delta_tgt, STEP)
-
-else:
-    # Fallback: nearest OTM from ATM
-    _far_atm_ce_strike, _far_atm_ce_ltp = _nearest_far_ltp(far_ce, atm, STEP, direction=1)
-    _far_atm_pe_strike, _far_atm_pe_ltp = _nearest_far_ltp(far_pe, atm, STEP, direction=-1)
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
-_buy_target_70    = (_3lot_sell_total * 0.70) if _3lot_sell_total else None
+_buy_target_80    = (_3lot_sell_total * 0.80) if _3lot_sell_total else None
 _buy_target_300   = (_3lot_sell_total * 3.00) if _3lot_sell_total else None
-_buy_ok           = bool(_buy_target_70 and _buy_target_300
-                         and _buy_target_70 <= _far_atm_straddle <= _buy_target_300)
+_buy_ok           = bool(_buy_target_80 and _far_atm_straddle >= _buy_target_80)
 _buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
 # ─────────────────────────────────────────────
@@ -2327,25 +2282,6 @@ with pb2:
             f"</div></div>",
             unsafe_allow_html=True)
 with pb3:
-    # ── Far-leg strike selection widgets (rendered in correct column) ──────────
-    _fm_opts = ["VIX 1σ Range", "Delta"]
-    st.selectbox(
-        "Far leg strike by",
-        _fm_opts,
-        index=_fm_opts.index(_far_method),
-        key="far_strike_method",
-        help="VIX 1σ Range: ±1σ move scaled to far DTE. Delta: BS delta target.",
-    )
-    if _far_method == "Delta":
-        st.slider(
-            "Target Δ",
-            min_value=0.10, max_value=0.50, step=0.05,
-            value=_far_delta_tgt or 0.25,
-            key="far_delta_tgt",
-            format="%.2f",
-            help="0.25 ≈ 1σ OTM · 0.15 ≈ 2σ OTM · 0.40 ≈ near ATM",
-        )
-
     _sell_ce_ltp2 = near_ce.get(float(sell_ce_strike), 0)
     _sell_pe_ltp2 = near_pe.get(float(sell_pe_strike), 0)
     _strangle_val = _sell_ce_ltp2 + _sell_pe_ltp2
@@ -2370,10 +2306,9 @@ with pb3:
 
     # ── Pre-compute colour/text vars for diagonal ticket ─────────────────────
     if _3lot_sell_total:
-        _buy_too_high = bool(_buy_target_300 and _far_atm_straddle > _buy_target_300)
-        _buy_val_col  = "var(--bull)" if _buy_ok else ("var(--gold)" if _buy_too_high else "var(--bear)")
-        _buy_chk_col  = "var(--bull)" if _buy_ok else ("var(--gold)" if _buy_too_high else "var(--bear)")
-        _buy_status   = "✓ OK" if _buy_ok else ("↑ Too high" if _buy_too_high else "↓ Too low")
+        _buy_val_col  = "var(--bull)" if _buy_ok else "var(--bear)"
+        _buy_chk_col  = "var(--bull)" if _buy_ok else "var(--bear)"
+        _buy_status   = "✓ ≥80% of sold" if _buy_ok else "✗ <80% of sold"
         _ratio_txt    = f"{_buy_ratio_pct:.0f}%" if _buy_ratio_pct else "—"
         _net_debit    = _far_atm_straddle - _3lot_sell_total
         _3lot_ce_total = 3 * _3lot_ce_ltp
@@ -2440,7 +2375,7 @@ with pb3:
     <div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);
                 border-radius:6px;padding:8px 10px;'>
       <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:6px;'>
-        BUY · FAR {far_exp} · 1 LOT EACH · {"Δ" + f"{_far_delta_tgt:.2f}" if _far_method == "Delta" else "VIX 1σ"}
+        BUY · FAR {far_exp} · 1 LOT EACH · ≥80% of sold
       </div>
       <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
         <span style='font-size:11px;'>CALL {_pill_ce(_far_atm_ce_strike)}</span>
@@ -2458,7 +2393,7 @@ with pb3:
         </span>
       </div>
       <div style='font-size:9px;color:{_buy_chk_col};font-weight:700;margin-top:2px;'>
-        {_ratio_txt} of sell &nbsp;·&nbsp; {_buy_status} &nbsp;(need 70%–300%)
+        {_ratio_txt} of sold premium &nbsp;·&nbsp; {_buy_status}
       </div>
     </div>
   </div>
