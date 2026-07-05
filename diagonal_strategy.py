@@ -838,71 +838,134 @@ def weeks_out(expiry_str):
         return 0.0
 
 
-@st.cache_data(ttl=180, show_spinner=False)
-def fetch_futures_buildup():
-    """
-    Fetch NIFTY current-month and next-month futures build-up from NSE public API.
-    Returns list of dicts: [{label, ltp, prev_close, oi, prev_oi, buildup, expiry}, ...]
-    Build-up types: Long Build-up | Short Build-up | Long Unwinding | Short Covering
-    """
-    import requests as _req, time as _time
-    _nse_hdrs = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/124.0.0.0 Safari/537.36"),
-        "Accept":          "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer":         "https://www.nseindia.com/",
-        "Connection":      "keep-alive",
-    }
+@st.cache_data(ttl=86_400, show_spinner=False)
+def _fetch_nse_fo_instruments():
+    """Download Upstox NSE_FO instruments JSON (cached 24 h). Returns list of instrument dicts."""
+    import gzip, io
     try:
-        s = _req.Session()
+        r = requests.get(
+            "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz",
+            timeout=20, headers={"Accept-Encoding": "gzip, deflate"}
+        )
+        raw = gzip.decompress(r.content)
+        return json.loads(raw.decode("utf-8")), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _nifty_fut_keys_upstox(expiry_dates):
+    """
+    From the NSE_FO instruments list, return {expiry_str: instrument_key}
+    for the given expiry_dates (YYYY-MM-DD list).
+    Matches: segment=NSE_FO, name=NIFTY, instrument_type=FUTIDX.
+    """
+    instruments, err = _fetch_nse_fo_instruments()
+    if not instruments:
+        return {}, err
+    keys = {}
+    target = set(expiry_dates)
+    for inst in instruments:
+        if (inst.get("segment") == "NSE_FO"
+                and inst.get("name") == "NIFTY"
+                and inst.get("instrument_type") in ("FUTIDX", "FUT")):
+            exp = str(inst.get("expiry", ""))[:10]   # YYYY-MM-DD
+            if exp in target:
+                keys[exp] = inst.get("instrument_key", "")
+    return keys, None
+
+
+@st.cache_data(ttl=180, show_spinner=False)
+def fetch_futures_buildup(tok, expiry_dates):
+    """
+    Fetch NIFTY futures build-up for the given expiry dates.
+    Primary: Upstox market-quote API (uses our existing token).
+    Fallback: NSE public derivatives API.
+    Returns ([{expiry, ltp, prev_close, oi, prev_oi, px_chg_pct, oi_chg_pct, buildup}], err)
+    """
+    def _classify(price_up, oi_up):
+        if price_up and oi_up:        return "Long Build-up"
+        if price_up and not oi_up:    return "Short Covering"
+        if not price_up and oi_up:    return "Short Build-up"
+        return "Long Unwinding"
+
+    # ── 1. Try Upstox ────────────────────────────────────────────────────────
+    try:
+        fut_keys, _err = _nifty_fut_keys_upstox(expiry_dates)
+        if fut_keys:
+            keys_param = ",".join(v for v in fut_keys.values() if v)
+            r = requests.get(
+                "https://api.upstox.com/v2/market-quote/quotes",
+                params={"instrument_key": keys_param},
+                headers=hdr(tok), timeout=10,
+            )
+            if r.status_code == 200 and r.json().get("status") == "success":
+                data = r.json().get("data", {})
+                results = []
+                for exp, ikey in sorted(fut_keys.items()):
+                    ikey_c = ikey.replace("|", ":")
+                    qd = data.get(ikey_c) or data.get(ikey) or {}
+                    if not qd:
+                        continue
+                    ltp        = float(qd.get("last_price") or 0)
+                    ohlc       = qd.get("ohlc", {})
+                    prev_close = float(ohlc.get("close") or ohlc.get("prev_close") or 0)
+                    oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
+                    prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
+                    px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
+                    oi_chg_pct = ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0
+                    results.append({
+                        "expiry": exp, "ltp": ltp, "prev_close": prev_close,
+                        "oi": oi, "prev_oi": prev_oi,
+                        "px_chg_pct": px_chg_pct, "oi_chg_pct": oi_chg_pct,
+                        "buildup": _classify(ltp > prev_close, oi > prev_oi),
+                        "source": "upstox",
+                    })
+                if results:
+                    return results, None
+    except Exception:
+        pass   # fall through to NSE
+
+    # ── 2. Fallback: NSE public API ──────────────────────────────────────────
+    try:
+        import time as _time
+        _nse_hdrs = {
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0.0.0 Safari/537.36"),
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://www.nseindia.com/",
+        }
+        s = requests.Session()
         s.headers.update(_nse_hdrs)
-        # Warm up session cookie
         s.get("https://www.nseindia.com/", timeout=8)
-        _time.sleep(0.5)
-        r = s.get("https://www.nseindia.com/api/quote-derivative?symbol=NIFTY",
-                  timeout=10)
+        _time.sleep(0.4)
+        r = s.get("https://www.nseindia.com/api/quote-derivative?symbol=NIFTY", timeout=10)
         if r.status_code != 200:
             return None, f"NSE HTTP {r.status_code}"
-        data = r.json()
-        stocks = data.get("stocks", [])
-        results = []
-        seen = 0
+        stocks = r.json().get("stocks", [])
+        results, seen = [], 0
         for item in stocks:
             md = item.get("metadata", {})
             if md.get("instrumentType") != "Index Futures":
                 continue
-            ltp        = float(md.get("lastPrice",  0) or 0)
+            ltp        = float(md.get("lastPrice", 0) or 0)
             prev_close = float(md.get("prevClose",  0) or 0)
             oi         = float(md.get("openInterest", 0) or 0)
-            prev_oi    = float(md.get("prevOpenInterest", 0) or 0) or oi  # fallback
+            prev_oi    = float(md.get("prevOpenInterest", 0) or 0) or oi
             expiry     = md.get("expiryDate", "")
-            label      = md.get("identifier", expiry)
-            price_up   = ltp > prev_close
-            oi_up      = oi  > prev_oi
-            if price_up  and oi_up:   buildup = "Long Build-up"
-            elif price_up and not oi_up: buildup = "Short Covering"
-            elif not price_up and oi_up: buildup = "Short Build-up"
-            else:                         buildup = "Long Unwinding"
-            oi_chg_pct = ((oi - prev_oi) / prev_oi * 100) if prev_oi else 0
             px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
+            oi_chg_pct = ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0
             results.append({
-                "label":      label,
-                "expiry":     expiry,
-                "ltp":        ltp,
-                "prev_close": prev_close,
-                "oi":         oi,
-                "prev_oi":    prev_oi,
-                "oi_chg_pct": oi_chg_pct,
-                "px_chg_pct": px_chg_pct,
-                "buildup":    buildup,
+                "expiry": expiry, "ltp": ltp, "prev_close": prev_close,
+                "oi": oi, "prev_oi": prev_oi,
+                "px_chg_pct": px_chg_pct, "oi_chg_pct": oi_chg_pct,
+                "buildup": _classify(ltp > prev_close, oi > prev_oi),
+                "source": "nse",
             })
             seen += 1
-            if seen >= 2:   # current month + next month
+            if seen >= 2:
                 break
-        return results or None, None if results else "No futures rows found"
+        return (results, None) if results else (None, "No futures rows found")
     except Exception as e:
         return None, str(e)
 
@@ -2118,7 +2181,24 @@ for _sq_n, _sq_val in _sq_levels:
 # ── End of square-root levels ──────────────────────────────────────────────────
 
 # ── Futures build-up ──────────────────────────────────────────────────────────
-_fut_data, _fut_err = fetch_futures_buildup()
+# Find current-month and next-month monthly expiry from all_exp
+# Monthly expiry = last Thursday of each month → latest expiry date in that calendar month
+def _monthly_expiries_from_all(exp_list, n=2):
+    _today = datetime.now(IST).date()
+    _buckets = {}
+    for _e in exp_list:
+        try:
+            _d = datetime.strptime(_e, "%Y-%m-%d").date()
+            if _d >= _today:
+                _ym = (_d.year, _d.month)
+                if _ym not in _buckets or _d > _buckets[_ym]:
+                    _buckets[_ym] = _d
+        except Exception:
+            pass
+    return [str(v) for v in sorted(_buckets.values())[:n]]
+
+_fut_expiries = _monthly_expiries_from_all(all_exp, n=2)
+_fut_data, _fut_err = fetch_futures_buildup(token, _fut_expiries)
 
 _BUILDUP_META = {
     "Long Build-up":   ("var(--bull)",  "▲", "rgba(50,215,75,0.10)",  "rgba(50,215,75,0.35)"),
