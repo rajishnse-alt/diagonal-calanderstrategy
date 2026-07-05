@@ -1935,10 +1935,10 @@ _rd_p_down        = -_rd_net_delta * _rd_daily_move + 0.5 * _rd_net_gamma * _rd_
 _rd_loss_per_unit = max(0.0, -min(_rd_p_up, _rd_p_down)) * LOT_SIZE
 _rd_loss_per_unit = max(_rd_loss_per_unit, 1.0)   # guard against divide-by-zero
 
-# SPAN margin ≈ 4.5% of notional for short near-month NIFTY options
-# (premium × 1.5 underestimates by ~4-5×; this matches real broker margins)
+# SPAN margin ≈ 5% of notional for short near-month NIFTY options
+# (4.5% gives 7 lots; 5% gives 6 lots for ₹5L — matches real broker SPAN+exposure)
 _rd_margin_per_unit = max(
-    spot * LOT_SIZE * 0.045 if spot else 70_000,
+    spot * LOT_SIZE * 0.05 if spot else 80_000,
     LOT_SIZE * _rd_atm_ce_ltp * 2
 )
 _rd_margin_per_unit = max(_rd_margin_per_unit, 1.0)
@@ -2575,7 +2575,7 @@ if _rd_atm_ce_ltp > 0:
     # Recompute with live slider value (directional loss + SPAN margin)
     _rd_max_daily_loss  = _rd_capital * 0.01
     _rd_margin_per_unit = max(
-        spot * LOT_SIZE * 0.045 if spot else 70_000,
+        spot * LOT_SIZE * 0.05 if spot else 80_000,
         LOT_SIZE * _rd_atm_ce_ltp * 2, 1.0
     )
     _rd_lots_by_capital = max(1, int(_rd_capital / _rd_margin_per_unit))
@@ -2592,11 +2592,14 @@ if _rd_atm_ce_ltp > 0:
     if _rd_proj_pct > 1.0 and _rd_lots > 0:
         _pos_net_delta = _rd_net_delta * _rd_lots   # signed net delta of main position
         _pos_net_gamma = _rd_net_gamma * _rd_lots   # signed net gamma of main position
+        _wing_ltp_max = _rd_atm_ce_ltp * 0.10   # wing must cost ≤10% of sold premium
         _found_wing = False
-        for _wi in range(2, 15):                    # scan ATM+2 to ATM+14 steps
+        for _wi in range(1, 22):                    # scan ATM+1 to ATM+21 steps
             _ws  = atm + _wi * STEP
             _wl  = near_ce.get(float(_ws), 0)
             if _wl <= 0:
+                continue
+            if _wl > _wing_ltp_max:                 # skip strikes that are too expensive
                 continue
             _wd  = bs_delta(spot, _ws, _rd_T_near, _rd_sigma, "CE")
             _wg  = bs_gamma(spot, _ws, _rd_T_near, _rd_sigma)
