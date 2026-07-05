@@ -1886,16 +1886,56 @@ _buy_ok           = bool(_buy_target_80 and _far_atm_straddle >= _buy_target_80)
 _buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
 # ── Ratio Diagonal CE  (Sell 1 ATM CE near · Buy 2 far CE at 40–50% premium) ──
-_rd_atm_ce_ltp    = near_ce.get(float(atm), 0)
+
+# ── Strike Lock: freeze ATM strike for 1 hour once market is open ──────────────
+_rd_lock_key      = "rd_locked_atm"
+_rd_lock_time_key = "rd_lock_time"
+_rd_now           = now   # datetime.now(IST) already computed above
+
+if mkt_open:
+    _rd_existing_lock = st.session_state.get(_rd_lock_key)
+    _rd_lock_time     = st.session_state.get(_rd_lock_time_key)
+    if _rd_existing_lock is None or _rd_lock_time is None:
+        # First render during market hours — lock the current ATM
+        st.session_state[_rd_lock_key]      = atm
+        st.session_state[_rd_lock_time_key] = _rd_now
+        _rd_use_atm   = atm
+        _rd_locked     = False   # just set; show as "just locked"
+        _rd_lock_secs  = 0
+    else:
+        _rd_lock_secs = (_rd_now - _rd_lock_time).total_seconds()
+        if _rd_lock_secs < 3600:
+            # Within 1 hour — use locked ATM
+            _rd_use_atm  = _rd_existing_lock
+            _rd_locked    = True
+        else:
+            # Lock expired — reset to current ATM
+            st.session_state[_rd_lock_key]      = atm
+            st.session_state[_rd_lock_time_key] = _rd_now
+            _rd_use_atm  = atm
+            _rd_locked    = False
+            _rd_lock_secs = 0
+else:
+    # Market closed — clear any stale lock and use live ATM
+    st.session_state.pop(_rd_lock_key,      None)
+    st.session_state.pop(_rd_lock_time_key, None)
+    _rd_use_atm  = atm
+    _rd_locked    = False
+    _rd_lock_secs = 0
+
+_rd_lock_remaining = max(0, 3600 - int(_rd_lock_secs))   # seconds left on lock
+# ────────────────────────────────────────────────────────────────────────────────
+
+_rd_atm_ce_ltp    = near_ce.get(float(_rd_use_atm), 0)
 _rd_lo            = _rd_atm_ce_ltp * 0.40
 _rd_hi            = _rd_atm_ce_ltp * 0.50
-_rd_far_ce_strike = int(atm)
+_rd_far_ce_strike = int(_rd_use_atm)
 _rd_far_ce_ltp    = 0.0
 _rd_in_range      = False
 
 if _rd_atm_ce_ltp > 0:
     for _rdi in range(1, 35):
-        _rds = atm + _rdi * STEP
+        _rds = _rd_use_atm + _rdi * STEP
         _rdl = far_ce.get(float(_rds), 0)
         if _rdl <= 0:
             continue
@@ -1918,9 +1958,9 @@ _rd_T_near    = max(_days_to_exp, 1) / 365.0
 _rd_T_far     = max((datetime.strptime(far_exp, "%Y-%m-%d").date() - now.date()).days, 1) / 365.0
 
 # Greeks for 1 unit (short 1 near ATM CE + long 2 far OTM CE)
-_rd_near_delta = bs_delta(spot, atm,               _rd_T_near, _rd_sigma, "CE") if spot else 0.50
+_rd_near_delta = bs_delta(spot, _rd_use_atm,       _rd_T_near, _rd_sigma, "CE") if spot else 0.50
 _rd_far_delta  = bs_delta(spot, _rd_far_ce_strike, _rd_T_far,  _rd_sigma, "CE") if spot else 0.25
-_rd_near_gamma = bs_gamma(spot, atm,               _rd_T_near, _rd_sigma)        if spot else 0.0
+_rd_near_gamma = bs_gamma(spot, _rd_use_atm,       _rd_T_near, _rd_sigma)        if spot else 0.0
 _rd_far_gamma  = bs_gamma(spot, _rd_far_ce_strike, _rd_T_far,  _rd_sigma)        if spot else 0.0
 
 _rd_net_delta  = -_rd_near_delta + 2 * _rd_far_delta    # net direction per unit
@@ -1935,11 +1975,12 @@ _rd_p_down        = -_rd_net_delta * _rd_daily_move + 0.5 * _rd_net_gamma * _rd_
 _rd_loss_per_unit = max(0.0, -min(_rd_p_up, _rd_p_down)) * LOT_SIZE
 _rd_loss_per_unit = max(_rd_loss_per_unit, 1.0)   # guard against divide-by-zero
 
-# SPAN margin ≈ 5% of notional for short near-month NIFTY options
-# (4.5% gives 7 lots; 5% gives 6 lots for ₹5L — matches real broker SPAN+exposure)
+# Premium-based margin: lot_size × sold_premium × 7
+# e.g. 65 × 105 × 7 = ₹47,775/lot → ₹3L / ₹47,775 = 6 lots
+# Floor: 2% of notional so margin doesn't collapse when premium is tiny
 _rd_margin_per_unit = max(
-    spot * LOT_SIZE * 0.05 if spot else 80_000,
-    LOT_SIZE * _rd_atm_ce_ltp * 2
+    LOT_SIZE * _rd_atm_ce_ltp * 7,
+    spot * LOT_SIZE * 0.02 if spot else 30_000
 )
 _rd_margin_per_unit = max(_rd_margin_per_unit, 1.0)
 
@@ -2572,11 +2613,12 @@ if _rd_atm_ce_ltp > 0:
         format="₹%d",
         help="Minimum ₹2L. Lot count is sized so that worst intraday loss ≤ 1% of this capital.",
     )
-    # Recompute with live slider value (directional loss + SPAN margin)
+    # Recompute with live slider value (premium-based margin)
     _rd_max_daily_loss  = _rd_capital * 0.01
     _rd_margin_per_unit = max(
-        spot * LOT_SIZE * 0.05 if spot else 80_000,
-        LOT_SIZE * _rd_atm_ce_ltp * 2, 1.0
+        LOT_SIZE * _rd_atm_ce_ltp * 7,
+        spot * LOT_SIZE * 0.02 if spot else 30_000,
+        1.0
     )
     _rd_lots_by_capital = max(1, int(_rd_capital / _rd_margin_per_unit))
     _rd_lots_by_risk    = max(1, int(_rd_max_daily_loss / _rd_loss_per_unit))
@@ -2590,36 +2632,28 @@ if _rd_atm_ce_ltp > 0:
     _rd_wing_new_pct  = _rd_proj_pct
 
     if _rd_proj_pct > 1.0 and _rd_lots > 0:
-        _pos_net_delta = _rd_net_delta * _rd_lots   # signed net delta of main position
-        _pos_net_gamma = _rd_net_gamma * _rd_lots   # signed net gamma of main position
-        _wing_ltp_max = _rd_atm_ce_ltp * 0.10   # wing must cost ≤10% of sold premium
-        _found_wing = False
-        for _wi in range(1, 22):                    # scan ATM+1 to ATM+21 steps
-            _ws  = atm + _wi * STEP
-            _wl  = near_ce.get(float(_ws), 0)
-            if _wl <= 0:
+        # Wing rule: SELL a far OTM same-expiry CE to collect premium that covers
+        # the projected intraday loss.  Lots = ceil(proj_loss / (lot_size × wing_LTP))
+        # so that premium collected ≥ projected 1σ daily loss → blue line ≤ 1%.
+        import math as _math
+        _wing_ltp_max = _rd_atm_ce_ltp * 0.10   # only strikes ≤ 10% of sold premium
+        _found_wing   = False
+        for _wi in range(1, 25):                  # scan ATM+1 … ATM+24 steps
+            _ws = _rd_use_atm + _wi * STEP
+            _wl = near_ce.get(float(_ws), 0)
+            if _wl <= 0 or _wl > _wing_ltp_max:
                 continue
-            if _wl > _wing_ltp_max:                 # skip strikes that are too expensive
-                continue
-            _wd  = bs_delta(spot, _ws, _rd_T_near, _rd_sigma, "CE")
-            _wg  = bs_gamma(spot, _ws, _rd_T_near, _rd_sigma)
-            # Minimum lots of this wing to bring combined directional loss ≤ 1%
-            for _wn in range(1, _rd_lots * 8 + 1):
-                _nd = _pos_net_delta + _wn * _wd
-                _ng = _pos_net_gamma + _wn * _wg
-                _wp_up   =  _nd * _rd_daily_move + 0.5 * _ng * _rd_daily_move**2
-                _wp_down = -_nd * _rd_daily_move + 0.5 * _ng * _rd_daily_move**2
-                _nl      = max(0.0, -min(_wp_up, _wp_down)) * LOT_SIZE
-                if _nl <= _rd_max_daily_loss:
-                    _rd_wing_strike   = int(_ws)
-                    _rd_wing_ltp      = _wl
-                    _rd_wing_lots     = _wn
-                    _rd_wing_new_loss = _nl
-                    _rd_wing_new_pct  = (_nl / _rd_capital * 100) if _rd_capital else 0
-                    _found_wing = True
-                    break
-            if _found_wing:
-                break
+            # Sell enough lots so collected premium ≥ projected loss
+            _rd_wing_lots_t  = max(1, _math.ceil(_rd_proj_loss / max(LOT_SIZE * _wl, 1)))
+            _wing_collected  = _rd_wing_lots_t * LOT_SIZE * _wl
+            # Net loss after wing sale = projected loss − premium collected (floor 0)
+            _rd_wing_strike   = int(_ws)
+            _rd_wing_ltp      = _wl
+            _rd_wing_lots     = _rd_wing_lots_t
+            _rd_wing_new_loss = max(0.0, _rd_proj_loss - _wing_collected)
+            _rd_wing_new_pct  = (_rd_wing_new_loss / _rd_capital * 100) if _rd_capital else 0
+            _found_wing       = True
+            break
 
     _rd_status_col = "var(--bull)" if _rd_in_range else "var(--gold)"
     _rd_status_txt = (f"✓ {_rd_ratio_pct:.0f}% — in 40–50% band"
@@ -2629,21 +2663,21 @@ if _rd_atm_ce_ltp > 0:
 
     # Wing HTML block (empty string if no wing needed)
     if _rd_wing_strike and _rd_proj_pct > 1.0:
-        _wing_adj_cost = _rd_wing_ltp * _rd_wing_lots
+        _wing_collected_total = _rd_wing_lots * LOT_SIZE * _rd_wing_ltp
         _wing_new_col  = "var(--bull)" if _rd_wing_new_pct <= 1.0 else "var(--gold)"
         _rd_wing_html  = (
             f"<div style='margin-top:6px;padding:8px 10px;"
             f"background:rgba(255,201,64,0.07);border:1px solid rgba(255,201,64,0.3);"
             f"border-radius:6px;'>"
             f"<div style='font-size:9px;font-weight:700;letter-spacing:.08em;"
-            f"color:var(--gold);margin-bottom:5px;'>⚡ HEDGE ADJUSTMENT — loss &gt;1%, add near OTM wing</div>"
+            f"color:var(--gold);margin-bottom:5px;'>⚡ SELL WING — proj loss &gt;1%, sell same-expiry OTM CE to collect premium</div>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>"
-            f"<span style='font-size:11px;'>BUY {_rd_wing_lots} lot{'s' if _rd_wing_lots>1 else ''} "
-            f"near CALL {_rd_pill_ce(_rd_wing_strike)}</span>"
-            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;'>₹{_rd_wing_ltp:.2f} × {_rd_wing_lots} = ₹{_wing_adj_cost:.2f}</span>"
+            f"<span style='font-size:11px;'>SELL {_rd_wing_lots} lot{'s' if _rd_wing_lots>1 else ''} "
+            f"near CE {_rd_pill_ce(_rd_wing_strike)} &nbsp;<span style='font-size:9px;color:var(--muted);'>(same expiry)</span></span>"
+            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--bull);'>+₹{_rd_wing_ltp:.2f} × {_rd_wing_lots} lots × {LOT_SIZE} = ₹{_wing_collected_total:,.0f} collected</span>"
             f"</div>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-            f"<span style='font-size:9px;color:var(--muted);'>New daily loss after hedge (1σ)</span>"
+            f"<span style='font-size:9px;color:var(--muted);'>Residual daily loss after wing (1σ)</span>"
             f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_wing_new_col};'>"
             f"₹{_rd_wing_new_loss:,.0f} &nbsp;({_rd_wing_new_pct:.2f}%)"
             f"</span>"
@@ -2653,12 +2687,32 @@ if _rd_atm_ce_ltp > 0:
     else:
         _rd_wing_html = ""
 
+    # Lock status badge for card header
+    if _rd_locked:
+        _rd_lock_mm = _rd_lock_remaining // 60
+        _rd_lock_ss = _rd_lock_remaining % 60
+        _rd_lock_badge = (
+            f"<span style='font-size:9px;font-family:var(--mono);"
+            f"background:rgba(255,201,64,0.15);color:var(--gold);"
+            f"padding:2px 6px;border-radius:4px;border:1px solid rgba(255,201,64,0.4);'>"
+            f"🔒 LOCKED {_rd_use_atm} &nbsp;·&nbsp; resets in {_rd_lock_mm}m {_rd_lock_ss:02d}s"
+            f"</span>"
+        )
+    else:
+        _rd_lock_badge = (
+            f"<span style='font-size:9px;font-family:var(--mono);"
+            f"background:rgba(50,215,75,0.10);color:var(--bull);"
+            f"padding:2px 6px;border-radius:4px;border:1px solid rgba(50,215,75,0.3);'>"
+            f"{'🟢 LIVE ATM' if mkt_open else '⭕ MKT CLOSED'}"
+            f"</span>"
+        )
+
     _rd_card = (
         f"<div class='card' style='border-left:4px solid var(--ce);'>"
         # Header row: position sizing summary
         f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>"
         f"<div style='font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--ce);'>"
-        f"RATIO DIAGONAL CE &nbsp;·&nbsp; {_vp_tgt_band}"
+        f"RATIO DIAGONAL CE &nbsp;·&nbsp; {_vp_tgt_band} &nbsp; {_rd_lock_badge}"
         f"</div>"
         f"<div style='font-size:10px;font-family:var(--mono);color:var(--muted);'>"
         f"Capital ₹{_rd_capital/1e5:.1f}L &nbsp;·&nbsp; "
@@ -2671,7 +2725,7 @@ if _rd_atm_ce_ltp > 0:
         f"<div style='background:rgba(255,59,48,0.06);border:1px solid rgba(255,59,48,0.25);border-radius:6px;padding:8px 10px;'>"
         f"<div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bear);margin-bottom:5px;'>SELL · NEAR · {_rd_lots} LOT{'S' if _rd_lots>1 else ''}</div>"
         f"<div style='display:flex;justify-content:space-between;'>"
-        f"<span style='font-size:11px;'>ATM CALL {_rd_pill_ce(atm)}</span>"
+        f"<span style='font-size:11px;'>ATM CALL {_rd_pill_ce(_rd_use_atm)}</span>"
         f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;'>₹{_rd_atm_ce_ltp:.2f}</span>"
         f"</div>"
         f"<div style='border-top:1px solid rgba(255,59,48,0.2);margin-top:5px;padding-top:4px;"
