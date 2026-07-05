@@ -2334,7 +2334,7 @@ with pb3:
 
     # ── Diagonal ticket HTML ──────────────────────────────────────────────────
     if _diag_ok:
-        _diag_ticket = f"""
+        _diag_ticket = (f"""
 <div style='margin-top:8px;padding-top:8px;border-top:1px solid var(--border);'>
   <!-- SELL | BUY grid -->
   <div style='display:grid;grid-template-columns:1fr 28px 1fr;gap:4px;align-items:start;'>
@@ -2403,7 +2403,7 @@ with pb3:
     <span style='font-family:var(--mono);font-size:14px;font-weight:700;'>₹{_net_debit:.2f}</span>
   </div>
 </div>
-"""
+""").replace("\n", " ")
     else:
         _diag_ticket = ""
 
