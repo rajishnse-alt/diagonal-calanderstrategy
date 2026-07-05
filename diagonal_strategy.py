@@ -1885,6 +1885,64 @@ _buy_target_300   = (_3lot_sell_total * 3.00) if _3lot_sell_total else None
 _buy_ok           = bool(_buy_target_80 and _far_atm_straddle >= _buy_target_80)
 _buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
+# ── Ratio Diagonal CE  (Sell 1 ATM CE near · Buy 2 far CE at 40–50% premium) ──
+_rd_atm_ce_ltp    = near_ce.get(float(atm), 0)
+_rd_lo            = _rd_atm_ce_ltp * 0.40
+_rd_hi            = _rd_atm_ce_ltp * 0.50
+_rd_far_ce_strike = int(atm)
+_rd_far_ce_ltp    = 0.0
+_rd_in_range      = False
+
+if _rd_atm_ce_ltp > 0:
+    for _rdi in range(1, 35):
+        _rds = atm + _rdi * STEP
+        _rdl = far_ce.get(float(_rds), 0)
+        if _rdl <= 0:
+            continue
+        if _rdl <= _rd_hi:          # first OTM far-CE at ≤50% of sold premium
+            _rd_far_ce_strike = int(_rds)
+            _rd_far_ce_ltp    = _rdl
+            _rd_in_range      = _rd_lo <= _rdl <= _rd_hi
+            break
+
+_rd_ratio_pct  = (_rd_far_ce_ltp / _rd_atm_ce_ltp * 100) if _rd_atm_ce_ltp else 0
+_rd_net        = _rd_atm_ce_ltp - 2 * _rd_far_ce_ltp   # +ve = net credit, -ve = net debit
+_rd_net_lbl    = "NET CREDIT" if _rd_net >= 0 else "NET DEBIT"
+_rd_net_col    = "var(--bull)" if _rd_net >= 0 else "var(--bear)"
+
+# ── Position sizing: capital slider → lot count capped by 1% daily-loss rule ──
+_rd_capital        = st.session_state.get("rd_capital", 500_000)   # default ₹5L
+
+# Greeks for 1 unit (short 1 near ATM CE + long 2 far OTM CE)
+_rd_near_delta = bs_delta(spot, atm,               _T_near_std, _sigma_std, "CE") if spot and _T_near_std else 0.50
+_rd_far_delta  = bs_delta(spot, _rd_far_ce_strike, _T_far_std,  _sigma_std, "CE") if spot and _T_far_std  else 0.25
+_rd_near_gamma = bs_gamma(spot, atm,               _T_near_std, _sigma_std)        if spot and _T_near_std else 0.0
+_rd_far_gamma  = bs_gamma(spot, _rd_far_ce_strike, _T_far_std,  _sigma_std)        if spot and _T_far_std  else 0.0
+
+_rd_net_delta  = -_rd_near_delta + 2 * _rd_far_delta    # net direction per unit
+_rd_net_gamma  = -_rd_near_gamma + 2 * _rd_far_gamma    # net gamma per unit (usually negative)
+
+# Worst-case intraday loss for 1 unit at 1σ daily move
+_rd_daily_move    = _daily_pts if (_daily_pts and _daily_pts > 0) else (spot * 0.01 if spot else 100)
+_rd_loss_per_unit = (
+    abs(_rd_net_delta) * _rd_daily_move
+    + 0.5 * abs(_rd_net_gamma) * _rd_daily_move ** 2
+) * LOT_SIZE
+_rd_loss_per_unit = max(_rd_loss_per_unit, 1.0)   # guard against divide-by-zero
+
+# Capital-based limit (rough margin = 1.5× sell proceeds + 2× buy cost)
+_rd_margin_per_unit = LOT_SIZE * (_rd_atm_ce_ltp * 1.5 + 2 * _rd_far_ce_ltp)
+_rd_margin_per_unit = max(_rd_margin_per_unit, 1.0)
+
+_rd_max_daily_loss   = _rd_capital * 0.01          # 1% of capital
+_rd_lots_by_risk     = max(1, int(_rd_max_daily_loss / _rd_loss_per_unit))
+_rd_lots_by_capital  = max(1, int(_rd_capital / _rd_margin_per_unit))
+_rd_lots             = min(_rd_lots_by_risk, _rd_lots_by_capital)
+
+# Projected daily loss at chosen lot count
+_rd_proj_loss  = _rd_loss_per_unit * _rd_lots
+_rd_proj_pct   = (_rd_proj_loss / _rd_capital * 100) if _rd_capital else 0
+
 # ─────────────────────────────────────────────
 # MARKET SNAPSHOT
 # ─────────────────────────────────────────────
@@ -2490,7 +2548,158 @@ with pb4:
             "<div class='lbl'>H/L data not yet available</div></div>",
             unsafe_allow_html=True)
 
-# (CE/PE sell-buy rows removed — superseded by the Diagonal Spread card in pb3)
+# ── Ratio Diagonal CE card ────────────────────────────────────────────────────
+if _rd_atm_ce_ltp > 0:
+    st.markdown("<div class='sec-hdr'>📐 Ratio Diagonal CE &nbsp;·&nbsp; Sell 1 ATM : Buy 2 OTM Far</div>",
+                unsafe_allow_html=True)
+
+    # Capital slider
+    _rd_capital = st.slider(
+        "Deployed Capital",
+        min_value=200_000, max_value=10_000_000, step=100_000,
+        value=st.session_state.get("rd_capital", 500_000),
+        key="rd_capital",
+        format="₹%d",
+        help="Minimum ₹2L. Lot count is sized so that worst intraday loss ≤ 1% of this capital.",
+    )
+    # Recompute with live slider value
+    _rd_max_daily_loss  = _rd_capital * 0.01
+    _rd_lots_by_risk    = max(1, int(_rd_max_daily_loss / _rd_loss_per_unit))
+    _rd_margin_per_unit = max(LOT_SIZE * (_rd_atm_ce_ltp * 1.5 + 2 * _rd_far_ce_ltp), 1.0)
+    _rd_lots_by_capital = max(1, int(_rd_capital / _rd_margin_per_unit))
+    _rd_lots            = min(_rd_lots_by_risk, _rd_lots_by_capital)
+    _rd_proj_loss       = _rd_loss_per_unit * _rd_lots
+    _rd_proj_pct        = (_rd_proj_loss / _rd_capital * 100) if _rd_capital else 0
+
+    # ── Wing hedge: if daily loss > 1%, buy near OTM CE to cap gamma risk ──────
+    _rd_wing_strike = _rd_wing_ltp = _rd_wing_lots = None
+    _rd_wing_new_loss = _rd_proj_loss
+    _rd_wing_new_pct  = _rd_proj_pct
+
+    if _rd_proj_pct > 1.0 and _rd_lots > 0:
+        _pos_net_delta = _rd_net_delta * _rd_lots   # signed net delta of main position
+        _pos_net_gamma = _rd_net_gamma * _rd_lots   # signed net gamma of main position
+        _found_wing = False
+        for _wi in range(2, 15):                    # scan ATM+2 to ATM+14 steps
+            _ws  = atm + _wi * STEP
+            _wl  = near_ce.get(float(_ws), 0)
+            if _wl <= 0:
+                continue
+            _wd  = bs_delta(spot, _ws, _T_near_std, _sigma_std, "CE")
+            _wg  = bs_gamma(spot, _ws, _T_near_std, _sigma_std)
+            # Minimum lots of this wing to bring combined loss ≤ 1%
+            for _wn in range(1, _rd_lots * 6 + 1):
+                _nd = _pos_net_delta + _wn * _wd
+                _ng = _pos_net_gamma + _wn * _wg
+                _nl = (abs(_nd) * _rd_daily_move
+                       + 0.5 * abs(_ng) * _rd_daily_move ** 2) * LOT_SIZE
+                if _nl <= _rd_max_daily_loss:
+                    _rd_wing_strike   = int(_ws)
+                    _rd_wing_ltp      = _wl
+                    _rd_wing_lots     = _wn
+                    _rd_wing_new_loss = _nl
+                    _rd_wing_new_pct  = (_nl / _rd_capital * 100) if _rd_capital else 0
+                    _found_wing = True
+                    break
+            if _found_wing:
+                break
+
+    _rd_status_col = "var(--bull)" if _rd_in_range else "var(--gold)"
+    _rd_status_txt = (f"✓ {_rd_ratio_pct:.0f}% — in 40–50% band"
+                      if _rd_in_range else f"↑ {_rd_ratio_pct:.0f}% — above 50% band")
+    _rd_pill_ce    = lambda s: f"<span class='strike-pill-ce'>{s}</span>"
+    _loss_col      = "var(--bull)" if _rd_proj_pct <= 1.0 else "var(--bear)"
+
+    # Wing HTML block (empty string if no wing needed)
+    if _rd_wing_strike and _rd_proj_pct > 1.0:
+        _wing_adj_cost = _rd_wing_ltp * _rd_wing_lots
+        _wing_new_col  = "var(--bull)" if _rd_wing_new_pct <= 1.0 else "var(--gold)"
+        _rd_wing_html  = (
+            f"<div style='margin-top:6px;padding:8px 10px;"
+            f"background:rgba(255,201,64,0.07);border:1px solid rgba(255,201,64,0.3);"
+            f"border-radius:6px;'>"
+            f"<div style='font-size:9px;font-weight:700;letter-spacing:.08em;"
+            f"color:var(--gold);margin-bottom:5px;'>⚡ HEDGE ADJUSTMENT — loss &gt;1%, add near OTM wing</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>"
+            f"<span style='font-size:11px;'>BUY {_rd_wing_lots} lot{'s' if _rd_wing_lots>1 else ''} "
+            f"near CALL {_rd_pill_ce(_rd_wing_strike)}</span>"
+            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;'>₹{_rd_wing_ltp:.2f} × {_rd_wing_lots} = ₹{_wing_adj_cost:.2f}</span>"
+            f"</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+            f"<span style='font-size:9px;color:var(--muted);'>New daily loss after hedge (1σ)</span>"
+            f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_wing_new_col};'>"
+            f"₹{_rd_wing_new_loss:,.0f} &nbsp;({_rd_wing_new_pct:.2f}%)"
+            f"</span>"
+            f"</div>"
+            f"</div>"
+        ).replace("\n", " ")
+    else:
+        _rd_wing_html = ""
+
+    _rd_card = (
+        f"<div class='card' style='border-left:4px solid var(--ce);'>"
+        # Header row: position sizing summary
+        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>"
+        f"<div style='font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--ce);'>"
+        f"RATIO DIAGONAL CE &nbsp;·&nbsp; {_vp_tgt_band}"
+        f"</div>"
+        f"<div style='font-size:10px;font-family:var(--mono);color:var(--muted);'>"
+        f"Capital ₹{_rd_capital/1e5:.1f}L &nbsp;·&nbsp; "
+        f"<span style='color:var(--ce);font-weight:700;'>Sell {_rd_lots}L &nbsp;Buy {_rd_lots*2}L</span>"
+        f"</div>"
+        f"</div>"
+        # SELL | → | BUY grid
+        f"<div style='display:grid;grid-template-columns:1fr 24px 1fr;gap:4px;align-items:start;'>"
+        # SELL
+        f"<div style='background:rgba(255,59,48,0.06);border:1px solid rgba(255,59,48,0.25);border-radius:6px;padding:8px 10px;'>"
+        f"<div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bear);margin-bottom:5px;'>SELL · NEAR · {_rd_lots} LOT{'S' if _rd_lots>1 else ''}</div>"
+        f"<div style='display:flex;justify-content:space-between;'>"
+        f"<span style='font-size:11px;'>ATM CALL {_rd_pill_ce(atm)}</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;'>₹{_rd_atm_ce_ltp:.2f}</span>"
+        f"</div>"
+        f"<div style='border-top:1px solid rgba(255,59,48,0.2);margin-top:5px;padding-top:4px;"
+        f"display:flex;justify-content:space-between;align-items:baseline;'>"
+        f"<span style='font-size:9px;color:var(--muted);'>TOTAL IN</span>"
+        f"<span style='font-family:var(--mono);font-size:15px;font-weight:700;color:var(--bear);'>₹{_rd_atm_ce_ltp*_rd_lots:.2f}</span>"
+        f"</div>"
+        f"<div style='font-size:9px;color:var(--muted);margin-top:2px;'>Target buy = ₹{_rd_lo:.0f}–₹{_rd_hi:.0f}</div>"
+        f"</div>"
+        # Arrow
+        f"<div style='display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:16px;padding-top:26px;'>→</div>"
+        # BUY
+        f"<div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);border-radius:6px;padding:8px 10px;'>"
+        f"<div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:5px;'>BUY · FAR {far_exp} · {_rd_lots*2} LOTS</div>"
+        f"<div style='display:flex;justify-content:space-between;'>"
+        f"<span style='font-size:11px;'>OTM CALL {_rd_pill_ce(_rd_far_ce_strike)}</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;'>₹{_rd_far_ce_ltp:.2f} × {_rd_lots*2}</span>"
+        f"</div>"
+        f"<div style='border-top:1px solid rgba(52,199,89,0.2);margin-top:5px;padding-top:4px;"
+        f"display:flex;justify-content:space-between;align-items:baseline;'>"
+        f"<span style='font-size:9px;color:var(--muted);'>TOTAL OUT</span>"
+        f"<span style='font-family:var(--mono);font-size:15px;font-weight:700;color:var(--bull);'>₹{_rd_far_ce_ltp*_rd_lots*2:.2f}</span>"
+        f"</div>"
+        f"<div style='font-size:9px;color:{_rd_status_col};font-weight:700;margin-top:2px;'>{_rd_status_txt}</div>"
+        f"</div>"
+        f"</div>"
+        # Summary row: net + daily risk
+        f"<div style='margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px;'>"
+        f"<div style='padding:5px 10px;background:var(--surface);border-radius:5px;"
+        f"display:flex;justify-content:space-between;align-items:center;'>"
+        f"<span style='font-size:10px;color:var(--muted);'>{_rd_net_lbl} (per lot)</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:{_rd_net_col};'>₹{abs(_rd_net):.2f}</span>"
+        f"</div>"
+        f"<div style='padding:5px 10px;background:var(--surface);border-radius:5px;"
+        f"display:flex;justify-content:space-between;align-items:center;'>"
+        f"<span style='font-size:10px;color:var(--muted);'>Max daily loss (1σ)</span>"
+        f"<span style='font-family:var(--mono);font-size:13px;font-weight:700;color:{_loss_col};'>"
+        f"₹{_rd_proj_loss:,.0f} &nbsp;<span style='font-size:9px;'>({_rd_proj_pct:.2f}% of ₹{_rd_capital/1e5:.1f}L)</span>"
+        f"</span>"
+        f"</div>"
+        f"</div>"
+        + _rd_wing_html
+        + f"</div>"
+    ).replace("\n", " ")
+    st.markdown(_rd_card, unsafe_allow_html=True)
 
 if sell_ce_ltp == 0 or sell_pe_ltp == 0:
     st.warning(f"⚠️ Sell strikes ({sell_ce_strike}/{sell_pe_strike}) have zero LTP — "
