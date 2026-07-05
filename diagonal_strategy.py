@@ -1896,20 +1896,21 @@ def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=15):
     return int(base), 0.0
 
 def _find_delta_far(far_map, spot, T, sigma, opt_type, tgt_delta, step, max_steps=30):
-    """Scan far chain for strike whose abs(BS-delta) is closest to tgt_delta."""
+    """Scan ALL valid strikes in far_map; return the one whose BS-delta is closest to tgt_delta."""
     best_strike, best_ltp, best_diff = int(atm), 0.0, float("inf")
-    direction = 1 if opt_type == "CE" else -1
-    for i in range(1, max_steps + 1):
-        strike = atm + direction * i * step
-        ltp = far_map.get(float(strike), 0)
+    # Only consider OTM strikes (CE: above ATM, PE: below ATM)
+    for strike_f, ltp in far_map.items():
         if ltp <= 0:
+            continue
+        strike = float(strike_f)
+        if opt_type == "CE" and strike <= atm:
+            continue
+        if opt_type == "PE" and strike >= atm:
             continue
         d = bs_delta(spot, strike, T, sigma, opt_type)
         diff = abs(d - tgt_delta)
         if diff < best_diff:
             best_diff, best_strike, best_ltp = diff, int(strike), ltp
-        if d < 0.05:            # delta too small — stop scanning further OTM
-            break
     return best_strike, best_ltp
 
 # ── Select far strikes by chosen method ───────────────────────────────────────
