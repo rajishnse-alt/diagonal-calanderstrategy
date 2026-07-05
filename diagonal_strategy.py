@@ -1999,6 +1999,55 @@ _rd_proj_pct   = (_rd_proj_loss / _rd_capital * 100) if _rd_capital else 0
 # ─────────────────────────────────────────────
 st.markdown("<div class='sec-hdr'>📊 Market Snapshot</div>", unsafe_allow_html=True)
 
+# ── Square-of-Square-Root levels (Gann-style pivot grid) ──────────────────────
+import math as _sqmath
+_sq_base   = int(spot) if spot else 77763
+_sq_root   = round(_sqmath.sqrt(_sq_base))          # nearest integer √
+_sq_levels = []
+for _sq_i in range(-3, 4):
+    _sq_n   = _sq_root + _sq_i
+    _sq_val = _sq_n * _sq_n
+    if _sq_val % 2 == 0:                             # must be odd
+        _sq_val += 1
+    _sq_levels.append((_sq_n, _sq_val))
+
+# Build horizontal row of value pills only
+_sq_pills = ""
+for _sq_n, _sq_val in _sq_levels:
+    _sq_is_pivot = (_sq_n == _sq_root)
+    _sq_is_above = (_sq_val > spot) if spot else False
+    if _sq_is_pivot:
+        _sq_bord = "rgba(255,201,64,0.8)"; _sq_col = "var(--gold)"; _sq_bg = "rgba(255,201,64,0.15)"
+    elif _sq_is_above:
+        _sq_bord = "rgba(255,59,48,0.45)"; _sq_col = "var(--bear)"; _sq_bg = "rgba(255,59,48,0.07)"
+    else:
+        _sq_bord = "rgba(50,215,75,0.45)"; _sq_col = "var(--bull)"; _sq_bg = "rgba(50,215,75,0.07)"
+    _sq_pills += (
+        f"<span style='display:inline-block;padding:4px 12px;"
+        f"background:{_sq_bg};border:1px solid {_sq_bord};border-radius:20px;"
+        f"font-family:var(--mono);font-size:13px;font-weight:700;color:{_sq_col};"
+        f"{'box-shadow:0 0 6px rgba(255,201,64,0.4);' if _sq_is_pivot else ''}'>"
+        f"{_sq_val:,}"
+        f"{'&nbsp;◆' if _sq_is_pivot else ''}"
+        f"</span>"
+    )
+
+st.markdown(
+    f"<div class='card' style='padding:10px 14px;'>"
+    f"<div style='font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:8px;'>"
+    f"√² LEVELS &nbsp;·&nbsp; √{_sq_base} = {_sq_root} &nbsp;·&nbsp; "
+    f"<span style='color:var(--bull);'>● support</span> &nbsp; "
+    f"<span style='color:var(--bear);'>● resistance</span> &nbsp; "
+    f"<span style='color:var(--gold);'>◆ pivot</span>"
+    f"</div>"
+    f"<div style='display:flex;flex-wrap:wrap;gap:6px;align-items:center;'>"
+    f"{_sq_pills}"
+    f"</div>"
+    f"</div>",
+    unsafe_allow_html=True
+)
+# ── End of square-root levels ──────────────────────────────────────────────────
+
 # Row 1 — Spot + ATM
 r1c1, r1c2 = st.columns(2)
 with r1c1:
