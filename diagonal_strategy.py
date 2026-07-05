@@ -1848,28 +1848,9 @@ if _vp_tgt_l:
     if _3lot_ce_ltp and _3lot_pe_ltp:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
-# ── Far-leg strike selection method ──────────────────────────────────────────
-_far_method_opts = ["VIX 1σ Range", "Delta"]
-_far_method = st.selectbox(
-    "Far leg strike selection",
-    _far_method_opts,
-    index=_far_method_opts.index(
-        st.session_state.get("far_strike_method", "VIX 1σ Range")
-    ),
-    key="far_strike_method",
-    help="VIX 1σ Range: picks strike at ±1σ move for far expiry DTE. Delta: picks strike nearest to target delta.",
-)
-if _far_method == "Delta":
-    _far_delta_tgt = st.slider(
-        "Target delta (absolute)",
-        min_value=0.10, max_value=0.50, step=0.05,
-        value=st.session_state.get("far_delta_tgt", 0.25),
-        key="far_delta_tgt",
-        format="%.2f",
-        help="0.25 ≈ 1σ OTM · 0.15 ≈ 2σ OTM · 0.40 ≈ near ATM",
-    )
-else:
-    _far_delta_tgt = None
+# ── Far-leg strike selection method (read from session_state; UI rendered in pb3) ──
+_far_method    = st.session_state.get("far_strike_method", "VIX 1σ Range")
+_far_delta_tgt = float(st.session_state.get("far_delta_tgt", 0.25)) if _far_method == "Delta" else None
 
 # ── Helper: scan far chain for nearest valid LTP ──────────────────────────────
 def _nearest_far_ltp(far_map, base, step, direction=0, max_steps=15):
@@ -2346,6 +2327,25 @@ with pb2:
             f"</div></div>",
             unsafe_allow_html=True)
 with pb3:
+    # ── Far-leg strike selection widgets (rendered in correct column) ──────────
+    _fm_opts = ["VIX 1σ Range", "Delta"]
+    st.selectbox(
+        "Far leg strike by",
+        _fm_opts,
+        index=_fm_opts.index(_far_method),
+        key="far_strike_method",
+        help="VIX 1σ Range: ±1σ move scaled to far DTE. Delta: BS delta target.",
+    )
+    if _far_method == "Delta":
+        st.slider(
+            "Target Δ",
+            min_value=0.10, max_value=0.50, step=0.05,
+            value=_far_delta_tgt or 0.25,
+            key="far_delta_tgt",
+            format="%.2f",
+            help="0.25 ≈ 1σ OTM · 0.15 ≈ 2σ OTM · 0.40 ≈ near ATM",
+        )
+
     _sell_ce_ltp2 = near_ce.get(float(sell_ce_strike), 0)
     _sell_pe_ltp2 = near_pe.get(float(sell_pe_strike), 0)
     _strangle_val = _sell_ce_ltp2 + _sell_pe_ltp2
