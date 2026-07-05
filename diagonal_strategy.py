@@ -838,6 +838,75 @@ def weeks_out(expiry_str):
         return 0.0
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def fetch_futures_buildup():
+    """
+    Fetch NIFTY current-month and next-month futures build-up from NSE public API.
+    Returns list of dicts: [{label, ltp, prev_close, oi, prev_oi, buildup, expiry}, ...]
+    Build-up types: Long Build-up | Short Build-up | Long Unwinding | Short Covering
+    """
+    import requests as _req, time as _time
+    _nse_hdrs = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/124.0.0.0 Safari/537.36"),
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer":         "https://www.nseindia.com/",
+        "Connection":      "keep-alive",
+    }
+    try:
+        s = _req.Session()
+        s.headers.update(_nse_hdrs)
+        # Warm up session cookie
+        s.get("https://www.nseindia.com/", timeout=8)
+        _time.sleep(0.5)
+        r = s.get("https://www.nseindia.com/api/quote-derivative?symbol=NIFTY",
+                  timeout=10)
+        if r.status_code != 200:
+            return None, f"NSE HTTP {r.status_code}"
+        data = r.json()
+        stocks = data.get("stocks", [])
+        results = []
+        seen = 0
+        for item in stocks:
+            md = item.get("metadata", {})
+            if md.get("instrumentType") != "Index Futures":
+                continue
+            ltp        = float(md.get("lastPrice",  0) or 0)
+            prev_close = float(md.get("prevClose",  0) or 0)
+            oi         = float(md.get("openInterest", 0) or 0)
+            prev_oi    = float(md.get("prevOpenInterest", 0) or 0) or oi  # fallback
+            expiry     = md.get("expiryDate", "")
+            label      = md.get("identifier", expiry)
+            price_up   = ltp > prev_close
+            oi_up      = oi  > prev_oi
+            if price_up  and oi_up:   buildup = "Long Build-up"
+            elif price_up and not oi_up: buildup = "Short Covering"
+            elif not price_up and oi_up: buildup = "Short Build-up"
+            else:                         buildup = "Long Unwinding"
+            oi_chg_pct = ((oi - prev_oi) / prev_oi * 100) if prev_oi else 0
+            px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
+            results.append({
+                "label":      label,
+                "expiry":     expiry,
+                "ltp":        ltp,
+                "prev_close": prev_close,
+                "oi":         oi,
+                "prev_oi":    prev_oi,
+                "oi_chg_pct": oi_chg_pct,
+                "px_chg_pct": px_chg_pct,
+                "buildup":    buildup,
+            })
+            seen += 1
+            if seen >= 2:   # current month + next month
+                break
+        return results or None, None if results else "No futures rows found"
+    except Exception as e:
+        return None, str(e)
+
+
 # ─────────────────────────────────────────────
 # STRATEGY LOGIC
 # ─────────────────────────────────────────────
@@ -2048,6 +2117,43 @@ for _sq_n, _sq_val in _sq_levels:
 
 # ── End of square-root levels ──────────────────────────────────────────────────
 
+# ── Futures build-up ──────────────────────────────────────────────────────────
+_fut_data, _fut_err = fetch_futures_buildup()
+
+_BUILDUP_META = {
+    "Long Build-up":   ("var(--bull)",  "▲", "rgba(50,215,75,0.10)",  "rgba(50,215,75,0.35)"),
+    "Short Covering":  ("var(--bull)",  "↑", "rgba(50,215,75,0.06)",  "rgba(50,215,75,0.25)"),
+    "Short Build-up":  ("var(--bear)",  "▼", "rgba(255,59,48,0.10)",  "rgba(255,59,48,0.35)"),
+    "Long Unwinding":  ("var(--bear)",  "↓", "rgba(255,59,48,0.06)",  "rgba(255,59,48,0.25)"),
+}
+
+_fut_html = ""
+if _fut_data:
+    _fut_labels = ["CUR MONTH", "NEXT MONTH"]
+    for _fi, _frow in enumerate(_fut_data[:2]):
+        _fb   = _frow["buildup"]
+        _fc, _farrow, _fbg, _fbord = _BUILDUP_META.get(_fb, ("var(--muted)", "·", "transparent", "var(--border)"))
+        _fpx  = f"{'+'if _frow['px_chg_pct']>=0 else ''}{_frow['px_chg_pct']:.2f}%"
+        _foi  = f"{'+'if _frow['oi_chg_pct']>=0 else ''}{_frow['oi_chg_pct']:.1f}%"
+        _fexp = _frow['expiry']
+        _fut_html += (
+            f"<div style='display:flex;justify-content:space-between;align-items:center;"
+            f"padding:4px 8px;margin-top:4px;"
+            f"background:{_fbg};border:1px solid {_fbord};border-radius:5px;'>"
+            f"<div>"
+            f"<div style='font-size:8px;color:var(--muted);'>{_fut_labels[_fi]} &nbsp;<span style='color:var(--muted);font-size:7px;'>{_fexp}</span></div>"
+            f"<div style='font-size:11px;font-weight:700;font-family:var(--mono);color:{_fc};'>"
+            f"{_farrow} {_fb}</div>"
+            f"</div>"
+            f"<div style='text-align:right;font-family:var(--mono);font-size:10px;'>"
+            f"<div style='color:var(--muted);'>LTP <span style='color:{_fc};font-weight:700;'>₹{_frow['ltp']:,.1f}</span> "
+            f"<span style='color:{_fc};font-size:9px;'>({_fpx})</span></div>"
+            f"<div style='color:var(--muted);font-size:9px;'>OI chg <span style='color:{_fc};'>{_foi}</span></div>"
+            f"</div>"
+            f"</div>"
+        )
+# ── End futures build-up ──────────────────────────────────────────────────────
+
 # Row 1 — Spot + ATM
 r1c1, r1c2 = st.columns(2)
 with r1c1:
@@ -2055,6 +2161,7 @@ with r1c1:
         f"<div class='card'>"
         f"<div class='lbl'>NIFTY Spot</div>"
         f"<div class='val-big'>₹{spot:,.2f}</div>"
+        # √² levels
         f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
         f"<div style='font-size:8px;color:var(--muted);margin-bottom:5px;'>√² LEVELS &nbsp;·&nbsp; √{_sq_base}={_sq_root} &nbsp;"
         f"<span style='color:var(--bull);'>● sup</span> &nbsp;"
@@ -2062,7 +2169,15 @@ with r1c1:
         f"<span style='color:var(--gold);'>◆ pivot</span></div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:4px;'>{_sq_pills}</div>"
         f"</div>"
-        f"</div>",
+        # Futures build-up
+        + (
+            f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+            f"<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>FUTURES BUILD-UP</div>"
+            f"{_fut_html}"
+            f"</div>"
+            if _fut_html else ""
+        )
+        + f"</div>",
         unsafe_allow_html=True
     )
 with r1c2:
