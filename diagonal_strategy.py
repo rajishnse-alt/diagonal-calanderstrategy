@@ -2121,8 +2121,32 @@ _far_atm_pe_strike = _far_result["pe_strike"]
 _far_atm_pe_ltp   = _far_result["pe_ltp"]
 
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
-_buy_ok           = bool(_far_tgt_lo and _far_tgt_lo <= _far_atm_straddle <= _far_tgt_hi)
-_buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
+
+# ── Fallback: band scan empty → nearest liquid strike to sold legs ────────────
+if _far_atm_straddle <= 0 and _3lot_ce_strike and _3lot_pe_strike:
+    # CE: nearest far strike >= sold CE strike, liquid
+    _fb_ce_s = next(
+        (s for s in sorted(far_ce.keys())
+         if s >= float(_3lot_ce_strike) and far_ce[s] > 0
+         and far_ce_oi.get(s, 0) >= 100),
+        None
+    )
+    # PE: nearest far strike <= sold PE strike, liquid
+    _fb_pe_s = next(
+        (s for s in sorted(far_pe.keys(), reverse=True)
+         if s <= float(_3lot_pe_strike) and far_pe[s] > 0
+         and far_pe_oi.get(s, 0) >= 100),
+        None
+    )
+    if _fb_ce_s is not None and _fb_pe_s is not None:
+        _far_atm_ce_strike = int(_fb_ce_s)
+        _far_atm_ce_ltp    = far_ce[_fb_ce_s]
+        _far_atm_pe_strike = int(_fb_pe_s)
+        _far_atm_pe_ltp    = far_pe[_fb_pe_s]
+        _far_atm_straddle  = _far_atm_ce_ltp + _far_atm_pe_ltp
+
+_buy_ok        = bool(_far_tgt_lo and _far_tgt_lo <= _far_atm_straddle <= _far_tgt_hi)
+_buy_ratio_pct = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
 # ── Ratio Diagonal CE  (Sell 1 ATM CE near · Buy 2 far CE at 40–50% premium) ──
 
@@ -2767,7 +2791,14 @@ with pb3:
     if _3lot_sell_total:
         _buy_val_col  = "var(--bull)" if _buy_ok else "var(--bear)"
         _buy_chk_col  = "var(--bull)" if _buy_ok else "var(--bear)"
-        _buy_status   = "✓ 70–90% of sold" if _buy_ok else f"✗ {'above 90%' if _far_atm_straddle > _far_tgt_hi else 'below 70%'} of sold"
+        if _buy_ok:
+            _buy_status = "✓ 70–90% of sold"
+        elif _far_atm_straddle > _far_tgt_hi:
+            _buy_status = "↑ above 90% · nearest to sold"
+        elif _far_atm_straddle > 0:
+            _buy_status = "↓ below 70% · nearest to sold"
+        else:
+            _buy_status = "✗ no far data"
         _ratio_txt    = f"{_buy_ratio_pct:.0f}%" if _buy_ratio_pct else "—"
         _net_debit    = _far_atm_straddle - _3lot_sell_total
         _3lot_ce_total = 3 * _3lot_ce_ltp
