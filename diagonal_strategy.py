@@ -874,7 +874,8 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
                 continue
             resp = r.json()
             if resp.get("status") != "success":
-                last_err = resp.get("message", "bad status")
+                # Dump full response so we can see what Upstox is saying
+                last_err = str(resp)[:300]
                 continue
 
             rows = resp.get("data", [])
@@ -2194,7 +2195,7 @@ with r1c1:
         + (
             _fut_html if _fut_html
             else f"<span style='font-size:9px;color:var(--muted);font-style:italic;'>"
-                 f"{'—' if not _fut_err else _fut_err[:200]}</span>"
+                 f"{'—' if not _fut_err else str(_fut_err)[:400]}</span>"
           )
         + f"</div>"
         + f"</div>",
