@@ -12,7 +12,6 @@ Run:  streamlit run diagonal_strategy.py
 
 import streamlit as st
 import requests
-import upstox_client
 import math
 import time
 import json
@@ -846,16 +845,53 @@ def weeks_out(expiry_str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_nifty_fut_tokens(tok):
     """
-    Resolve NIFTY futures instrument keys.
-    PRIMARY  : Upstox instruments master JSON (NSE_FO.json.gz) — numeric keys, no auth needed.
-    FALLBACK : Upstox SDK MarketInfoApi.get_futures_smartlist().
+    Resolve NIFTY futures numeric instrument keys (required by REST quotes API).
+    PRIMARY  : Upstox v2/market/smartlist/futures (auth, Content-Type headers in hdr())
+    FALLBACK : Upstox instruments master JSON (public CDN, no auth)
     Returns  : {expiry_str: (instrument_key, trading_symbol)}
     """
     import gzip as _gzip
 
     today = datetime.now(IST).date()
 
-    # ── PRIMARY: instruments master download ────────────────────────────────
+    def _parse_contracts(contracts):
+        tokens = {}
+        for item in contracts:
+            if not isinstance(item, dict):
+                continue
+            sym  = (item.get("trading_symbol") or "").upper()
+            ikey = item.get("instrument_key") or ""
+            exp  = str(item.get("expiry") or "")[:10]
+            if not ikey or not exp:
+                continue
+            if "NIFTY" not in sym:
+                continue
+            if any(x in sym for x in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "CPSE")):
+                continue
+            tokens[exp] = (ikey, sym)
+        return tokens
+
+    # ── PRIMARY: smartlist REST API ───────────────────────────────────────────
+    try:
+        r = requests.get(
+            "https://api.upstox.com/v2/market/smartlist/futures",
+            params={"asset_type": "INDEX", "category": "TOP_TRADED",
+                    "page_number": 1, "page_size": 30},
+            headers=hdr(tok), timeout=12,
+        )
+        if r.status_code == 200:
+            raw = r.text.strip()
+            if raw.startswith(("{", "[")):
+                resp = r.json()
+                contracts = resp if isinstance(resp, list) else resp.get("data", [])
+                if isinstance(contracts, list):
+                    tokens = _parse_contracts(contracts)
+                    if tokens:
+                        return tokens, None
+    except Exception:
+        pass
+
+    # ── FALLBACK: instruments master JSON (public CDN, no auth) ───────────────
     INST_URLS = [
         "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz",
         "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz",
@@ -865,23 +901,19 @@ def _get_nifty_fut_tokens(tok):
             r = requests.get(url, timeout=20)
             if r.status_code != 200:
                 continue
-            # Decompress gzip if server didn't do it automatically
             raw = r.content
             try:
                 raw = _gzip.decompress(raw)
             except Exception:
-                pass   # already plain JSON
+                pass   # server may have decompressed already
             instruments = json.loads(raw)
             nifty_rows = []
             for item in instruments:
                 if not isinstance(item, dict):
                     continue
-                if item.get("segment") != "NSE_FO":
+                if item.get("segment") != "NSE_FO" or item.get("instrument_type") != "FUT":
                     continue
-                if item.get("instrument_type") != "FUT":
-                    continue
-                underlying = item.get("underlying_symbol", "")
-                if underlying != "NIFTY 50":       # Upstox name for plain NIFTY
+                if item.get("underlying_symbol") != "NIFTY 50":   # Upstox exact name
                     continue
                 exp_str = str(item.get("expiry") or "")[:10]
                 ikey    = item.get("instrument_key", "")
@@ -897,41 +929,12 @@ def _get_nifty_fut_tokens(tok):
                 nifty_rows.append((exp_date, exp_str, ikey, sym))
             if nifty_rows:
                 nifty_rows.sort(key=lambda x: x[0])
-                tokens = {}
-                for exp_date, exp_str, ikey, sym in nifty_rows[:2]:
-                    tokens[exp_str] = (ikey, sym)
+                tokens = {exp_str: (ikey, sym) for _, exp_str, ikey, sym in nifty_rows[:2]}
                 return tokens, None
         except Exception:
             continue
 
-    # ── FALLBACK: SDK smartlist ─────────────────────────────────────────────
-    try:
-        cfg = upstox_client.Configuration()
-        cfg.access_token = tok
-        _api_client = upstox_client.ApiClient(cfg)
-        market_api  = upstox_client.MarketInfoApi(_api_client)
-        resp = market_api.get_futures_smartlist(
-            asset_type="INDEX", category="TOP_TRADED",
-            page_number=1, page_size=30,
-        )
-        if resp.status == "success" and resp.data:
-            tokens = {}
-            for item in resp.data:
-                sym  = (item.trading_symbol or "").upper()
-                ikey = item.instrument_key or ""
-                exp  = str(item.expiry or "")[:10]
-                if not ikey or not exp:
-                    continue
-                if "NIFTY" not in sym:
-                    continue
-                if any(x in sym for x in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "CPSE")):
-                    continue
-                tokens[exp] = (ikey, sym)
-            if tokens:
-                return tokens, None
-        return {}, f"SDK smartlist: status={resp.status}"
-    except Exception as e:
-        return {}, f"master+SDK both failed: {e}"
+    return {}, "smartlist + instruments master both unavailable"
 
 
 @st.cache_data(ttl=180, show_spinner=False)
