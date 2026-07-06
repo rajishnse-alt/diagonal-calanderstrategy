@@ -897,51 +897,69 @@ def _get_nifty_fut_tokens(tok):
 
 
 @st.cache_data(ttl=180, show_spinner=False)
-def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
+def fetch_futures_buildup(tok, expiry_dates=None, underlying_key=None):
     """
     Fetch NIFTY futures build-up (Upstox REST).
-    1. Get numeric instrument tokens from CSV (exact keys Upstox REST accepts)
-    2. market-quote/quotes → LTP, ohlc.close, oi, prev_oi
+    Step 1 — Smartlist → instrument keys (numeric, accepted by REST)
+    Step 2 — historical-candle/day  → yesterday close + OI  (reliable prev values)
+    Step 3 — market-quote/quotes    → current LTP + OI
+    Classify: price_chg × oi_chg direction → Long/Short Build-up / Covering / Unwinding
     """
     def _classify(price_up, oi_up):
-        if price_up and oi_up:     return "Long Build-up"
-        if price_up and not oi_up: return "Short Covering"
-        if not price_up and oi_up: return "Short Build-up"
+        if price_up and oi_up:      return "Long Build-up"
+        if price_up and not oi_up:  return "Short Covering"
+        if not price_up and oi_up:  return "Short Build-up"
         return "Long Unwinding"
 
-    def _parse(qd, exp, label):
-        ltp        = float(qd.get("last_price") or 0)
-        ohlc       = qd.get("ohlc", {})
-        prev_close = float(ohlc.get("close") or ohlc.get("prev_close") or 0)
-        oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
-        prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
-        if ltp <= 0:
-            return None
-        return {
-            "expiry": exp, "label": label, "ltp": ltp, "prev_close": prev_close,
-            "oi": oi, "prev_oi": prev_oi,
-            "px_chg_pct": ((ltp - prev_close) / prev_close * 100) if prev_close else 0,
-            "oi_chg_pct": ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0,
-            "buildup":    _classify(ltp > prev_close, oi > prev_oi),
-        }
-
-    # Resolve via Smartlist, sort by expiry, take first 2 future-dated
+    # ── 1. Instrument keys via Smartlist ─────────────────────────────────────
     all_tokens, err = _get_nifty_fut_tokens(tok)
     if not all_tokens:
         return None, f"Smartlist unavailable: {err}"
 
-    today       = str(datetime.now(IST).date())
+    today_dt    = datetime.now(IST).date()
+    today       = str(today_dt)
     sorted_exps = sorted(exp for exp in all_tokens if exp >= today)[:2]
-
     if not sorted_exps:
         return None, "No active NIFTY futures found in smartlist"
 
     labels_map = {exp: ("CUR MONTH" if i == 0 else "NEXT MONTH")
                   for i, exp in enumerate(sorted_exps)}
-    # fut_keys: {exp: instrument_key}
     fut_keys   = {exp: all_tokens[exp][0] for exp in sorted_exps}
     sym_map    = {exp: all_tokens[exp][1] for exp in sorted_exps}
 
+    # ── 2. Historical day candles → prev_close and prev_oi ───────────────────
+    from_date  = str(today_dt - timedelta(days=7))
+    hist       = {}   # exp → {"prev_close": float, "prev_oi": float, "cur_oi": float}
+    for exp, ikey in fut_keys.items():
+        try:
+            enc = ikey.replace("|", "%7C")
+            r   = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/day/{today}/{from_date}",
+                headers=hdr(tok), timeout=10,
+            )
+            if r.status_code != 200:
+                continue
+            candles = r.json().get("data", {}).get("candles", [])
+            # candles: newest-first  →  [ts, open, high, low, close, volume, oi]
+            if len(candles) >= 2:
+                hist[exp] = {
+                    "prev_close": float(candles[1][4]),   # yesterday close
+                    "prev_oi":    float(candles[1][6]),   # yesterday OI
+                    "cur_oi":     float(candles[0][6]),   # today OI from candle
+                    "day_open":   float(candles[0][1]),   # today open
+                }
+            elif len(candles) == 1:
+                hist[exp] = {
+                    "prev_close": float(candles[0][1]),   # fallback: use open
+                    "prev_oi":    float(candles[0][6]),
+                    "cur_oi":     float(candles[0][6]),
+                    "day_open":   float(candles[0][1]),
+                }
+        except Exception:
+            pass
+
+    # ── 3. Live quotes → current LTP + OI ────────────────────────────────────
+    quote_data = {}
     try:
         keys_param = ",".join(fut_keys.values())
         r = requests.get(
@@ -949,23 +967,55 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
             params={"instrument_key": keys_param},
             headers=hdr(tok), timeout=12,
         )
-        if r.status_code != 200:
-            return None, f"quotes HTTP {r.status_code}"
-        data    = r.json().get("data", {})
-        results = []
-        for exp in sorted_exps:
-            ikey = fut_keys[exp]
-            qd   = data.get(ikey.replace("|", ":")) or data.get(ikey) or {}
-            row  = _parse(qd, exp, labels_map[exp])
-            if row:
-                row["symbol"] = sym_map[exp]
-                results.append(row)
-        if results:
-            return results, None
-        sample = list(data.keys())[:3]
-        return None, f"quotes empty — tried:{list(fut_keys.values())} got:{sample}"
-    except Exception as e:
-        return None, str(e)
+        if r.status_code == 200:
+            raw = r.json().get("data", {})
+            for exp, ikey in fut_keys.items():
+                qd = raw.get(ikey.replace("|", ":")) or raw.get(ikey) or {}
+                if qd:
+                    quote_data[exp] = qd
+    except Exception:
+        pass
+
+    # ── 4. Assemble build-up rows ─────────────────────────────────────────────
+    results = []
+    for exp in sorted_exps:
+        qd = quote_data.get(exp, {})
+        hd = hist.get(exp, {})
+
+        ltp = float(qd.get("last_price") or 0)
+        if ltp <= 0:
+            continue   # no live price — skip
+
+        ohlc       = qd.get("ohlc", {})
+        prev_close = (hd.get("prev_close")
+                      or float(ohlc.get("close") or ohlc.get("prev_close") or 0))
+        cur_oi     = float(qd.get("oi") or qd.get("open_interest")
+                           or hd.get("cur_oi") or 0)
+        prev_oi    = (hd.get("prev_oi")
+                      or float(qd.get("prev_oi") or qd.get("prev_open_interest") or cur_oi))
+
+        if not prev_close:
+            continue
+
+        px_chg = (ltp - prev_close) / prev_close * 100
+        oi_chg = (cur_oi - prev_oi)  / prev_oi    * 100 if prev_oi else 0
+
+        results.append({
+            "expiry":     exp,
+            "label":      labels_map[exp],
+            "symbol":     sym_map[exp],
+            "ltp":        ltp,
+            "prev_close": prev_close,
+            "oi":         cur_oi,
+            "prev_oi":    prev_oi,
+            "px_chg_pct": px_chg,
+            "oi_chg_pct": oi_chg,
+            "buildup":    _classify(ltp > prev_close, cur_oi > prev_oi),
+        })
+
+    if results:
+        return results, None
+    return None, "No data from quotes or historical candle API"
 
 
 # ─────────────────────────────────────────────
