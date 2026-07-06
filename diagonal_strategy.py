@@ -877,6 +877,8 @@ def _get_nifty_fut_tokens(tok):
             return {}, f"unexpected response type: {type(resp)}"
         tokens    = {}
         for item in contracts:
+            if not isinstance(item, dict):
+                continue
             sym  = str(item.get("trading_symbol") or "").upper()
             ikey = str(item.get("instrument_key") or "")
             exp  = str(item.get("expiry") or "")[:10]
@@ -2251,7 +2253,7 @@ with r1c1:
         + (
             _fut_html if _fut_html
             else f"<span style='font-size:9px;color:var(--muted);font-style:italic;'>"
-                 f"{'—' if not _fut_err else str(_fut_err)[:400]}</span>"
+                 f"{'—' if not _fut_err else str(_fut_err)[:120]}</span>"
           )
         + f"</div>"
         + f"</div>",
