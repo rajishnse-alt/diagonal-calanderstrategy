@@ -855,13 +855,15 @@ def _get_nifty_fut_tokens(tok):
         """Normalise one instrument record → (expiry, key) or (None, None)."""
         seg   = str(item.get("segment")           or item.get("exchange")          or "").upper()
         itype = str(item.get("instrument_type")   or item.get("instrumenttype")    or "").upper()
+        # underlying_symbol is the correct field per Upstox script; name as fallback
         und   = str(item.get("underlying_symbol") or item.get("name")              or "").upper()
         exp   = str(item.get("expiry")            or item.get("expiry_date")       or "")[:10]
         ikey  = str(item.get("instrument_key")    or item.get("instrumentKey")     or "")
-        if seg  not in ("NSE_FO", "NFO"):                    return None, None
-        if itype not in ("FUTIDX", "FUT"):                   return None, None
-        if und  not in ("NIFTY", "NIFTY 50", "NIFTY50"):    return None, None
-        if not exp or not ikey:                              return None, None
+        if seg  not in ("NSE_FO", "NFO"):                          return None, None
+        if itype not in ("FUTIDX", "FUT"):                         return None, None
+        # Match plain NIFTY only — not BANKNIFTY, FINNIFTY, MIDCPNIFTY etc
+        if und.replace(" ", "") not in ("NIFTY", "NIFTY50"):       return None, None
+        if not exp or not ikey:                                     return None, None
         return exp, ikey
 
     # ── 1. Upstox authenticated REST endpoint ────────────────────────────────
@@ -947,15 +949,23 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
             "buildup":    _classify(ltp > prev_close, oi > prev_oi),
         }
 
-    # Get numeric tokens from CSV
+    # Get all NIFTY futures tokens, sort by expiry, take first 2 future-dated
     all_tokens, csv_err = _get_nifty_fut_tokens(tok)
-    target_exps = sorted(expiry_dates)[:2]
-    labels_map  = {exp: ("CUR MONTH" if i == 0 else "NEXT MONTH")
-                   for i, exp in enumerate(target_exps)}
-    fut_keys = {exp: all_tokens[exp] for exp in target_exps if exp in all_tokens}
+    if not all_tokens:
+        return None, f"Instruments unavailable: {csv_err}"
+
+    today = datetime.now(IST).date()
+    # Sort by expiry date, keep only contracts expiring today or later
+    sorted_exps = sorted(
+        [exp for exp in all_tokens if exp >= str(today)],
+    )[:2]   # current month + next month — same logic as nifty_contracts[:2]
+
+    labels_map = {exp: ("CUR MONTH" if i == 0 else "NEXT MONTH")
+                  for i, exp in enumerate(sorted_exps)}
+    fut_keys   = {exp: all_tokens[exp] for exp in sorted_exps}
 
     if not fut_keys:
-        return None, f"No tokens found for {target_exps}. CSV err: {csv_err}"
+        return None, f"No future-dated contracts in instruments. CSV err: {csv_err}"
 
     try:
         keys_param = ",".join(fut_keys.values())
