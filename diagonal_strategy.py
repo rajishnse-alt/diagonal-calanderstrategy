@@ -937,14 +937,91 @@ def _get_nifty_fut_tokens(tok):
     return {}, "smartlist + instruments master both unavailable"
 
 
+def _dynamic_nifty_fut_keys():
+    """
+    Build NIFTY futures tradingsymbol keys from the calendar (no API needed).
+    Format: NSE_FO|NIFTY{YY}{MONTHNAME}FUT  e.g. NSE_FO|NIFTY26JULYFUT
+    Returns list of (label, instrument_key, approx_month_str) for cur + next month.
+    """
+    now = datetime.now(IST)
+    result = []
+    for days_offset, label in [(0, "CUR MONTH"), (32, "NEXT MONTH")]:
+        d   = now + timedelta(days=days_offset)
+        sym = f"NIFTY{d.strftime('%y')}{d.strftime('%B').upper()}FUT"
+        result.append((label, f"NSE_FO|{sym}", d.strftime("%Y-%m")))
+    return result
+
+
+def _fetch_nse_futures_live():
+    """
+    Fetch live NIFTY Index Futures data from NSE India.
+    URL: https://www.nseindia.com/api/quote-derivative?symbol=NIFTY
+    No auth required — uses same session approach as fetch_nse_fo_hist.
+    Returns list of dicts sorted by expiry (closest first), or [].
+    """
+    try:
+        sess = requests.Session()
+        sess.headers.update(_NSE_HEADERS)
+        sess.get("https://www.nseindia.com", timeout=8)
+        sess.get("https://www.nseindia.com/get-quotes/derivatives?symbol=NIFTY", timeout=8)
+        r = sess.get(
+            "https://www.nseindia.com/api/quote-derivative?symbol=NIFTY",
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return []
+        data   = r.json()
+        stocks = data.get("stocks") or []
+        today  = datetime.now(IST).date()
+        rows   = []
+        for item in stocks:
+            meta  = item.get("metadata") or {}
+            itype = (meta.get("instrumentType") or "").lower()
+            if "future" not in itype:
+                continue
+            # Parse expiry — NSE uses "24-Jul-2026" format
+            exp_raw = meta.get("expiryDate") or ""
+            try:
+                exp_dt  = datetime.strptime(exp_raw, "%d-%b-%Y")
+                exp_str = exp_dt.strftime("%Y-%m-%d")
+            except Exception:
+                try:
+                    exp_dt  = datetime.strptime(exp_raw, "%d-%m-%Y")
+                    exp_str = exp_dt.strftime("%Y-%m-%d")
+                except Exception:
+                    continue
+            if exp_dt.date() < today:
+                continue
+            ltp        = float(meta.get("lastPrice")       or meta.get("last_price")    or 0)
+            prev_close = float(meta.get("prevClosePrice")  or meta.get("closePrice")    or 0)
+            oi         = float(meta.get("openInterest")    or 0)
+            oi_chg     = float(meta.get("changeinOpenInterest") or meta.get("changeInOI") or 0)
+            prev_oi    = max(oi - oi_chg, 0) if oi_chg else oi
+            if ltp <= 0 or prev_close <= 0:
+                continue
+            rows.append({
+                "expiry":     exp_str,
+                "ltp":        ltp,
+                "prev_close": prev_close,
+                "oi":         oi,
+                "prev_oi":    prev_oi,
+                "symbol":     f"NIFTY-{exp_raw}",
+            })
+        rows.sort(key=lambda x: x["expiry"])
+        return rows
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_futures_buildup(tok, expiry_dates=None, underlying_key=None):
     """
-    Fetch NIFTY futures build-up (Upstox REST).
-    Step 1 — Smartlist → instrument keys (numeric, accepted by REST)
-    Step 2 — historical-candle/day  → yesterday close + OI  (reliable prev values)
-    Step 3 — market-quote/quotes    → current LTP + OI
-    Classify: price_chg × oi_chg direction → Long/Short Build-up / Covering / Unwinding
+    Fetch NIFTY futures build-up.
+    Strategy:
+      A) Try numeric keys (smartlist / CDN) → historical-candle + quotes  [LIVE]
+      B) Fallback: dynamic tradingsymbol keys → historical-candle only    [HIST]
+    Each row tagged with source: 'live' | 'hist'
+    Returns (results, err_or_None)
     """
     def _classify(price_up, oi_up):
         if price_up and oi_up:      return "Long Build-up"
@@ -952,111 +1029,150 @@ def fetch_futures_buildup(tok, expiry_dates=None, underlying_key=None):
         if not price_up and oi_up:  return "Short Build-up"
         return "Long Unwinding"
 
-    # ── 1. Instrument keys via Smartlist ─────────────────────────────────────
-    all_tokens, err = _get_nifty_fut_tokens(tok)
-    if not all_tokens:
-        return None, f"Smartlist unavailable: {err}"
+    def _fetch_candles(ikey, today_str, from_str, tok):
+        """Fetch day candles for an instrument key (tries both | and %7C)."""
+        for enc in (ikey.replace("|", "%7C"), ikey):
+            try:
+                r = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{enc}/day/{today_str}/{from_str}",
+                    headers=hdr(tok), timeout=10,
+                )
+                if r.status_code == 200:
+                    return r.json().get("data", {}).get("candles", [])
+            except Exception:
+                pass
+        return []
 
-    today_dt    = datetime.now(IST).date()
-    today       = str(today_dt)
-    sorted_exps = sorted(exp for exp in all_tokens if exp >= today)[:2]
-    if not sorted_exps:
-        return None, "No active NIFTY futures found in smartlist"
+    today_dt  = datetime.now(IST).date()
+    today_str = str(today_dt)
+    from_str  = str(today_dt - timedelta(days=7))
 
-    labels_map = {exp: ("CUR MONTH" if i == 0 else "NEXT MONTH")
-                  for i, exp in enumerate(sorted_exps)}
-    fut_keys   = {exp: all_tokens[exp][0] for exp in sorted_exps}
-    sym_map    = {exp: all_tokens[exp][1] for exp in sorted_exps}
+    # ══ PATH A: numeric keys (smartlist / CDN) ════════════════════════════════
+    all_tokens, _err = _get_nifty_fut_tokens(tok)
+    if all_tokens:
+        sorted_exps = sorted(exp for exp in all_tokens if exp >= today_str)[:2]
+        if sorted_exps:
+            labels_map = {e: ("CUR MONTH" if i == 0 else "NEXT MONTH")
+                          for i, e in enumerate(sorted_exps)}
+            fut_keys   = {e: all_tokens[e][0] for e in sorted_exps}
+            sym_map    = {e: all_tokens[e][1] for e in sorted_exps}
 
-    # ── 2. Historical day candles → prev_close and prev_oi ───────────────────
-    from_date  = str(today_dt - timedelta(days=7))
-    hist       = {}   # exp → {"prev_close": float, "prev_oi": float, "cur_oi": float}
-    for exp, ikey in fut_keys.items():
-        try:
-            enc = ikey.replace("|", "%7C")
-            r   = requests.get(
-                f"https://api.upstox.com/v2/historical-candle/{enc}/day/{today}/{from_date}",
-                headers=hdr(tok), timeout=10,
-            )
-            if r.status_code != 200:
-                continue
-            candles = r.json().get("data", {}).get("candles", [])
-            # candles: newest-first  →  [ts, open, high, low, close, volume, oi]
-            if len(candles) >= 2:
-                hist[exp] = {
-                    "prev_close": float(candles[1][4]),   # yesterday close
-                    "prev_oi":    float(candles[1][6]),   # yesterday OI
-                    "cur_oi":     float(candles[0][6]),   # today OI from candle
-                    "day_open":   float(candles[0][1]),   # today open
-                }
-            elif len(candles) == 1:
-                hist[exp] = {
-                    "prev_close": float(candles[0][1]),   # fallback: use open
-                    "prev_oi":    float(candles[0][6]),
-                    "cur_oi":     float(candles[0][6]),
-                    "day_open":   float(candles[0][1]),
-                }
-        except Exception:
-            pass
-
-    # ── 3. Live quotes → current LTP + OI ────────────────────────────────────
-    quote_data = {}
-    try:
-        keys_param = ",".join(fut_keys.values())
-        r = requests.get(
-            "https://api.upstox.com/v2/market-quote/quotes",
-            params={"instrument_key": keys_param},
-            headers=hdr(tok), timeout=12,
-        )
-        if r.status_code == 200:
-            raw = r.json().get("data", {})
+            # Historical candles
+            hist = {}
             for exp, ikey in fut_keys.items():
-                qd = raw.get(ikey.replace("|", ":")) or raw.get(ikey) or {}
-                if qd:
-                    quote_data[exp] = qd
-    except Exception:
-        pass
+                candles = _fetch_candles(ikey, today_str, from_str, tok)
+                if len(candles) >= 2:
+                    hist[exp] = {"prev_close": float(candles[1][4]),
+                                 "prev_oi":    float(candles[1][6]),
+                                 "cur_oi":     float(candles[0][6])}
+                elif len(candles) == 1:
+                    hist[exp] = {"prev_close": float(candles[0][1]),
+                                 "prev_oi":    float(candles[0][6]),
+                                 "cur_oi":     float(candles[0][6])}
 
-    # ── 4. Assemble build-up rows ─────────────────────────────────────────────
-    results = []
-    for exp in sorted_exps:
-        qd = quote_data.get(exp, {})
-        hd = hist.get(exp, {})
+            # Live quotes
+            quote_data = {}
+            try:
+                r = requests.get(
+                    "https://api.upstox.com/v2/market-quote/quotes",
+                    params={"instrument_key": ",".join(fut_keys.values())},
+                    headers=hdr(tok), timeout=12,
+                )
+                if r.status_code == 200:
+                    raw = r.json().get("data", {})
+                    for exp, ikey in fut_keys.items():
+                        qd = raw.get(ikey.replace("|", ":")) or raw.get(ikey) or {}
+                        if qd:
+                            quote_data[exp] = qd
+            except Exception:
+                pass
 
-        ltp = float(qd.get("last_price") or 0)
-        if ltp <= 0:
-            continue   # no live price — skip
+            results = []
+            for exp in sorted_exps:
+                qd = quote_data.get(exp, {})
+                hd = hist.get(exp, {})
+                ltp = float(qd.get("last_price") or 0)
+                # Fallback LTP from today's candle close
+                if ltp <= 0 and hd:
+                    pass  # will try hist-only path below
+                if ltp <= 0:
+                    continue
+                ohlc       = qd.get("ohlc", {})
+                prev_close = hd.get("prev_close") or float(ohlc.get("close") or ohlc.get("prev_close") or 0)
+                cur_oi     = float(qd.get("oi") or qd.get("open_interest") or hd.get("cur_oi") or 0)
+                prev_oi    = hd.get("prev_oi") or float(qd.get("prev_oi") or cur_oi)
+                if not prev_close:
+                    continue
+                px_chg = (ltp - prev_close) / prev_close * 100
+                oi_chg = (cur_oi - prev_oi) / prev_oi * 100 if prev_oi else 0
+                results.append({
+                    "expiry": exp, "label": labels_map[exp], "symbol": sym_map[exp],
+                    "ltp": ltp, "prev_close": prev_close,
+                    "oi": cur_oi, "prev_oi": prev_oi,
+                    "px_chg_pct": px_chg, "oi_chg_pct": oi_chg,
+                    "buildup": _classify(ltp > prev_close, cur_oi > prev_oi),
+                    "source": "live",
+                })
+            if results:
+                return results, None
 
-        ohlc       = qd.get("ohlc", {})
-        prev_close = (hd.get("prev_close")
-                      or float(ohlc.get("close") or ohlc.get("prev_close") or 0))
-        cur_oi     = float(qd.get("oi") or qd.get("open_interest")
-                           or hd.get("cur_oi") or 0)
-        prev_oi    = (hd.get("prev_oi")
-                      or float(qd.get("prev_oi") or qd.get("prev_open_interest") or cur_oi))
+    # ══ PATH B: NSE India live derivatives API ════════════════════════════════
+    nse_rows = _fetch_nse_futures_live()
+    if nse_rows:
+        labels  = ["CUR MONTH", "NEXT MONTH"]
+        results = []
+        for i, row in enumerate(nse_rows[:2]):
+            px_chg = (row["ltp"] - row["prev_close"]) / row["prev_close"] * 100
+            oi_chg = ((row["oi"] - row["prev_oi"]) / row["prev_oi"] * 100
+                      if row["prev_oi"] else 0)
+            results.append({
+                "expiry":     row["expiry"],
+                "label":      labels[i] if i < len(labels) else f"EXP {i+1}",
+                "symbol":     row["symbol"],
+                "ltp":        row["ltp"],
+                "prev_close": row["prev_close"],
+                "oi":         row["oi"],
+                "prev_oi":    row["prev_oi"],
+                "px_chg_pct": px_chg,
+                "oi_chg_pct": oi_chg,
+                "buildup":    _classify(row["ltp"] > row["prev_close"],
+                                        row["oi"]  > row["prev_oi"]),
+                "source":     "live",
+            })
+        if results:
+            return results, None
 
-        if not prev_close:
+    # ══ PATH C: dynamic tradingsymbol keys + historical candles only ══════════
+    dyn_keys = _dynamic_nifty_fut_keys()   # [(label, ikey, month_str), ...]
+    results  = []
+    for label, ikey, month_str in dyn_keys:
+        candles = _fetch_candles(ikey, today_str, from_str, tok)
+        if not candles:
             continue
-
+        # candles newest-first: [ts, open, high, low, close, volume, oi]
+        cur_c   = candles[0]
+        prev_c  = candles[1] if len(candles) >= 2 else candles[0]
+        ltp        = float(cur_c[4])     # today's close = current price
+        prev_close = float(prev_c[4])    # yesterday's close
+        cur_oi     = float(cur_c[6])
+        prev_oi    = float(prev_c[6])
+        if ltp <= 0 or prev_close <= 0:
+            continue
         px_chg = (ltp - prev_close) / prev_close * 100
-        oi_chg = (cur_oi - prev_oi)  / prev_oi    * 100 if prev_oi else 0
-
+        oi_chg = (cur_oi - prev_oi) / prev_oi * 100 if prev_oi else 0
+        sym    = ikey.split("|")[-1]
         results.append({
-            "expiry":     exp,
-            "label":      labels_map[exp],
-            "symbol":     sym_map[exp],
-            "ltp":        ltp,
-            "prev_close": prev_close,
-            "oi":         cur_oi,
-            "prev_oi":    prev_oi,
-            "px_chg_pct": px_chg,
-            "oi_chg_pct": oi_chg,
-            "buildup":    _classify(ltp > prev_close, cur_oi > prev_oi),
+            "expiry": month_str, "label": label, "symbol": sym,
+            "ltp": ltp, "prev_close": prev_close,
+            "oi": cur_oi, "prev_oi": prev_oi,
+            "px_chg_pct": px_chg, "oi_chg_pct": oi_chg,
+            "buildup": _classify(ltp > prev_close, cur_oi > prev_oi),
+            "source": "hist",
         })
-
     if results:
         return results, None
-    return None, "No data from quotes or historical candle API"
+
+    return None, "No futures data — all 3 paths failed (Upstox smartlist/CDN/NSE India)"
 
 
 # ─────────────────────────────────────────────
@@ -2388,12 +2504,19 @@ if _fut_data:
         _fpx  = f"{'+'if _frow['px_chg_pct']>=0 else ''}{_frow['px_chg_pct']:.2f}%"
         _foi  = f"{'+'if _frow['oi_chg_pct']>=0 else ''}{_frow['oi_chg_pct']:.1f}%"
         _fexp = _frow['expiry']
+        _fsrc = _frow.get("source", "")
+        if _fsrc == "live":
+            _src_badge = "<span style='font-size:7px;padding:1px 4px;border-radius:3px;background:rgba(50,215,75,0.18);color:#32d74b;font-weight:700;'>📡 LIVE</span>"
+        elif _fsrc == "hist":
+            _src_badge = "<span style='font-size:7px;padding:1px 4px;border-radius:3px;background:rgba(255,159,10,0.18);color:#ff9f0a;font-weight:700;'>📅 HIST</span>"
+        else:
+            _src_badge = ""
         _fut_html += (
             f"<div style='display:flex;justify-content:space-between;align-items:center;"
             f"padding:4px 8px;margin-top:4px;"
             f"background:{_fbg};border:1px solid {_fbord};border-radius:5px;'>"
             f"<div>"
-            f"<div style='font-size:8px;color:var(--muted);'>{_frow.get('label', _fut_labels[_fi])} &nbsp;<span style='color:var(--muted);font-size:7px;'>{_fexp}</span></div>"
+            f"<div style='font-size:8px;color:var(--muted);'>{_frow.get('label', _fut_labels[_fi])} &nbsp;<span style='color:var(--muted);font-size:7px;'>{_fexp}</span> &nbsp;{_src_badge}</div>"
             f"<div style='font-size:11px;font-weight:700;font-family:var(--mono);color:{_fc};'>"
             f"{_farrow} {_fb}</div>"
             f"</div>"
