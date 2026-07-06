@@ -2075,41 +2075,49 @@ if _vp_tgt_l:
     if _3lot_ce_ltp and _3lot_pe_ltp:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
-# ── Far-leg: widest OTM strangle where CE+PE is in 70–90% of sold premium ──────
+# ── Far-leg: find symmetric strangle closest to premium target ───────────────
 def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target_lo, target_hi,
-                         max_steps=40, far_ce_oi_map=None, far_pe_oi_map=None, min_oi=100):
+                         max_steps=60, far_ce_oi_map=None, far_pe_oi_map=None, min_oi=50):
     """
-    Scan outward from ATM in symmetric steps.
-    - Skips strikes where CE+PE > target_hi  (too expensive — keep going wider)
-    - Records best when CE+PE is in [target_lo, target_hi]  ← the sweet spot
-    - Stops when CE+PE < target_lo  (too cheap — widest valid already found)
-    Returns the widest liquid strike in the 70–90% band.
-    Falls back to whatever best was found (even if outside band) if nothing qualifies.
+    Scan outward from ATM. Two passes:
+    Pass 1 — find widest strike where CE+PE is in [target_lo, target_hi]  (ideal)
+    Pass 2 — if no in-band hit, return the strike where CE+PE is closest to midpoint
+    Always returns a result with real LTP (never zeros out).
     """
-    best = {"ce_strike": int(base), "ce_ltp": 0.0,
-            "pe_strike": int(base), "pe_ltp": 0.0}
+    mid = (target_lo + target_hi) / 2.0
+    band_best  = None                               # best in-band (widest)
+    close_best = None                               # closest to mid overall
+    close_dist = float("inf")
+
     for n in range(0, max_steps + 1):
         ce_s = base + n * step
         pe_s = base - n * step
         ce_l = far_ce_map.get(float(ce_s), 0)
         pe_l = far_pe_map.get(float(pe_s), 0)
         if ce_l <= 0 or pe_l <= 0:
-            continue                      # no LTP data — skip
-        # Liquidity gate
+            continue
         if far_ce_oi_map is not None and far_pe_oi_map is not None:
-            ce_oi = far_ce_oi_map.get(float(ce_s), 0)
-            pe_oi = far_pe_oi_map.get(float(pe_s), 0)
-            if ce_oi < min_oi or pe_oi < min_oi:
-                continue                  # illiquid — skip
+            if (far_ce_oi_map.get(float(ce_s), 0) < min_oi or
+                    far_pe_oi_map.get(float(pe_s), 0) < min_oi):
+                continue
         total = ce_l + pe_l
-        if total > target_hi:
-            continue                      # too expensive — scan wider
-        elif total >= target_lo:
-            best = {"ce_strike": int(ce_s), "ce_ltp": ce_l,  # in the band — keep updating
-                    "pe_strike": int(pe_s), "pe_ltp": pe_l}
-        else:
-            break                         # dropped below floor — widest valid already in best
-    return best
+        row   = {"ce_strike": int(ce_s), "ce_ltp": ce_l,
+                 "pe_strike": int(pe_s), "pe_ltp": pe_l}
+        # In-band: keep widest
+        if target_lo <= total <= target_hi:
+            band_best = row
+        # Track closest to midpoint regardless
+        dist = abs(total - mid)
+        if dist < close_dist:
+            close_dist = dist
+            close_best = row
+        # Stop scanning when premium drops well below floor (no point going wider)
+        if total < target_lo * 0.40:
+            break
+
+    return band_best if band_best else (close_best or
+           {"ce_strike": int(base), "ce_ltp": 0.0,
+            "pe_strike": int(base), "pe_ltp": 0.0})
 
 _far_tgt_lo   = (_3lot_sell_total * 0.80) if _3lot_sell_total else 0
 _far_tgt_hi   = (_3lot_sell_total * 1.40) if _3lot_sell_total else 0
@@ -2145,10 +2153,11 @@ for _cand_exp in far_expiries[:6]:          # try up to 6 far expiries
         )
         _ctotal = _cres["ce_ltp"] + _cres["pe_ltp"]
         if _ctotal <= 0:
-            continue
-        # Prefer in-band; among in-band prefer closest to midpoint
+            continue                          # truly no data for this expiry
+        # Strongly prefer in-band; among in-band pick closest to midpoint
         _in_band = _far_tgt_lo <= _ctotal <= _far_tgt_hi
         _dist    = abs(_ctotal - _far_tgt_mid) - (1e9 if _in_band else 0)
+        # Out-of-band: prefer less overshoot/undershoot
         if _dist < _diag_best_dist:
             _diag_best_dist   = _dist
             _diag_best_exp    = _cand_exp
@@ -2183,27 +2192,6 @@ else:
     _fb_pe_oi_map      = far_pe_oi
 
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
-
-# ── Fallback: band scan found nothing → nearest liquid strike to sold legs ────
-if _far_atm_straddle <= 0 and _3lot_ce_strike and _3lot_pe_strike:
-    _fb_ce_s = next(
-        (s for s in sorted(_fb_ce_map.keys())
-         if s >= float(_3lot_ce_strike) and _fb_ce_map[s] > 0
-         and _fb_ce_oi_map.get(s, 0) >= 100),
-        None
-    )
-    _fb_pe_s = next(
-        (s for s in sorted(_fb_pe_map.keys(), reverse=True)
-         if s <= float(_3lot_pe_strike) and _fb_pe_map[s] > 0
-         and _fb_pe_oi_map.get(s, 0) >= 100),
-        None
-    )
-    if _fb_ce_s is not None and _fb_pe_s is not None:
-        _far_atm_ce_strike = int(_fb_ce_s)
-        _far_atm_ce_ltp    = _fb_ce_map[_fb_ce_s]
-        _far_atm_pe_strike = int(_fb_pe_s)
-        _far_atm_pe_ltp    = _fb_pe_map[_fb_pe_s]
-        _far_atm_straddle  = _far_atm_ce_ltp + _far_atm_pe_ltp
 
 _buy_ok        = bool(_far_tgt_lo and _far_tgt_lo <= _far_atm_straddle <= _far_tgt_hi)
 _buy_ratio_pct = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
