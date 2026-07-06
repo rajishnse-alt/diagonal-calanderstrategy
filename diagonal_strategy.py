@@ -2113,36 +2113,96 @@ def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target_lo, target_h
 
 _far_tgt_lo   = (_3lot_sell_total * 0.80) if _3lot_sell_total else 0
 _far_tgt_hi   = (_3lot_sell_total * 1.40) if _3lot_sell_total else 0
-_far_result   = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_lo, _far_tgt_hi,
-                                     far_ce_oi_map=far_ce_oi, far_pe_oi_map=far_pe_oi)
-_far_atm_ce_strike = _far_result["ce_strike"]
-_far_atm_ce_ltp   = _far_result["ce_ltp"]
-_far_atm_pe_strike = _far_result["pe_strike"]
-_far_atm_pe_ltp   = _far_result["pe_ltp"]
+_far_tgt_mid  = (_3lot_sell_total * 1.10) if _3lot_sell_total else 0  # ideal centre
+
+# ── Auto-pick best far expiry across all far_expiries ────────────────────────
+# Rules: (1) must not be the same ISO week as near_exp
+#        (2) choose expiry whose far-leg combined premium is closest to 110% of sold
+_near_week = datetime.strptime(near_exp, "%Y-%m-%d").isocalendar()[:2]  # (year, week)
+
+def _week_of(exp_str):
+    return datetime.strptime(exp_str, "%Y-%m-%d").isocalendar()[:2]
+
+_diag_best_exp    = None
+_diag_best_result = None
+_diag_best_dist   = float("inf")
+_diag_best_ce_m   = None
+_diag_best_pe_m   = None
+_diag_best_ce_oi  = None
+_diag_best_pe_oi  = None
+
+for _cand_exp in far_expiries[:6]:          # try up to 6 far expiries
+    if _week_of(_cand_exp) == _near_week:   # must not be the sold expiry week
+        continue
+    try:
+        _craw, _cerr = fetch_chain(token, _cand_exp)
+        if _cerr or not _craw:
+            continue
+        _, _, _c_ce, _c_pe, _c_ce_oi, _c_pe_oi, *_ = parse_chain(_craw)
+        _cres = _find_far_by_premium(
+            _c_ce, _c_pe, atm, STEP, _far_tgt_lo, _far_tgt_hi,
+            far_ce_oi_map=_c_ce_oi, far_pe_oi_map=_c_pe_oi,
+        )
+        _ctotal = _cres["ce_ltp"] + _cres["pe_ltp"]
+        if _ctotal <= 0:
+            continue
+        # Prefer in-band; among in-band prefer closest to midpoint
+        _in_band = _far_tgt_lo <= _ctotal <= _far_tgt_hi
+        _dist    = abs(_ctotal - _far_tgt_mid) - (1e9 if _in_band else 0)
+        if _dist < _diag_best_dist:
+            _diag_best_dist   = _dist
+            _diag_best_exp    = _cand_exp
+            _diag_best_result = _cres
+            _diag_best_ce_m   = _c_ce
+            _diag_best_pe_m   = _c_pe
+            _diag_best_ce_oi  = _c_ce_oi
+            _diag_best_pe_oi  = _c_pe_oi
+    except Exception:
+        continue
+
+# Use auto-selected expiry; fall back to user-selected far_exp if nothing found
+if _diag_best_result:
+    _diag_far_exp      = _diag_best_exp
+    _far_atm_ce_strike = _diag_best_result["ce_strike"]
+    _far_atm_ce_ltp    = _diag_best_result["ce_ltp"]
+    _far_atm_pe_strike = _diag_best_result["pe_strike"]
+    _far_atm_pe_ltp    = _diag_best_result["pe_ltp"]
+    _fb_ce_map         = _diag_best_ce_m
+    _fb_pe_map         = _diag_best_pe_m
+    _fb_ce_oi_map      = _diag_best_ce_oi
+    _fb_pe_oi_map      = _diag_best_pe_oi
+else:
+    _diag_far_exp      = far_exp
+    _far_atm_ce_strike = atm
+    _far_atm_ce_ltp    = 0.0
+    _far_atm_pe_strike = atm
+    _far_atm_pe_ltp    = 0.0
+    _fb_ce_map         = far_ce
+    _fb_pe_map         = far_pe
+    _fb_ce_oi_map      = far_ce_oi
+    _fb_pe_oi_map      = far_pe_oi
 
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
 
-# ── Fallback: band scan empty → nearest liquid strike to sold legs ────────────
+# ── Fallback: band scan found nothing → nearest liquid strike to sold legs ────
 if _far_atm_straddle <= 0 and _3lot_ce_strike and _3lot_pe_strike:
-    # CE: nearest far strike >= sold CE strike, liquid
     _fb_ce_s = next(
-        (s for s in sorted(far_ce.keys())
-         if s >= float(_3lot_ce_strike) and far_ce[s] > 0
-         and far_ce_oi.get(s, 0) >= 100),
+        (s for s in sorted(_fb_ce_map.keys())
+         if s >= float(_3lot_ce_strike) and _fb_ce_map[s] > 0
+         and _fb_ce_oi_map.get(s, 0) >= 100),
         None
     )
-    # PE: nearest far strike <= sold PE strike, liquid
     _fb_pe_s = next(
-        (s for s in sorted(far_pe.keys(), reverse=True)
-         if s <= float(_3lot_pe_strike) and far_pe[s] > 0
-         and far_pe_oi.get(s, 0) >= 100),
+        (s for s in sorted(_fb_pe_map.keys(), reverse=True)
+         if s <= float(_3lot_pe_strike) and _fb_pe_map[s] > 0
+         and _fb_pe_oi_map.get(s, 0) >= 100),
         None
     )
     if _fb_ce_s is not None and _fb_pe_s is not None:
         _far_atm_ce_strike = int(_fb_ce_s)
-        _far_atm_ce_ltp    = far_ce[_fb_ce_s]
+        _far_atm_ce_ltp    = _fb_ce_map[_fb_ce_s]
         _far_atm_pe_strike = int(_fb_pe_s)
-        _far_atm_pe_ltp    = far_pe[_fb_pe_s]
+        _far_atm_pe_ltp    = _fb_pe_map[_fb_pe_s]
         _far_atm_straddle  = _far_atm_ce_ltp + _far_atm_pe_ltp
 
 _buy_ok        = bool(_far_tgt_lo and _far_tgt_lo <= _far_atm_straddle <= _far_tgt_hi)
@@ -2865,7 +2925,7 @@ with pb3:
     <div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);
                 border-radius:6px;padding:8px 10px;'>
       <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:6px;'>
-        BUY · FAR {far_exp} · 1 LOT EACH · 80–140% of sold
+        BUY · FAR {_diag_far_exp} · 1 LOT EACH · 80–140% of sold
       </div>
       <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
         <span style='font-size:11px;'>CALL {_pill_ce(_far_atm_ce_strike)}</span>
