@@ -859,11 +859,22 @@ def _get_nifty_fut_tokens(tok):
         )
         if r.status_code != 200:
             return {}, f"smartlist HTTP {r.status_code}"
-        resp = r.json()
-        if resp.get("status") != "success":
-            return {}, f"smartlist error: {resp.get('errors') or resp.get('message')}"
 
-        contracts = resp.get("data", [])
+        # Validate JSON before parsing — may be plain text on auth error
+        raw = r.text.strip()
+        if not raw.startswith(("{", "[")):
+            return {}, f"non-JSON response: {raw[:80]}"
+
+        resp = r.json()
+        # Handle both {status/data} envelope and bare list response
+        if isinstance(resp, list):
+            contracts = resp
+        elif isinstance(resp, dict):
+            if resp.get("status") != "success":
+                return {}, f"smartlist: {resp.get('errors') or resp.get('message')}"
+            contracts = resp.get("data", [])
+        else:
+            return {}, f"unexpected response type: {type(resp)}"
         tokens    = {}
         for item in contracts:
             sym  = str(item.get("trading_symbol") or "").upper()
