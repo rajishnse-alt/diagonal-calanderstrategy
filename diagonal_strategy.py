@@ -907,7 +907,12 @@ def fetch_futures_buildup(tok, expiry_dates):
                 "oi_chg_pct": oi_chg_pct,
                 "buildup":    _classify(ltp > prev_close, oi > prev_oi),
             })
-        return (results, None) if results else (None, "Quotes returned no data")
+        if results:
+            return results, None
+        # Debug: show what keys the API actually returned so we can fix the format
+        actual_keys = list(data.keys())[:4]
+        tried_keys  = [f"{k}→{v}" for k, v in fut_keys.items()]
+        return None, f"tried:{tried_keys} | got:{actual_keys}"
     except Exception as e:
         return None, str(e)
 
