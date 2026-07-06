@@ -857,11 +857,12 @@ def _build_fut_instrument_keys(expiry_dates):
 
 
 @st.cache_data(ttl=180, show_spinner=False)
-def fetch_futures_buildup(tok, expiry_dates):
+def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
     """
     Fetch NIFTY futures build-up (Upstox only).
-    Constructs instrument keys from expiry dates → market-quote/quotes → OI + price.
-    Classify: Long Build-up / Short Build-up / Short Covering / Long Unwinding
+    Priority:
+      1. underlying_key from option chain row (most reliable — exact numeric token)
+      2. Constructed tradingsymbol key (fallback)
     """
     def _classify(price_up, oi_up):
         if price_up and oi_up:     return "Long Build-up"
@@ -869,49 +870,72 @@ def fetch_futures_buildup(tok, expiry_dates):
         if not price_up and oi_up: return "Short Build-up"
         return "Long Unwinding"
 
-    fut_keys = _build_fut_instrument_keys(expiry_dates)
-    if not fut_keys:
-        return None, "Could not construct futures instrument keys"
+    def _parse_quote(qd, exp, label):
+        if not qd:
+            return None
+        ltp        = float(qd.get("last_price") or 0)
+        ohlc       = qd.get("ohlc", {})
+        prev_close = float(ohlc.get("close") or ohlc.get("open") or 0)
+        oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
+        prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
+        if ltp <= 0:
+            return None
+        px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
+        oi_chg_pct = ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0
+        return {
+            "expiry": exp, "label": label,
+            "ltp": ltp, "prev_close": prev_close,
+            "oi": oi, "prev_oi": prev_oi,
+            "px_chg_pct": px_chg_pct, "oi_chg_pct": oi_chg_pct,
+            "buildup": _classify(ltp > prev_close, oi > prev_oi),
+        }
 
     try:
-        keys_param = ",".join(fut_keys.values())
+        # Build key list: underlying_key for near expiry + constructed for next
+        _MONTHS = {1:"JAN",2:"FEB",3:"MAR",4:"APR",5:"MAY",6:"JUN",
+                   7:"JUL",8:"AUG",9:"SEP",10:"OCT",11:"NOV",12:"DEC"}
+        fut_keys = {}   # {exp: (ikey, label)}
+        for i, exp in enumerate(sorted(expiry_dates)[:2]):
+            try:
+                d   = datetime.strptime(exp, "%Y-%m-%d")
+                sym = f"NIFTY{str(d.year)[2:]}{_MONTHS[d.month]}FUT"
+                if i == 0 and underlying_key:
+                    ikey = underlying_key   # exact key from chain row
+                else:
+                    ikey = f"NSE_FO|{sym}"
+                lbl = "CUR MONTH" if i == 0 else "NEXT MONTH"
+                fut_keys[exp] = (ikey, lbl)
+            except Exception:
+                pass
+
+        if not fut_keys:
+            return None, "No expiry dates"
+
+        keys_param = ",".join(v[0] for v in fut_keys.values())
         r = requests.get(
             "https://api.upstox.com/v2/market-quote/quotes",
             params={"instrument_key": keys_param},
             headers=hdr(tok), timeout=10,
         )
         if r.status_code != 200:
-            return None, f"quotes HTTP {r.status_code}"
+            return None, f"HTTP {r.status_code}"
         data = r.json().get("data", {})
+
         results = []
         for exp in sorted(fut_keys):
-            ikey   = fut_keys[exp]
+            ikey, lbl = fut_keys[exp]
             ikey_c = ikey.replace("|", ":")
-            qd     = data.get(ikey_c) or data.get(ikey) or {}
-            if not qd:
-                continue
-            ltp        = float(qd.get("last_price") or 0)
-            ohlc       = qd.get("ohlc", {})
-            prev_close = float(ohlc.get("close") or ohlc.get("open") or 0)
-            oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
-            prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
-            px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
-            oi_chg_pct = ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0
-            results.append({
-                "expiry":     exp,
-                "ltp":        ltp,
-                "prev_close": prev_close,
-                "oi":         oi,
-                "prev_oi":    prev_oi,
-                "px_chg_pct": px_chg_pct,
-                "oi_chg_pct": oi_chg_pct,
-                "buildup":    _classify(ltp > prev_close, oi > prev_oi),
-            })
+            qd  = data.get(ikey_c) or data.get(ikey) or {}
+            row = _parse_quote(qd, exp, lbl)
+            if row:
+                results.append(row)
+
         if results:
             return results, None
-        # Debug: show actual Upstox response keys
-        actual_keys = list(data.keys())[:6]
-        return None, f"GOT KEYS: {actual_keys}"
+        # Debug — show what keys Upstox returned + what we tried
+        sample = list(data.keys())[:3]
+        tried  = [v[0] for v in fut_keys.values()]
+        return None, f"tried:{tried} | got:{sample}"
     except Exception as e:
         return None, str(e)
 
@@ -2143,8 +2167,20 @@ def _monthly_expiries_from_all(exp_list, n=2):
             pass
     return [str(v) for v in sorted(_buckets.values())[:n]]
 
+# Extract underlying_key (futures instrument key) directly from the option chain rows
+_fut_underlying_key = None
+for _fu_row in (near_raw or []):
+    _fuk = (_fu_row.get("underlying_key")
+            or _fu_row.get("underlying_instrument_key")
+            or _fu_row.get("future_instrument_key")
+            or "")
+    if _fuk and "NSE_FO" in _fuk:
+        _fut_underlying_key = _fuk
+        break
+
 _fut_expiries = _monthly_expiries_from_all(all_exp, n=2)
-_fut_data, _fut_err = fetch_futures_buildup(token, _fut_expiries)
+_fut_data, _fut_err = fetch_futures_buildup(token, _fut_expiries,
+                                             underlying_key=_fut_underlying_key)
 
 _BUILDUP_META = {
     "Long Build-up":   ("var(--bull)",  "▲", "rgba(50,215,75,0.10)",  "rgba(50,215,75,0.35)"),
