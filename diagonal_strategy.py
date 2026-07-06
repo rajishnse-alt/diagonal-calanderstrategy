@@ -427,7 +427,11 @@ def secrets_ok():
         return False
 
 def hdr(tok):
-    return {"Authorization": f"Bearer {tok}", "Accept": "application/json"}
+    return {
+        "Authorization":  f"Bearer {tok}",
+        "Accept":         "application/json",
+        "Content-Type":   "application/json",   # required by Upstox v2 API
+    }
 
 def build_auth_url(k, r):
     return (
@@ -866,15 +870,12 @@ def _get_nifty_fut_tokens(tok):
             return {}, f"non-JSON response: {raw[:80]}"
 
         resp = r.json()
-        # Handle both {status/data} envelope and bare list response
-        if isinstance(resp, list):
-            contracts = resp
-        elif isinstance(resp, dict):
-            if resp.get("status") != "success":
-                return {}, f"smartlist: {resp.get('errors') or resp.get('message')}"
-            contracts = resp.get("data", [])
-        else:
+        # With correct Content-Type headers, Upstox v2 always returns envelope
+        if not isinstance(resp, dict):
             return {}, f"unexpected response type: {type(resp)}"
+        if resp.get("status") != "success":
+            return {}, f"smartlist error: {resp.get('errors') or resp.get('message')}"
+        contracts = resp.get("data", [])
         tokens    = {}
         for item in contracts:
             if not isinstance(item, dict):
