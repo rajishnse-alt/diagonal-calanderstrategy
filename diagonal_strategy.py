@@ -841,61 +841,70 @@ def weeks_out(expiry_str):
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
     """
-    Fetch NIFTY futures build-up using Upstox /v2/market/change-oi.
-    Uses NSE_INDEX|Nifty 50 as instrument_key + expiry date — no futures token needed.
-    Calls once per expiry (current month, next month).
+    Fetch NIFTY futures build-up via Upstox market-quote/quotes.
+    Instrument key format: NSE_FO|NIFTY26JULYFUT  (full month name, YY year).
+    Fields: last_price, ohlc.close (prev close), oi, prev_oi  — same as V3 WebSocket feed.
     """
+    _FULL_MONTHS = {
+        1:"JANUARY", 2:"FEBRUARY", 3:"MARCH",    4:"APRIL",
+        5:"MAY",     6:"JUNE",     7:"JULY",      8:"AUGUST",
+        9:"SEPTEMBER",10:"OCTOBER",11:"NOVEMBER",12:"DECEMBER",
+    }
+
     def _classify(price_up, oi_up):
         if price_up and oi_up:     return "Long Build-up"
         if price_up and not oi_up: return "Short Covering"
         if not price_up and oi_up: return "Short Build-up"
         return "Long Unwinding"
 
-    today_str = datetime.now(IST).strftime("%Y-%m-%d")
-    labels    = ["CUR MONTH", "NEXT MONTH"]
-    results   = []
-    last_err  = None
-
+    # Build instrument keys  e.g. NSE_FO|NIFTY26JULYFUT
+    fut_keys = {}
+    labels   = {}
     for i, exp in enumerate(sorted(expiry_dates)[:2]):
         try:
-            r = requests.get(
-                "https://api.upstox.com/v2/market/change-oi",
-                params={
-                    "instrument_key": "NSE_INDEX|Nifty 50",
-                    "expiry":         exp,
-                    "date":           today_str,
-                    "interval":       "2",          # daily interval
-                },
-                headers=hdr(tok),
-                timeout=12,
-            )
-            if r.status_code != 200:
-                last_err = f"HTTP {r.status_code}"
-                continue
-            resp = r.json()
-            if resp.get("status") != "success":
-                # Dump full response so we can see what Upstox is saying
-                last_err = str(resp)[:300]
-                continue
+            d   = datetime.strptime(exp, "%Y-%m-%d")
+            sym = f"NIFTY{str(d.year)[2:]}{_FULL_MONTHS[d.month]}FUT"
+            fut_keys[exp] = f"NSE_FO|{sym}"
+            labels[exp]   = "CUR MONTH" if i == 0 else "NEXT MONTH"
+        except Exception:
+            pass
 
-            rows = resp.get("data", [])
-            if not rows:
-                last_err = f"empty data for {exp}"
-                continue
+    if not fut_keys:
+        return None, "Could not build instrument keys"
 
-            # Use the latest (last) row — most recent OI snapshot
-            row = rows[-1]
-            oi         = float(row.get("oi")         or row.get("open_interest") or 0)
-            oi_chg     = float(row.get("oi_change")  or row.get("change_in_oi")  or 0)
-            prev_oi    = (oi - oi_chg) if oi_chg else oi
-            ltp        = float(row.get("close") or row.get("ltp") or row.get("last_price") or 0)
-            prev_close = float(row.get("prev_close") or row.get("open") or ltp)
+    try:
+        keys_param = ",".join(fut_keys.values())
+        r = requests.get(
+            "https://api.upstox.com/v2/market-quote/quotes",
+            params={"instrument_key": keys_param},
+            headers=hdr(tok), timeout=12,
+        )
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}"
+
+        data = r.json().get("data", {})
+        results = []
+
+        for exp in sorted(fut_keys):
+            ikey   = fut_keys[exp]
+            ikey_c = ikey.replace("|", ":")
+            qd     = data.get(ikey_c) or data.get(ikey) or {}
+            if not qd:
+                continue
+            ltp        = float(qd.get("last_price") or 0)
+            ohlc       = qd.get("ohlc", {})
+            # cp = closing price (prev day close), maps to ltpc.cp in WebSocket
+            prev_close = float(ohlc.get("close") or ohlc.get("prev_close") or 0)
+            # oi / prev_oi map to marketLevel.oi / marketLevel.poi in WebSocket
+            oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
+            prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
+            if ltp <= 0:
+                continue
             px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
             oi_chg_pct = ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0
-
             results.append({
                 "expiry":     exp,
-                "label":      labels[i],
+                "label":      labels[exp],
                 "ltp":        ltp,
                 "prev_close": prev_close,
                 "oi":         oi,
@@ -904,10 +913,14 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
                 "oi_chg_pct": oi_chg_pct,
                 "buildup":    _classify(ltp > prev_close, oi > prev_oi),
             })
-        except Exception as e:
-            last_err = str(e)
 
-    return (results, None) if results else (None, last_err or "No data")
+        if results:
+            return results, None
+        # Debug — show actual response keys
+        sample = list(data.keys())[:4]
+        return None, f"keys tried:{list(fut_keys.values())} got:{sample}"
+    except Exception as e:
+        return None, str(e)
 
 
 # ─────────────────────────────────────────────
@@ -2161,7 +2174,7 @@ if _fut_data:
             f"padding:4px 8px;margin-top:4px;"
             f"background:{_fbg};border:1px solid {_fbord};border-radius:5px;'>"
             f"<div>"
-            f"<div style='font-size:8px;color:var(--muted);'>{_fut_labels[_fi]} &nbsp;<span style='color:var(--muted);font-size:7px;'>{_fexp}</span></div>"
+            f"<div style='font-size:8px;color:var(--muted);'>{_frow.get('label', _fut_labels[_fi])} &nbsp;<span style='color:var(--muted);font-size:7px;'>{_fexp}</span></div>"
             f"<div style='font-size:11px;font-weight:700;font-family:var(--mono);color:{_fc};'>"
             f"{_farrow} {_fb}</div>"
             f"</div>"
