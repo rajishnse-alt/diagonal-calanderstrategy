@@ -854,9 +854,9 @@ def _get_nifty_fut_tokens(tok):
         cfg = upstox_client.Configuration()
         cfg.access_token = tok
         api_client = upstox_client.ApiClient(cfg)
-        market_api = upstox_client.MarketDataApi(api_client)
+        market_api = upstox_client.MarketInfoApi(api_client)   # correct class
 
-        resp = market_api.get_market_smartlist(
+        resp = market_api.get_futures_smartlist(               # correct method
             asset_type="INDEX",
             category="TOP_TRADED",
             page_number=1,
