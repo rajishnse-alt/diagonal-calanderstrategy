@@ -12,6 +12,7 @@ Run:  streamlit run diagonal_strategy.py
 
 import streamlit as st
 import requests
+import upstox_client
 import math
 import time
 import json
@@ -845,47 +846,33 @@ def weeks_out(expiry_str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_nifty_fut_tokens(tok):
     """
-    Resolve NIFTY futures instrument keys via Upstox Smartlist API (cached 1 h).
-    GET /v2/market/smartlist/futures?asset_type=INDEX&category=TOP_TRADED&page_size=50
-    Returns {expiry_str: (instrument_key, trading_symbol)} sorted by expiry.
+    Resolve NIFTY futures instrument keys via Upstox SDK MarketDataApi.get_market_smartlist().
+    Using the SDK bypasses raw HTTP header / auth issues entirely.
+    Returns {expiry_str: (instrument_key, trading_symbol)}.
     """
     try:
-        r = requests.get(
-            "https://api.upstox.com/v2/market/smartlist/futures",
-            params={
-                "asset_type":  "INDEX",
-                "category":    "TOP_TRADED",
-                "page_number": "1",
-                "page_size":   "50",
-            },
-            headers=hdr(tok),
-            timeout=12,
+        cfg = upstox_client.Configuration()
+        cfg.access_token = tok
+        api_client = upstox_client.ApiClient(cfg)
+        market_api = upstox_client.MarketDataApi(api_client)
+
+        resp = market_api.get_market_smartlist(
+            asset_type="INDEX",
+            category="TOP_TRADED",
+            page_number=1,
+            page_size=30,
         )
-        if r.status_code != 200:
-            return {}, f"smartlist HTTP {r.status_code}"
+        if resp.status != "success" or not resp.data:
+            return {}, f"smartlist SDK: status={resp.status}"
 
-        # Validate JSON before parsing — may be plain text on auth error
-        raw = r.text.strip()
-        if not raw.startswith(("{", "[")):
-            return {}, f"non-JSON response: {raw[:80]}"
-
-        resp = r.json()
-        # With correct Content-Type headers, Upstox v2 always returns envelope
-        if not isinstance(resp, dict):
-            return {}, f"unexpected response type: {type(resp)}"
-        if resp.get("status") != "success":
-            return {}, f"smartlist error: {resp.get('errors') or resp.get('message')}"
-        contracts = resp.get("data", [])
-        tokens    = {}
-        for item in contracts:
-            if not isinstance(item, dict):
-                continue
-            sym  = str(item.get("trading_symbol") or "").upper()
-            ikey = str(item.get("instrument_key") or "")
-            exp  = str(item.get("expiry") or "")[:10]
+        tokens = {}
+        for item in resp.data:
+            sym  = (item.trading_symbol or "").upper()
+            ikey = item.instrument_key or ""
+            exp  = str(item.expiry or "")[:10]
             if not ikey or not exp:
                 continue
-            # Plain NIFTY futures only — exclude BANKNIFTY, FINNIFTY, MIDCPNIFTY
+            # Plain NIFTY monthly futures only
             if "NIFTY" not in sym:
                 continue
             if any(x in sym for x in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "CPSE")):
