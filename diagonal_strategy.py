@@ -909,10 +909,9 @@ def fetch_futures_buildup(tok, expiry_dates):
             })
         if results:
             return results, None
-        # Debug: show what keys the API actually returned so we can fix the format
-        actual_keys = list(data.keys())[:4]
-        tried_keys  = [f"{k}→{v}" for k, v in fut_keys.items()]
-        return None, f"tried:{tried_keys} | got:{actual_keys}"
+        # Debug: show actual Upstox response keys
+        actual_keys = list(data.keys())[:6]
+        return None, f"GOT KEYS: {actual_keys}"
     except Exception as e:
         return None, str(e)
 
@@ -2202,7 +2201,7 @@ with r1c1:
         + (
             _fut_html if _fut_html
             else f"<span style='font-size:9px;color:var(--muted);font-style:italic;'>"
-                 f"{'—' if not _fut_err else _fut_err[:60]}</span>"
+                 f"{'—' if not _fut_err else _fut_err[:200]}</span>"
           )
         + f"</div>"
         + f"</div>",
