@@ -2111,8 +2111,8 @@ def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target_lo, target_h
             break                         # dropped below floor — widest valid already in best
     return best
 
-_far_tgt_lo   = (_3lot_sell_total * 0.70) if _3lot_sell_total else 0
-_far_tgt_hi   = (_3lot_sell_total * 0.90) if _3lot_sell_total else 0
+_far_tgt_lo   = (_3lot_sell_total * 0.80) if _3lot_sell_total else 0
+_far_tgt_hi   = (_3lot_sell_total * 1.40) if _3lot_sell_total else 0
 _far_result   = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_lo, _far_tgt_hi,
                                      far_ce_oi_map=far_ce_oi, far_pe_oi_map=far_pe_oi)
 _far_atm_ce_strike = _far_result["ce_strike"]
@@ -2792,11 +2792,11 @@ with pb3:
         _buy_val_col  = "var(--bull)" if _buy_ok else "var(--bear)"
         _buy_chk_col  = "var(--bull)" if _buy_ok else "var(--bear)"
         if _buy_ok:
-            _buy_status = "✓ 70–90% of sold"
+            _buy_status = "✓ 80–140% of sold"
         elif _far_atm_straddle > _far_tgt_hi:
-            _buy_status = "↑ above 90% · nearest to sold"
+            _buy_status = "↑ above 140% · nearest to sold"
         elif _far_atm_straddle > 0:
-            _buy_status = "↓ below 70% · nearest to sold"
+            _buy_status = "↓ below 80% · nearest to sold"
         else:
             _buy_status = "✗ no far data"
         _ratio_txt    = f"{_buy_ratio_pct:.0f}%" if _buy_ratio_pct else "—"
@@ -2865,7 +2865,7 @@ with pb3:
     <div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);
                 border-radius:6px;padding:8px 10px;'>
       <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:6px;'>
-        BUY · FAR {far_exp} · 1 LOT EACH · 70–90% of sold
+        BUY · FAR {far_exp} · 1 LOT EACH · 80–140% of sold
       </div>
       <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
         <span style='font-size:11px;'>CALL {_pill_ce(_far_atm_ce_strike)}</span>
