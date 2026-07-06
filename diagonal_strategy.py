@@ -838,86 +838,49 @@ def weeks_out(expiry_str):
         return 0.0
 
 
-@st.cache_data(ttl=86_400, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _get_nifty_fut_tokens(tok):
     """
-    Fetch NIFTY futures instrument keys (cached 24 h).
-    Returns {expiry_str: instrument_key} sorted by expiry.
-
-    Strategy (in order):
-    1. Upstox REST /v2/instruments?exchange=NSE_FO  (auth, JSON list)
-    2. CDN JSON gz  (no auth)
-    3. CDN CSV gz   (no auth)
+    Resolve NIFTY futures instrument keys via Upstox Smartlist API (cached 1 h).
+    GET /v2/market/smartlist/futures?asset_type=INDEX&category=TOP_TRADED&page_size=50
+    Returns {expiry_str: (instrument_key, trading_symbol)} sorted by expiry.
     """
-    import gzip, io, csv
-
-    def _parse_item(item):
-        """Normalise one instrument record → (expiry, key) or (None, None)."""
-        seg   = str(item.get("segment")           or item.get("exchange")          or "").upper()
-        itype = str(item.get("instrument_type")   or item.get("instrumenttype")    or "").upper()
-        # underlying_symbol is the correct field per Upstox script; name as fallback
-        und   = str(item.get("underlying_symbol") or item.get("name")              or "").upper()
-        exp   = str(item.get("expiry")            or item.get("expiry_date")       or "")[:10]
-        ikey  = str(item.get("instrument_key")    or item.get("instrumentKey")     or "")
-        if seg  not in ("NSE_FO", "NFO"):                          return None, None
-        if itype not in ("FUTIDX", "FUT"):                         return None, None
-        # Match plain NIFTY only — not BANKNIFTY, FINNIFTY, MIDCPNIFTY etc
-        if und.replace(" ", "") not in ("NIFTY", "NIFTY50"):       return None, None
-        if not exp or not ikey:                                     return None, None
-        return exp, ikey
-
-    # ── 1. Upstox authenticated REST endpoint ────────────────────────────────
     try:
         r = requests.get(
-            "https://api.upstox.com/v2/instruments",
-            params={"exchange": "NSE_FO"},
-            headers=hdr(tok), timeout=20,
+            "https://api.upstox.com/v2/market/smartlist/futures",
+            params={
+                "asset_type":  "INDEX",
+                "category":    "TOP_TRADED",
+                "page_number": "1",
+                "page_size":   "50",
+            },
+            headers=hdr(tok),
+            timeout=12,
         )
-        if r.status_code == 200:
-            items = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
-            tokens = {}
-            for item in items:
-                exp, ikey = _parse_item(item)
-                if exp:
-                    tokens[exp] = ikey
-            if tokens:
-                return tokens, None
-    except Exception:
-        pass
+        if r.status_code != 200:
+            return {}, f"smartlist HTTP {r.status_code}"
+        resp = r.json()
+        if resp.get("status") != "success":
+            return {}, f"smartlist error: {resp.get('errors') or resp.get('message')}"
 
-    # ── 2 & 3. CDN fallbacks ─────────────────────────────────────────────────
-    _CDN = [
-        ("json", "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz"),
-        ("json", "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"),
-        ("csv",  "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.csv.gz"),
-        ("csv",  "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz"),
-    ]
-    for fmt, url in _CDN:
-        try:
-            r = requests.get(url, timeout=25, headers={"Accept-Encoding": "identity"})
-            if r.status_code != 200:
+        contracts = resp.get("data", [])
+        tokens    = {}
+        for item in contracts:
+            sym  = str(item.get("trading_symbol") or "").upper()
+            ikey = str(item.get("instrument_key") or "")
+            exp  = str(item.get("expiry") or "")[:10]
+            if not ikey or not exp:
                 continue
-            raw = r.content
-            try:
-                raw = gzip.decompress(raw)
-            except Exception:
-                pass
-            text = raw.decode("utf-8")
-            items = json.loads(text) if fmt == "json" else None
-            if fmt == "csv":
-                reader = csv.DictReader(io.StringIO(text))
-                items  = list(reader)
-            tokens = {}
-            for item in items:
-                exp, ikey = _parse_item(item)
-                if exp:
-                    tokens[exp] = ikey
-            if tokens:
-                return tokens, None
-        except Exception:
-            continue
+            # Plain NIFTY futures only — exclude BANKNIFTY, FINNIFTY, MIDCPNIFTY
+            if "NIFTY" not in sym:
+                continue
+            if any(x in sym for x in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "CPSE")):
+                continue
+            tokens[exp] = (ikey, sym)
 
-    return {}, "All instrument sources failed"
+        return tokens, None
+    except Exception as e:
+        return {}, str(e)
 
 
 @st.cache_data(ttl=180, show_spinner=False)
@@ -949,23 +912,22 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
             "buildup":    _classify(ltp > prev_close, oi > prev_oi),
         }
 
-    # Get all NIFTY futures tokens, sort by expiry, take first 2 future-dated
-    all_tokens, csv_err = _get_nifty_fut_tokens(tok)
+    # Resolve via Smartlist, sort by expiry, take first 2 future-dated
+    all_tokens, err = _get_nifty_fut_tokens(tok)
     if not all_tokens:
-        return None, f"Instruments unavailable: {csv_err}"
+        return None, f"Smartlist unavailable: {err}"
 
-    today = datetime.now(IST).date()
-    # Sort by expiry date, keep only contracts expiring today or later
-    sorted_exps = sorted(
-        [exp for exp in all_tokens if exp >= str(today)],
-    )[:2]   # current month + next month — same logic as nifty_contracts[:2]
+    today       = str(datetime.now(IST).date())
+    sorted_exps = sorted(exp for exp in all_tokens if exp >= today)[:2]
+
+    if not sorted_exps:
+        return None, "No active NIFTY futures found in smartlist"
 
     labels_map = {exp: ("CUR MONTH" if i == 0 else "NEXT MONTH")
                   for i, exp in enumerate(sorted_exps)}
-    fut_keys   = {exp: all_tokens[exp] for exp in sorted_exps}
-
-    if not fut_keys:
-        return None, f"No future-dated contracts in instruments. CSV err: {csv_err}"
+    # fut_keys: {exp: instrument_key}
+    fut_keys   = {exp: all_tokens[exp][0] for exp in sorted_exps}
+    sym_map    = {exp: all_tokens[exp][1] for exp in sorted_exps}
 
     try:
         keys_param = ",".join(fut_keys.values())
@@ -976,17 +938,19 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
         )
         if r.status_code != 200:
             return None, f"quotes HTTP {r.status_code}"
-        data  = r.json().get("data", {})
+        data    = r.json().get("data", {})
         results = []
-        for exp in target_exps:
-            ikey = fut_keys.get(exp, "")
+        for exp in sorted_exps:
+            ikey = fut_keys[exp]
             qd   = data.get(ikey.replace("|", ":")) or data.get(ikey) or {}
             row  = _parse(qd, exp, labels_map[exp])
             if row:
+                row["symbol"] = sym_map[exp]
                 results.append(row)
         if results:
             return results, None
-        return None, f"Empty quotes for keys:{list(fut_keys.values())[:2]}"
+        sample = list(data.keys())[:3]
+        return None, f"quotes empty — tried:{list(fut_keys.values())} got:{sample}"
     except Exception as e:
         return None, str(e)
 
