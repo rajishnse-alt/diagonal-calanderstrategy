@@ -2075,14 +2075,16 @@ if _vp_tgt_l:
     if _3lot_ce_ltp and _3lot_pe_ltp:
         _3lot_sell_total = _3lot_sell_lots * (_3lot_ce_ltp + _3lot_pe_ltp)
 
-# ── Far-leg: widest OTM strangle where CE+PE ≥ 80% of total sold premium ──────
-def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target, max_steps=25,
-                         far_ce_oi_map=None, far_pe_oi_map=None, min_oi=100):
+# ── Far-leg: widest OTM strangle where CE+PE is in 70–90% of sold premium ──────
+def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target_lo, target_hi,
+                         max_steps=40, far_ce_oi_map=None, far_pe_oi_map=None, min_oi=100):
     """
     Scan outward from ATM in symmetric steps.
-    Return the widest (most OTM) symmetric strangle where CE_ltp + PE_ltp >= target
-    AND both legs have OI >= min_oi (liquidity gate).
-    Falls back to ATM if nothing qualifies.
+    - Skips strikes where CE+PE > target_hi  (too expensive — keep going wider)
+    - Records best when CE+PE is in [target_lo, target_hi]  ← the sweet spot
+    - Stops when CE+PE < target_lo  (too cheap — widest valid already found)
+    Returns the widest liquid strike in the 70–90% band.
+    Falls back to whatever best was found (even if outside band) if nothing qualifies.
     """
     best = {"ce_strike": int(base), "ce_ltp": 0.0,
             "pe_strike": int(base), "pe_ltp": 0.0}
@@ -2092,32 +2094,34 @@ def _find_far_by_premium(far_ce_map, far_pe_map, base, step, target, max_steps=2
         ce_l = far_ce_map.get(float(ce_s), 0)
         pe_l = far_pe_map.get(float(pe_s), 0)
         if ce_l <= 0 or pe_l <= 0:
-            continue                      # no LTP — skip
-        # Liquidity gate: skip strikes with negligible open interest
+            continue                      # no LTP data — skip
+        # Liquidity gate
         if far_ce_oi_map is not None and far_pe_oi_map is not None:
             ce_oi = far_ce_oi_map.get(float(ce_s), 0)
             pe_oi = far_pe_oi_map.get(float(pe_s), 0)
             if ce_oi < min_oi or pe_oi < min_oi:
                 continue                  # illiquid — skip
-        if ce_l + pe_l >= target:
-            best = {"ce_strike": int(ce_s), "ce_ltp": ce_l,
+        total = ce_l + pe_l
+        if total > target_hi:
+            continue                      # too expensive — scan wider
+        elif total >= target_lo:
+            best = {"ce_strike": int(ce_s), "ce_ltp": ce_l,  # in the band — keep updating
                     "pe_strike": int(pe_s), "pe_ltp": pe_l}
         else:
-            break                         # going wider only gets cheaper — stop
+            break                         # dropped below floor — widest valid already in best
     return best
 
-_far_tgt_premium  = (_3lot_sell_total * 0.80) if _3lot_sell_total else 0
-_far_result       = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_premium,
-                                         far_ce_oi_map=far_ce_oi, far_pe_oi_map=far_pe_oi)
+_far_tgt_lo   = (_3lot_sell_total * 0.70) if _3lot_sell_total else 0
+_far_tgt_hi   = (_3lot_sell_total * 0.90) if _3lot_sell_total else 0
+_far_result   = _find_far_by_premium(far_ce, far_pe, atm, STEP, _far_tgt_lo, _far_tgt_hi,
+                                     far_ce_oi_map=far_ce_oi, far_pe_oi_map=far_pe_oi)
 _far_atm_ce_strike = _far_result["ce_strike"]
 _far_atm_ce_ltp   = _far_result["ce_ltp"]
 _far_atm_pe_strike = _far_result["pe_strike"]
 _far_atm_pe_ltp   = _far_result["pe_ltp"]
 
 _far_atm_straddle = _far_atm_ce_ltp + _far_atm_pe_ltp
-_buy_target_80    = (_3lot_sell_total * 0.80) if _3lot_sell_total else None
-_buy_target_300   = (_3lot_sell_total * 3.00) if _3lot_sell_total else None
-_buy_ok           = bool(_buy_target_80 and _far_atm_straddle >= _buy_target_80)
+_buy_ok           = bool(_far_tgt_lo and _far_tgt_lo <= _far_atm_straddle <= _far_tgt_hi)
 _buy_ratio_pct    = ((_far_atm_straddle / _3lot_sell_total) * 100) if _3lot_sell_total else None
 
 # ── Ratio Diagonal CE  (Sell 1 ATM CE near · Buy 2 far CE at 40–50% premium) ──
@@ -2763,7 +2767,7 @@ with pb3:
     if _3lot_sell_total:
         _buy_val_col  = "var(--bull)" if _buy_ok else "var(--bear)"
         _buy_chk_col  = "var(--bull)" if _buy_ok else "var(--bear)"
-        _buy_status   = "✓ ≥80% of sold" if _buy_ok else "✗ <80% of sold"
+        _buy_status   = "✓ 70–90% of sold" if _buy_ok else f"✗ {'above 90%' if _far_atm_straddle > _far_tgt_hi else 'below 70%'} of sold"
         _ratio_txt    = f"{_buy_ratio_pct:.0f}%" if _buy_ratio_pct else "—"
         _net_debit    = _far_atm_straddle - _3lot_sell_total
         _3lot_ce_total = 3 * _3lot_ce_ltp
@@ -2830,7 +2834,7 @@ with pb3:
     <div style='background:rgba(52,199,89,0.06);border:1px solid rgba(52,199,89,0.25);
                 border-radius:6px;padding:8px 10px;'>
       <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bull);margin-bottom:6px;'>
-        BUY · FAR {far_exp} · 1 LOT EACH · ≥80% of sold
+        BUY · FAR {far_exp} · 1 LOT EACH · 70–90% of sold
       </div>
       <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
         <span style='font-size:11px;'>CALL {_pill_ce(_far_atm_ce_strike)}</span>
