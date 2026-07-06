@@ -2138,13 +2138,16 @@ _diag_best_ce_m   = None
 _diag_best_pe_m   = None
 _diag_best_ce_oi  = None
 _diag_best_pe_oi  = None
+_diag_scan_log    = []   # [(exp, ce_strike, pe_strike, total, in_band, skipped_reason)]
 
-for _cand_exp in far_expiries[:6]:          # try up to 6 far expiries
-    if _week_of(_cand_exp) == _near_week:   # must not be the sold expiry week
+for _cand_exp in far_expiries[:6]:
+    if _week_of(_cand_exp) == _near_week:
+        _diag_scan_log.append((_cand_exp, None, None, None, False, "same week as near"))
         continue
     try:
         _craw, _cerr = fetch_chain(token, _cand_exp)
         if _cerr or not _craw:
+            _diag_scan_log.append((_cand_exp, None, None, None, False, f"chain err: {_cerr}"))
             continue
         _, _, _c_ce, _c_pe, _c_ce_oi, _c_pe_oi, *_ = parse_chain(_craw)
         _cres = _find_far_by_premium(
@@ -2153,11 +2156,14 @@ for _cand_exp in far_expiries[:6]:          # try up to 6 far expiries
         )
         _ctotal = _cres["ce_ltp"] + _cres["pe_ltp"]
         if _ctotal <= 0:
-            continue                          # truly no data for this expiry
-        # Strongly prefer in-band; among in-band pick closest to midpoint
+            _diag_scan_log.append((_cand_exp, None, None, 0, False, "no LTP data"))
+            continue
         _in_band = _far_tgt_lo <= _ctotal <= _far_tgt_hi
         _dist    = abs(_ctotal - _far_tgt_mid) - (1e9 if _in_band else 0)
-        # Out-of-band: prefer less overshoot/undershoot
+        _diag_scan_log.append((
+            _cand_exp, _cres["ce_strike"], _cres["pe_strike"],
+            _ctotal, _in_band, "✓" if _in_band else ("↑" if _ctotal > _far_tgt_hi else "↓")
+        ))
         if _dist < _diag_best_dist:
             _diag_best_dist   = _dist
             _diag_best_exp    = _cand_exp
@@ -2166,7 +2172,8 @@ for _cand_exp in far_expiries[:6]:          # try up to 6 far expiries
             _diag_best_pe_m   = _c_pe
             _diag_best_ce_oi  = _c_ce_oi
             _diag_best_pe_oi  = _c_pe_oi
-    except Exception:
+    except Exception as _e:
+        _diag_scan_log.append((_cand_exp, None, None, None, False, str(_e)[:30]))
         continue
 
 # Use auto-selected expiry; fall back to user-selected far_exp if nothing found
@@ -2947,6 +2954,36 @@ with pb3:
     else:
         _diag_ticket = ""
 
+    # ── Expiry scan log ────────────────────────────────────────────────────────
+    if _diag_scan_log:
+        _scan_rows = ""
+        for _sl in _diag_scan_log:
+            _sl_exp, _sl_ce, _sl_pe, _sl_tot, _sl_inband, _sl_flag = _sl
+            _is_chosen = (_sl_exp == _diag_far_exp)
+            _bg   = "rgba(52,199,89,0.12)"  if _is_chosen else "transparent"
+            _bord = "1px solid rgba(52,199,89,0.4)" if _is_chosen else "1px solid transparent"
+            _flag_col = "var(--bull)" if _sl_inband else ("var(--muted)" if _sl_flag in ("same week as near", "chain err", "no LTP data") else "var(--bear)")
+            if _sl_tot is not None and _sl_tot > 0:
+                _pct = f"{_sl_tot / _3lot_sell_total * 100:.0f}%" if _3lot_sell_total else "—"
+                _strike_txt = f"CE{_sl_ce}/PE{_sl_pe} ₹{_sl_tot:.0f} ({_pct})"
+            else:
+                _strike_txt = str(_sl_flag)
+            _chosen_tag = " ★" if _is_chosen else ""
+            _scan_rows += (
+                f"<div style='display:flex;justify-content:space-between;padding:1px 4px;"
+                f"background:{_bg};border:{_bord};border-radius:3px;'>"
+                f"<span style='color:var(--muted);font-size:8px;'>{_sl_exp}{_chosen_tag}</span>"
+                f"<span style='font-size:8px;color:{_flag_col};font-family:var(--mono);'>{_sl_flag} &nbsp;{_strike_txt}</span>"
+                f"</div>"
+            )
+        _diag_scan_html = (
+            f"<div style='margin-top:6px;border-top:1px solid var(--border);padding-top:5px;'>"
+            f"<div style='font-size:7px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:3px;'>EXPIRY SCAN  ·  target {_far_tgt_lo:.0f}–{_far_tgt_hi:.0f}  (80–140% of ₹{_3lot_sell_total:.0f})</div>"
+            f"{_scan_rows}</div>"
+        )
+    else:
+        _diag_scan_html = ""
+
     st.markdown(
         f"<div class='card' style='border-left:4px solid var(--bear);'>"
         f"<div style='font-size:9px;font-weight:600;letter-spacing:.08em;color:var(--bear);margin-bottom:4px;'>"
@@ -2954,6 +2991,7 @@ with pb3:
         f"</div>"
         + (f"<div style='font-size:10px;color:var(--text);line-height:1.6;'>{_ref_bar}</div>" if _ref_bar else "")
         + _diag_ticket
+        + _diag_scan_html
         + f"</div>",
         unsafe_allow_html=True)
 with pb4:
