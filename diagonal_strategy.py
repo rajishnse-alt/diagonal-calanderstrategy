@@ -2956,7 +2956,17 @@ with pb3:
 
     # ── Expiry scan log ────────────────────────────────────────────────────────
     if _diag_scan_log:
-        _scan_rows = ""
+        # Sold leg row first
+        _near_sell_txt = ""
+        if _3lot_ce_strike and _3lot_pe_strike and _3lot_ce_ltp and _3lot_pe_ltp:
+            _near_sell_txt = f"CE{_3lot_ce_strike}/PE{_3lot_pe_strike} ₹{_3lot_ce_ltp:.0f}+₹{_3lot_pe_ltp:.0f} × 3"
+        _scan_rows = (
+            f"<div style='display:flex;justify-content:space-between;padding:1px 4px;"
+            f"background:rgba(255,59,48,0.10);border:1px solid rgba(255,59,48,0.35);border-radius:3px;margin-bottom:2px;'>"
+            f"<span style='color:var(--bear);font-size:8px;font-weight:700;'>SELL · {near_exp}</span>"
+            f"<span style='font-size:8px;color:var(--bear);font-family:var(--mono);'>{_near_sell_txt}</span>"
+            f"</div>"
+        )
         for _sl in _diag_scan_log:
             _sl_exp, _sl_ce, _sl_pe, _sl_tot, _sl_inband, _sl_flag = _sl
             _is_chosen = (_sl_exp == _diag_far_exp)
@@ -2978,7 +2988,7 @@ with pb3:
             )
         _diag_scan_html = (
             f"<div style='margin-top:6px;border-top:1px solid var(--border);padding-top:5px;'>"
-            f"<div style='font-size:7px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:3px;'>EXPIRY SCAN  ·  target {_far_tgt_lo:.0f}–{_far_tgt_hi:.0f}  (80–140% of ₹{_3lot_sell_total:.0f})</div>"
+            f"<div style='font-size:7px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:3px;'>EXPIRY SCAN · BUY target {_far_tgt_lo:.0f}–{_far_tgt_hi:.0f} (80–140% of sold ₹{_3lot_sell_total:.0f})</div>"
             f"{_scan_rows}</div>"
         )
     else:
