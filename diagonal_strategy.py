@@ -838,39 +838,124 @@ def weeks_out(expiry_str):
         return 0.0
 
 
+@st.cache_data(ttl=86_400, show_spinner=False)
+def _get_nifty_fut_tokens(tok):
+    """
+    Fetch NIFTY futures instrument keys (cached 24 h).
+    Returns {expiry_str: instrument_key} sorted by expiry.
+
+    Strategy (in order):
+    1. Upstox REST /v2/instruments?exchange=NSE_FO  (auth, JSON list)
+    2. CDN JSON gz  (no auth)
+    3. CDN CSV gz   (no auth)
+    """
+    import gzip, io, csv
+
+    def _parse_item(item):
+        """Normalise one instrument record → (expiry, key) or (None, None)."""
+        seg   = str(item.get("segment")           or item.get("exchange")          or "").upper()
+        itype = str(item.get("instrument_type")   or item.get("instrumenttype")    or "").upper()
+        und   = str(item.get("underlying_symbol") or item.get("name")              or "").upper()
+        exp   = str(item.get("expiry")            or item.get("expiry_date")       or "")[:10]
+        ikey  = str(item.get("instrument_key")    or item.get("instrumentKey")     or "")
+        if seg  not in ("NSE_FO", "NFO"):                    return None, None
+        if itype not in ("FUTIDX", "FUT"):                   return None, None
+        if und  not in ("NIFTY", "NIFTY 50", "NIFTY50"):    return None, None
+        if not exp or not ikey:                              return None, None
+        return exp, ikey
+
+    # ── 1. Upstox authenticated REST endpoint ────────────────────────────────
+    try:
+        r = requests.get(
+            "https://api.upstox.com/v2/instruments",
+            params={"exchange": "NSE_FO"},
+            headers=hdr(tok), timeout=20,
+        )
+        if r.status_code == 200:
+            items = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+            tokens = {}
+            for item in items:
+                exp, ikey = _parse_item(item)
+                if exp:
+                    tokens[exp] = ikey
+            if tokens:
+                return tokens, None
+    except Exception:
+        pass
+
+    # ── 2 & 3. CDN fallbacks ─────────────────────────────────────────────────
+    _CDN = [
+        ("json", "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz"),
+        ("json", "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"),
+        ("csv",  "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.csv.gz"),
+        ("csv",  "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz"),
+    ]
+    for fmt, url in _CDN:
+        try:
+            r = requests.get(url, timeout=25, headers={"Accept-Encoding": "identity"})
+            if r.status_code != 200:
+                continue
+            raw = r.content
+            try:
+                raw = gzip.decompress(raw)
+            except Exception:
+                pass
+            text = raw.decode("utf-8")
+            items = json.loads(text) if fmt == "json" else None
+            if fmt == "csv":
+                reader = csv.DictReader(io.StringIO(text))
+                items  = list(reader)
+            tokens = {}
+            for item in items:
+                exp, ikey = _parse_item(item)
+                if exp:
+                    tokens[exp] = ikey
+            if tokens:
+                return tokens, None
+        except Exception:
+            continue
+
+    return {}, "All instrument sources failed"
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
     """
-    Fetch NIFTY futures build-up via Upstox market-quote/quotes.
-    Instrument key format: NSE_FO|NIFTY26JULYFUT  (full month name, YY year).
-    Fields: last_price, ohlc.close (prev close), oi, prev_oi  — same as V3 WebSocket feed.
+    Fetch NIFTY futures build-up (Upstox REST).
+    1. Get numeric instrument tokens from CSV (exact keys Upstox REST accepts)
+    2. market-quote/quotes → LTP, ohlc.close, oi, prev_oi
     """
-    _FULL_MONTHS = {
-        1:"JANUARY", 2:"FEBRUARY", 3:"MARCH",    4:"APRIL",
-        5:"MAY",     6:"JUNE",     7:"JULY",      8:"AUGUST",
-        9:"SEPTEMBER",10:"OCTOBER",11:"NOVEMBER",12:"DECEMBER",
-    }
-
     def _classify(price_up, oi_up):
         if price_up and oi_up:     return "Long Build-up"
         if price_up and not oi_up: return "Short Covering"
         if not price_up and oi_up: return "Short Build-up"
         return "Long Unwinding"
 
-    # Build instrument keys  e.g. NSE_FO|NIFTY26JULYFUT
-    fut_keys = {}
-    labels   = {}
-    for i, exp in enumerate(sorted(expiry_dates)[:2]):
-        try:
-            d   = datetime.strptime(exp, "%Y-%m-%d")
-            sym = f"NIFTY{str(d.year)[2:]}{_FULL_MONTHS[d.month]}FUT"
-            fut_keys[exp] = f"NSE_FO|{sym}"
-            labels[exp]   = "CUR MONTH" if i == 0 else "NEXT MONTH"
-        except Exception:
-            pass
+    def _parse(qd, exp, label):
+        ltp        = float(qd.get("last_price") or 0)
+        ohlc       = qd.get("ohlc", {})
+        prev_close = float(ohlc.get("close") or ohlc.get("prev_close") or 0)
+        oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
+        prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
+        if ltp <= 0:
+            return None
+        return {
+            "expiry": exp, "label": label, "ltp": ltp, "prev_close": prev_close,
+            "oi": oi, "prev_oi": prev_oi,
+            "px_chg_pct": ((ltp - prev_close) / prev_close * 100) if prev_close else 0,
+            "oi_chg_pct": ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0,
+            "buildup":    _classify(ltp > prev_close, oi > prev_oi),
+        }
+
+    # Get numeric tokens from CSV
+    all_tokens, csv_err = _get_nifty_fut_tokens(tok)
+    target_exps = sorted(expiry_dates)[:2]
+    labels_map  = {exp: ("CUR MONTH" if i == 0 else "NEXT MONTH")
+                   for i, exp in enumerate(target_exps)}
+    fut_keys = {exp: all_tokens[exp] for exp in target_exps if exp in all_tokens}
 
     if not fut_keys:
-        return None, "Could not build instrument keys"
+        return None, f"No tokens found for {target_exps}. CSV err: {csv_err}"
 
     try:
         keys_param = ",".join(fut_keys.values())
@@ -880,45 +965,18 @@ def fetch_futures_buildup(tok, expiry_dates, underlying_key=None):
             headers=hdr(tok), timeout=12,
         )
         if r.status_code != 200:
-            return None, f"HTTP {r.status_code}"
-
-        data = r.json().get("data", {})
+            return None, f"quotes HTTP {r.status_code}"
+        data  = r.json().get("data", {})
         results = []
-
-        for exp in sorted(fut_keys):
-            ikey   = fut_keys[exp]
-            ikey_c = ikey.replace("|", ":")
-            qd     = data.get(ikey_c) or data.get(ikey) or {}
-            if not qd:
-                continue
-            ltp        = float(qd.get("last_price") or 0)
-            ohlc       = qd.get("ohlc", {})
-            # cp = closing price (prev day close), maps to ltpc.cp in WebSocket
-            prev_close = float(ohlc.get("close") or ohlc.get("prev_close") or 0)
-            # oi / prev_oi map to marketLevel.oi / marketLevel.poi in WebSocket
-            oi         = float(qd.get("oi") or qd.get("open_interest") or 0)
-            prev_oi    = float(qd.get("prev_oi") or qd.get("prev_open_interest") or oi)
-            if ltp <= 0:
-                continue
-            px_chg_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
-            oi_chg_pct = ((oi  - prev_oi)    / prev_oi    * 100) if prev_oi    else 0
-            results.append({
-                "expiry":     exp,
-                "label":      labels[exp],
-                "ltp":        ltp,
-                "prev_close": prev_close,
-                "oi":         oi,
-                "prev_oi":    prev_oi,
-                "px_chg_pct": px_chg_pct,
-                "oi_chg_pct": oi_chg_pct,
-                "buildup":    _classify(ltp > prev_close, oi > prev_oi),
-            })
-
+        for exp in target_exps:
+            ikey = fut_keys.get(exp, "")
+            qd   = data.get(ikey.replace("|", ":")) or data.get(ikey) or {}
+            row  = _parse(qd, exp, labels_map[exp])
+            if row:
+                results.append(row)
         if results:
             return results, None
-        # Debug — show actual response keys
-        sample = list(data.keys())[:4]
-        return None, f"keys tried:{list(fut_keys.values())} got:{sample}"
+        return None, f"Empty quotes for keys:{list(fut_keys.values())[:2]}"
     except Exception as e:
         return None, str(e)
 
