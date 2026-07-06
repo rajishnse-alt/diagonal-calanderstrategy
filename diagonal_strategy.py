@@ -2890,7 +2890,7 @@ with pb3:
     <div style='background:rgba(255,59,48,0.06);border:1px solid rgba(255,59,48,0.25);
                 border-radius:6px;padding:8px 10px;'>
       <div style='font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--bear);margin-bottom:6px;'>
-        SELL · NEAR · 3 LOTS EACH
+        SELL · {near_exp} · 3 LOTS EACH
       </div>
       <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;'>
         <span style='font-size:11px;'>CALL {_pill_ce(_3lot_ce_strike)}</span>
