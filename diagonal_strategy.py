@@ -2672,9 +2672,9 @@ _spot_up        = _spot_chg >  20   # +20pt threshold to filter noise
 _spot_dn        = _spot_chg < -20
 _spot_flat      = not _spot_up and not _spot_dn
 
-# Net OI change across ATM±10 strikes (session-tracked: current - day-start baseline)
-_net_ce_oi_chg  = sum(_intra_ce_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
-_net_pe_oi_chg  = sum(_intra_pe_oi_chg.get(float(atm + i*STEP), 0) for i in range(-10, 11))
+# Net OI change across ATM±4 strikes (session-tracked: current - day-start baseline)
+_net_ce_oi_chg  = sum(_intra_ce_oi_chg.get(float(atm + i*STEP), 0) for i in range(0, 5))
+_net_pe_oi_chg  = sum(_intra_pe_oi_chg.get(float(atm - i*STEP), 0) for i in range(0, 5))
 
 # ATM-specific net OI change
 _atm_ce_oi_chg  = _intra_ce_oi_chg.get(float(atm), 0)
@@ -2847,7 +2847,7 @@ with pb1:
         _atm_pcr_col = "var(--bull)" if _atm_pcr >= 1.1 else ("var(--bear)" if _atm_pcr < 0.9 and _atm_has_oi else "var(--gold)")
         st.markdown(
             f"<div class='card' style='border-left:4px solid {_sent_col};'>"
-            f"<div class='lbl'>PCR OI &nbsp;·&nbsp; ATM±10 strikes</div>"
+            f"<div class='lbl'>PCR OI &nbsp;·&nbsp; ATM±4 strikes</div>"
             f"<div style='display:flex;align-items:baseline;gap:10px;margin:.25rem 0;'>"
             f"<span class='val-big' style='color:{_sent_col};'>{_pcr:.2f}</span>"
             f"<span style='font-family:var(--mono);font-size:11px;font-weight:700;"
@@ -2855,7 +2855,7 @@ with pb1:
             f"</div>"
             f"<div class='lbl'>"
             f"<span style='color:{_pcr_dir_col};font-weight:700;'>{_pcr_chg:.2f}{_pcr_dir_sym}{_pcr:.2f}</span>"
-            f" &nbsp;·&nbsp; CE:ATM+10 | PE:ATM-10<br>"
+            f" &nbsp;·&nbsp; CE:ATM+4 | PE:ATM-4<br>"
             f"CE OI <b>{_tot_ce_oi/1e5:.1f}L</b> "
             f"<span style='font-size:9px;font-weight:700;color:{_ce_signal_col};'>[{_ce_signal_lbl}]</span>"
             f" &nbsp;·&nbsp; PE OI <b>{_tot_pe_oi/1e5:.1f}L</b> "
