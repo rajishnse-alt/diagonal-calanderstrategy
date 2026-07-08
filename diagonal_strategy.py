@@ -764,19 +764,22 @@ def parse_chain(data):
     return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma
 
 
-def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=10):
+def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=4):
     """
-    PCR      = sum(PE OI) / sum(CE OI)  within ATM ± n_strikes.
+    PCR      = sum(PE OI) / sum(CE OI)
+               CE: ATM + 4 OTM above  (ATM, ATM+1, …, ATM+4 steps)
+               PE: ATM + 4 OTM below  (ATM, ATM-1, …, ATM-4 steps)
     PCR_CHG  = sum(PE OI change) / sum(CE OI change)  — shows intraday build-up direction.
     SPCL VAL = (base + (base - sqrt(vix_open))) / 2
                where base = sqrt(ce_atm + pe_atm) * π / 2
     Sentiment uses contrarian scale: high PCR → more puts → bullish contrarian signal.
     """
-    strikes     = [atm + i * STEP for i in range(-n_strikes, n_strikes + 1)]
-    tot_ce      = sum(ce_oi.get(float(s), 0)     for s in strikes)
-    tot_pe      = sum(pe_oi.get(float(s), 0)     for s in strikes)
-    tot_ce_chg  = sum(max(ce_oi_chg.get(float(s), 0), 0) for s in strikes)
-    tot_pe_chg  = sum(max(pe_oi_chg.get(float(s), 0), 0) for s in strikes)
+    ce_strikes  = [atm + i * STEP for i in range(0, n_strikes + 1)]   # ATM + 4 OTM calls
+    pe_strikes  = [atm - i * STEP for i in range(0, n_strikes + 1)]   # ATM + 4 OTM puts
+    tot_ce      = sum(ce_oi.get(float(s), 0)             for s in ce_strikes)
+    tot_pe      = sum(pe_oi.get(float(s), 0)             for s in pe_strikes)
+    tot_ce_chg  = sum(max(ce_oi_chg.get(float(s), 0), 0) for s in ce_strikes)
+    tot_pe_chg  = sum(max(pe_oi_chg.get(float(s), 0), 0) for s in pe_strikes)
 
     pcr     = (tot_pe / tot_ce)         if tot_ce     > 0 else 0.0
     pcr_chg = (tot_pe_chg / tot_ce_chg) if tot_ce_chg > 0 else 0.0
@@ -2569,12 +2572,26 @@ with r1c2:
     _straddle_ltp  = _atm_ce_ltp + _atm_pe_ltp
     _straddle_vwap = (_atm_ce_vwap + _atm_pe_vwap) if (_atm_ce_vwap and _atm_pe_vwap) else None
     if _straddle_vwap:
-        _is_sideways  = _straddle_ltp < _straddle_vwap
-        _regime_label = "SIDEWAYS" if _is_sideways else "TRENDING"
-        _regime_col   = "var(--gold)"  if _is_sideways else "var(--bear)"
-        _regime_bg    = "var(--gold-dim)" if _is_sideways else "var(--bear-dim)"
-        _regime_icon  = "↔" if _is_sideways else "↗"
-
+        _is_sideways = _straddle_ltp < _straddle_vwap
+        if _is_sideways:
+            _regime_label = "SIDEWAYS"
+            _regime_col   = "var(--gold)"
+            _regime_bg    = "var(--gold-dim)"
+            _regime_icon  = "↔"
+        else:
+            # Direction: compare how much each leg has grown above its VWAP
+            _ce_mom = ((_atm_ce_ltp - _atm_ce_vwap) / _atm_ce_vwap * 100) if _atm_ce_vwap else 0
+            _pe_mom = ((_atm_pe_ltp - _atm_pe_vwap) / _atm_pe_vwap * 100) if _atm_pe_vwap else 0
+            if _ce_mom >= _pe_mom:   # CE growing more → market trending UP
+                _regime_label = "TRENDING"
+                _regime_col   = "var(--bull)"
+                _regime_bg    = "rgba(50,215,75,0.12)"
+                _regime_icon  = "↗"
+            else:                    # PE growing more → market trending DOWN
+                _regime_label = "TRENDING"
+                _regime_col   = "var(--bear)"
+                _regime_bg    = "var(--bear-dim)"
+                _regime_icon  = "↘"
     else:
         pass
 
@@ -2898,17 +2915,37 @@ with pb1:
 with pb2:
     # √CE vs √PE signal — sum of 3 strikes each side, then √
     # CE: ATM, ATM+1, ATM+2  |  PE: ATM, ATM-1, ATM-2
+    # Direction: √PE > √CE → BEARISH (puts costlier = bears dominant)
+    #            √CE > √PE → BULLISH (calls costlier = bulls dominant)
+    # Threshold : difference % must exceed VIX daily % move to avoid noise
     _ce_sum = sum(near_ce.get(float(atm + i * STEP), 0) for i in range(3))
     _pe_sum = sum(near_pe.get(float(atm - i * STEP), 0) for i in range(3))
     _sqrt_ce  = math.sqrt(_ce_sum) if _ce_sum > 0 else 0
     _sqrt_pe  = math.sqrt(_pe_sum) if _pe_sum > 0 else 0
-    _sqrt_sig = "BEARISH" if _sqrt_ce > _sqrt_pe else ("BULLISH" if _sqrt_pe > _sqrt_ce else "NEUTRAL")
+
+    # VIX daily % change as noise threshold
+    _vix_day_pct = (
+        abs((_curr_vix - _open_vix) / _open_vix * 100)
+        if (_open_vix and _curr_vix and _open_vix > 0)
+        else 0.0
+    )
+    # % difference between the two √ values
+    _sqrt_base   = min(_sqrt_ce, _sqrt_pe) if min(_sqrt_ce, _sqrt_pe) > 0 else 1
+    _sqrt_diff_pct = abs(_sqrt_pe - _sqrt_ce) / _sqrt_base * 100
+
+    if _sqrt_diff_pct > _vix_day_pct and _sqrt_pe > _sqrt_ce:
+        _sqrt_sig = "BEARISH"
+    elif _sqrt_diff_pct > _vix_day_pct and _sqrt_ce > _sqrt_pe:
+        _sqrt_sig = "BULLISH"
+    else:
+        _sqrt_sig = "NEUTRAL"
+
     _sqrt_arrow = "▼" if _sqrt_sig == "BEARISH" else ("▲" if _sqrt_sig == "BULLISH" else "→")
     _sqrt_col   = "var(--bear)" if _sqrt_sig == "BEARISH" else ("var(--bull)" if _sqrt_sig == "BULLISH" else "var(--muted)")
     _sqrt_expr  = (
-        f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f}" if _sqrt_sig == "BEARISH"
-        else f"√PE {_sqrt_pe:.2f} &gt; √CE {_sqrt_ce:.2f}" if _sqrt_sig == "BULLISH"
-        else f"√CE {_sqrt_ce:.2f} = √PE {_sqrt_pe:.2f}"
+        f"√PE {_sqrt_pe:.2f} &gt; √CE {_sqrt_ce:.2f}" if _sqrt_sig == "BEARISH"
+        else f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f}" if _sqrt_sig == "BULLISH"
+        else f"√PE {_sqrt_pe:.2f} ≈ √CE {_sqrt_ce:.2f} · Δ{_sqrt_diff_pct:.1f}% ≤ VIX·Δ{_vix_day_pct:.1f}%"
     )
 
     if _spcl is not None:
