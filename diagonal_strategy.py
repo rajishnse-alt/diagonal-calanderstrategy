@@ -2915,37 +2915,47 @@ with pb1:
 with pb2:
     # √CE vs √PE signal — sum of 3 strikes each side, then √
     # CE: ATM, ATM+1, ATM+2  |  PE: ATM, ATM-1, ATM-2
-    # Direction: √PE > √CE → BEARISH (puts costlier = bears dominant)
-    #            √CE > √PE → BULLISH (calls costlier = bulls dominant)
-    # Threshold : difference % must exceed VIX daily % move to avoid noise
-    _ce_sum = sum(near_ce.get(float(atm + i * STEP), 0) for i in range(3))
-    _pe_sum = sum(near_pe.get(float(atm - i * STEP), 0) for i in range(3))
+    # Direction: √PE > √CE → BEARISH  |  √CE > √PE → BULLISH
+    # Threshold: VIX per-day expected move = VIX / √252
+    # If diff% >= vix_daily_expected% → EXPLOSIVE move, else NORMAL
+    _ce_sum   = sum(near_ce.get(float(atm + i * STEP), 0) for i in range(3))
+    _pe_sum   = sum(near_pe.get(float(atm - i * STEP), 0) for i in range(3))
     _sqrt_ce  = math.sqrt(_ce_sum) if _ce_sum > 0 else 0
     _sqrt_pe  = math.sqrt(_pe_sum) if _pe_sum > 0 else 0
 
-    # VIX daily % change as noise threshold
-    _vix_day_pct = (
-        abs((_curr_vix - _open_vix) / _open_vix * 100)
-        if (_open_vix and _curr_vix and _open_vix > 0)
-        else 0.0
+    # VIX per-day expected % move  (annualised VIX / √252 trading days)
+    _vix_daily_exp = (
+        (_curr_vix / math.sqrt(252))
+        if (_curr_vix and _curr_vix > 0)
+        else 1.0
     )
-    # % difference between the two √ values
-    _sqrt_base   = min(_sqrt_ce, _sqrt_pe) if min(_sqrt_ce, _sqrt_pe) > 0 else 1
+    # % difference between √PE and √CE relative to the smaller value
+    _sqrt_base     = min(_sqrt_ce, _sqrt_pe) if min(_sqrt_ce, _sqrt_pe) > 0 else 1
     _sqrt_diff_pct = abs(_sqrt_pe - _sqrt_ce) / _sqrt_base * 100
 
-    if _sqrt_diff_pct > _vix_day_pct and _sqrt_pe > _sqrt_ce:
+    # Direction
+    if _sqrt_pe > _sqrt_ce:
         _sqrt_sig = "BEARISH"
-    elif _sqrt_diff_pct > _vix_day_pct and _sqrt_ce > _sqrt_pe:
+    elif _sqrt_ce > _sqrt_pe:
         _sqrt_sig = "BULLISH"
     else:
         _sqrt_sig = "NEUTRAL"
 
+    # Explosive vs Normal qualifier
+    _is_explosive  = _sqrt_diff_pct >= _vix_daily_exp
+    _move_tag      = "💥 EXPLOSIVE" if _is_explosive else "NORMAL"
+    _move_tag_col  = ("var(--bear)" if _sqrt_sig == "BEARISH"
+                      else "var(--bull)" if _sqrt_sig == "BULLISH"
+                      else "var(--muted)")
+
     _sqrt_arrow = "▼" if _sqrt_sig == "BEARISH" else ("▲" if _sqrt_sig == "BULLISH" else "→")
     _sqrt_col   = "var(--bear)" if _sqrt_sig == "BEARISH" else ("var(--bull)" if _sqrt_sig == "BULLISH" else "var(--muted)")
     _sqrt_expr  = (
-        f"√PE {_sqrt_pe:.2f} &gt; √CE {_sqrt_ce:.2f}" if _sqrt_sig == "BEARISH"
-        else f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f}" if _sqrt_sig == "BULLISH"
-        else f"√PE {_sqrt_pe:.2f} ≈ √CE {_sqrt_ce:.2f} · Δ{_sqrt_diff_pct:.1f}% ≤ VIX·Δ{_vix_day_pct:.1f}%"
+        f"√PE {_sqrt_pe:.2f} &gt; √CE {_sqrt_ce:.2f} · Δ{_sqrt_diff_pct:.1f}% vs VIX/day {_vix_daily_exp:.1f}%"
+        if _sqrt_sig == "BEARISH"
+        else f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f} · Δ{_sqrt_diff_pct:.1f}% vs VIX/day {_vix_daily_exp:.1f}%"
+        if _sqrt_sig == "BULLISH"
+        else f"√PE {_sqrt_pe:.2f} = √CE {_sqrt_ce:.2f}"
     )
 
     if _spcl is not None:
@@ -2961,7 +2971,8 @@ with pb2:
             f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
             f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_sqrt_col};'>"
             f"{_sqrt_arrow} {_sqrt_sig}</span>"
-            f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:6px;'>{_sqrt_expr}</span>"
+            f"<span style='font-family:var(--mono);font-size:10px;font-weight:700;color:{_move_tag_col};margin-left:6px;'>{_move_tag}</span>"
+            f"<div style='font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;'>{_sqrt_expr}</div>"
             f"</div></div>",
             unsafe_allow_html=True)
     else:
@@ -2976,7 +2987,8 @@ with pb2:
             f"<div style='margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border);'>"
             f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_sqrt_col};'>"
             f"{_sqrt_arrow} {_sqrt_sig}</span>"
-            f"<span style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:6px;'>{_sqrt_expr}</span>"
+            f"<span style='font-family:var(--mono);font-size:10px;font-weight:700;color:{_move_tag_col};margin-left:6px;'>{_move_tag}</span>"
+            f"<div style='font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;'>{_sqrt_expr}</div>"
             f"</div></div>",
             unsafe_allow_html=True)
 with pb3:
