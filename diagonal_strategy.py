@@ -597,7 +597,6 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_ideal_premium(ikey_ce_a, ikey_pe_a, ikey_ce_b, ikey_pe_b,
                         strike_a, strike_b, tok):
     """
@@ -3256,18 +3255,28 @@ _ip_lows       = st.session_state.get("_ip_lows", {})
 # Recompute only if: new day, or no value locked yet
 if st.session_state.get("_ip_date") != _ip_today_key or _ip_val is None:
     try:
-        _ip_strikes = sorted(s for s in set(near_ce) | set(near_pe)
-                             if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
+        # Restrict scan to ATM ± 8 steps to avoid deep-OTM noise
+        _ip_lo = atm - 8 * STEP
+        _ip_hi = atm + 8 * STEP
+        _ip_strikes = sorted(
+            s for s in set(near_ce) | set(near_pe)
+            if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0
+            and _ip_lo <= s <= _ip_hi
+        )
         _ip_cl = None
         _ip_ch = None
         _found = False
         for _s in _ip_strikes:
-            if near_ce.get(_s, 0) > near_pe.get(_s, 0):
-                _ip_cl  = int(_s)
-                _found  = False
-            elif near_pe.get(_s, 0) > near_ce.get(_s, 0) and _ip_cl and not _found:
-                _ip_ch  = int(_s)
-                _found  = True
+            _ce_v = near_ce.get(_s, 0)
+            _pe_v = near_pe.get(_s, 0)
+            if _ce_v > _pe_v:
+                # keep updating — we want the LAST strike where CE > PE
+                _ip_cl = int(_s)
+                _found = False
+            elif _pe_v > _ce_v and _ip_cl and not _found:
+                # first strike above the last CE>PE where PE > CE
+                _ip_ch = int(_s)
+                _found = True
                 break
 
         if _ip_cl and _ip_ch:
