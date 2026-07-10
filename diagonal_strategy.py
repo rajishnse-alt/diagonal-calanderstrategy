@@ -603,19 +603,52 @@ def fetch_ideal_premium(expiry_str, strike_a, strike_b):
     Ideal Premium (IP) — crossover-strike method:
       strike_a = last strike where CE LTP > PE LTP  (e.g. 23950)
       strike_b = first strike where PE LTP > CE LTP (e.g. 24000)
-    Fetch prev-day LOWs for all 4 legs, IP = avg of the 4 lows.
+    Uses a SINGLE NSE session for all 4 calls to avoid rate-limiting.
     Returns (ip, lows_dict) or (None, {}).
     """
-    lows = {}
-    for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
-                          (strike_b, "CE"), (strike_b, "PE")]:
-        h = fetch_nse_fo_hist(expiry_str, strike, otype)
-        if h and h.get("low"):
-            lows[f"{strike}_{otype}"] = h["low"]
-    if len(lows) == 4:
-        ip = sum(lows.values()) / 4
-        return ip, lows
-    return None, lows
+    try:
+        exp_dt     = datetime.strptime(expiry_str, "%Y-%m-%d")
+        expiry_nse = exp_dt.strftime("%d-%b-%Y")
+        prev       = _prev_biz_day()
+        date_str   = prev.strftime("%d-%m-%Y")
+
+        sess = requests.Session()
+        sess.headers.update(_NSE_HEADERS)
+        sess.get("https://www.nseindia.com", timeout=8)
+        sess.get("https://www.nseindia.com/option-chain", timeout=6)
+
+        lows = {}
+        for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
+                               (strike_b, "CE"), (strike_b, "PE")]:
+            try:
+                r = sess.get(
+                    _NSE_FO_HIST,
+                    params={
+                        "from":           date_str,
+                        "to":             date_str,
+                        "instrumentType": "OPTIDX",
+                        "symbol":         "NIFTY",
+                        "expiryDate":     expiry_nse,
+                        "optionType":     otype,
+                        "strikePrice":    str(int(strike)),
+                    },
+                    timeout=15,
+                )
+                rows = r.json().get("data") or []
+                if rows:
+                    row = rows[-1]
+                    l   = float(row.get("FH_TRADE_LOW_PRICE") or 0)
+                    if l > 0:
+                        lows[f"{strike}_{otype}"] = l
+            except Exception:
+                continue
+
+        if len(lows) == 4:
+            return sum(lows.values()) / 4, lows
+        # Partial: return whatever we got with None ip
+        return None, lows
+    except Exception:
+        return None, {}
 
 
 def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
