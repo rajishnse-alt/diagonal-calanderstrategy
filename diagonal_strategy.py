@@ -832,6 +832,44 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
         return None, None, "—", "var(--muted)"
 
 
+def fetch_atm_day_hl(tok, chain_data, atm_strike):
+    """
+    Fetch today's day H/L for ATM CE and PE via Upstox market-quote/quotes.
+    This is the most reliable source — always populated during market hours.
+    Returns (ce_h, ce_l, pe_h, pe_l) — any may be None.
+    """
+    ce_inst = pe_inst = None
+    for row in chain_data:
+        if int(float(row.get("strike_price", 0))) == int(atm_strike):
+            ce_inst = (row.get("call_options") or {}).get("instrument_key")
+            pe_inst = (row.get("put_options")  or {}).get("instrument_key")
+            break
+    if not ce_inst or not pe_inst:
+        return None, None, None, None
+    try:
+        hdrs = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+        resp = requests.get(
+            "https://api.upstox.com/v2/market-quote/quotes",
+            params={"instrument_key": f"{ce_inst},{pe_inst}"},
+            headers=hdrs, timeout=10,
+        )
+        data = resp.json().get("data") or {}
+
+        def _ohlc(inst_key):
+            k = inst_key.replace("|", ":")
+            d = data.get(k) or data.get(inst_key) or {}
+            o = d.get("ohlc") or {}
+            h = float(o.get("high") or 0) or None
+            l = float(o.get("low")  or 0) or None
+            return h, l
+
+        ce_h, ce_l = _ohlc(ce_inst)
+        pe_h, pe_l = _ohlc(pe_inst)
+        return ce_h, ce_l, pe_h, pe_l
+    except Exception:
+        return None, None, None, None
+
+
 def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
     """
     SPP (UIP concept):
@@ -2166,12 +2204,24 @@ _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_c
 # Structure: call_options → market_data → ohlc → high
 _atm_ce_day_high = 0.0
 _atm_pe_day_high = 0.0
+_atm_ce_ohlc_real = False   # True only when chain returned actual ohlc.high (not LTP fallback)
+_atm_pe_ohlc_real = False
 for _row in (near_raw or []):
     if int(float(_row.get("strike_price", 0))) == atm:
         _c_md = ((_row.get("call_options") or {}).get("market_data") or {})
         _p_md = ((_row.get("put_options")  or {}).get("market_data") or {})
-        _atm_ce_day_high = float((_c_md.get("ohlc") or {}).get("high") or _c_md.get("ltp") or 0)
-        _atm_pe_day_high = float((_p_md.get("ohlc") or {}).get("high") or _p_md.get("ltp") or 0)
+        _ce_ohlc_h = float((_c_md.get("ohlc") or {}).get("high") or 0)
+        _pe_ohlc_h = float((_p_md.get("ohlc") or {}).get("high") or 0)
+        if _ce_ohlc_h:
+            _atm_ce_day_high  = _ce_ohlc_h
+            _atm_ce_ohlc_real = True
+        else:
+            _atm_ce_day_high  = float(_c_md.get("ltp") or 0)   # LTP fallback
+        if _pe_ohlc_h:
+            _atm_pe_day_high  = _pe_ohlc_h
+            _atm_pe_ohlc_real = True
+        else:
+            _atm_pe_day_high  = float(_p_md.get("ltp") or 0)   # LTP fallback
         break
 
 # ── SPCL projection constants (mirrors Pine Script defaults) ─────────────────
@@ -2225,6 +2275,17 @@ else:
                 "ce_h":    _atm_ce_candle_h,  "ce_l":    _atm_ce_candle_l,
                 "pe_h":    _atm_pe_candle_h,  "pe_l":    _atm_pe_candle_l,
             }
+
+# ── Day H/L from market-quote/quotes (fallback when candles unavailable) ─────
+# Called on every refresh — lightweight single API call, always reflects
+# current day's actual high/low from the exchange.
+if token and (_atm_ce_candle_h is None or _atm_pe_candle_h is None):
+    _mq_ce_h, _mq_ce_l, _mq_pe_h, _mq_pe_l = \
+        fetch_atm_day_hl(token, near_raw, atm)
+    if _atm_ce_candle_h is None:
+        _atm_ce_candle_h, _atm_ce_candle_l = _mq_ce_h, _mq_ce_l
+    if _atm_pe_candle_h is None:
+        _atm_pe_candle_h, _atm_pe_candle_l = _mq_pe_h, _mq_pe_l
 
 # ── Intraday OI baseline tracking ─────────────────────────────────────────────
 # Upstox chain has no intraday OI change field — we snapshot OI on first load
@@ -3594,16 +3655,16 @@ with pb4:
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # Fallback chain for day high:
-#   1. chain OHLC high (market_data.ohlc.high)
-#   2. candle-computed day high from intraday 1-min data   ← real H
-#   3. LTP from near_ce/near_pe dict (last resort)
-if not _atm_ce_day_high and _atm_ce_candle_h:
+#   1. chain OHLC high  (real, flagged by _atm_ce_ohlc_real)
+#   2. market-quote / candle day high  (_atm_ce_candle_h, populated above)
+#   3. LTP from near_ce dict (last resort — worst case only)
+if not _atm_ce_ohlc_real and _atm_ce_candle_h:
     _atm_ce_day_high = _atm_ce_candle_h
-if not _atm_ce_day_high:
+elif not _atm_ce_ohlc_real and not _atm_ce_candle_h:
     _atm_ce_day_high = float(near_ce.get(float(atm), 0) or near_ce.get(atm, 0))
-if not _atm_pe_day_high and _atm_pe_candle_h:
+if not _atm_pe_ohlc_real and _atm_pe_candle_h:
     _atm_pe_day_high = _atm_pe_candle_h
-if not _atm_pe_day_high:
+elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 # Always recompute here so even a mid-day data gap gets recovered
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
@@ -3703,9 +3764,10 @@ if True:  # always render — individual cells show "—" if data missing
 # Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
 _tk_ce_ltp  = near_ce.get(float(atm), 0)
 _tk_pe_ltp  = near_pe.get(float(atm), 0)
-# Real intraday H/L from 1-min candles (preferred), then chain OHLC, then nothing
-_tk_ce_h = _atm_ce_candle_h or (_atm_ce_day_high if _atm_ce_day_high != _tk_ce_ltp else None)
-_tk_pe_h = _atm_pe_candle_h or (_atm_pe_day_high if _atm_pe_day_high != _tk_pe_ltp else None)
+# Day H/L: market-quote (via _atm_*_candle_h/l) → chain OHLC real → nothing
+# _atm_*_candle_h is now populated from market-quote/quotes when candles unavailable
+_tk_ce_h = _atm_ce_candle_h or (_atm_ce_day_high if _atm_ce_ohlc_real else None)
+_tk_pe_h = _atm_pe_candle_h or (_atm_pe_day_high if _atm_pe_ohlc_real else None)
 _tk_ce_l = _atm_ce_candle_l or near_ce_low.get(float(atm), 0) or None
 _tk_pe_l = _atm_pe_candle_l or near_pe_low.get(float(atm), 0) or None
 
