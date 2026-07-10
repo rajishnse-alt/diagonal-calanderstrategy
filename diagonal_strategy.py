@@ -3650,7 +3650,7 @@ st.markdown(
     # Row 10 — PCR Sentiment (TSI proxy)
     + _tr("PCR Sentiment", _tk_tsi_lbl, _tk_tsi_col)
     # Rows 11-12 — SPCL block (4-column layout)
-    f"<tr>"
+    + f"<tr>"
     f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;"
     f"border-bottom:1px solid var(--border);white-space:nowrap;'>CeSPCL {_tk_ret}</td>"
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
