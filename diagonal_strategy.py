@@ -3585,6 +3585,49 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>",
             unsafe_allow_html=True)
 
+# ── ATM Toolkit Card (mirrors TradingView table) ─────────────────────────────
+_tk_ce_low = near_ce_low.get(float(atm), 0)
+_tk_pe_low = near_pe_low.get(float(atm), 0)
+
+def _tk_row(label, val, col):
+    return (
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+        f"padding:3px 0;border-bottom:1px solid var(--border);'>"
+        f"<span style='font-size:10px;color:var(--muted);min-width:90px;'>{label}</span>"
+        f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{col};'>{val}</span>"
+        f"</div>"
+    )
+
+st.markdown(
+    f"<div class='card'>"
+    f"<div class='lbl' style='margin-bottom:6px;letter-spacing:1px;'>📊 ATM TOOLKIT · {atm}</div>"
+    f"<div style='display:flex;gap:24px;'>"
+    # CE column
+    f"<div style='flex:1;'>"
+    f"<div style='font-size:9px;color:var(--ce);font-weight:700;letter-spacing:1.5px;margin-bottom:4px;'>CE {atm}</div>"
+    + _tk_row("LTP",  f"₹{_atm_ce_ltp:.2f}",       "var(--ce)")
+    + _tk_row("Day H", f"₹{_atm_ce_day_high:.2f}" if _atm_ce_day_high else "—", "var(--ce)")
+    + _tk_row("Day L", f"₹{_tk_ce_low:.2f}"        if _tk_ce_low       else "—", "var(--ce)")
+    + _tk_row("SPCL",  _fmt_s(_ce_spcl),             "var(--ce)")
+    + _tk_row("→PE L", _fmt_s(_proj_pe_low),          "var(--pe)")
+    + _tk_row("→PE H", _fmt_s(_proj_pe_high),         "var(--pe)")
+    + f"</div>"
+    # divider
+    f"<div style='width:1px;background:var(--border);'></div>"
+    # PE column
+    + f"<div style='flex:1;'>"
+    f"<div style='font-size:9px;color:var(--pe);font-weight:700;letter-spacing:1.5px;margin-bottom:4px;'>PE {atm}</div>"
+    + _tk_row("LTP",  f"₹{_atm_pe_ltp:.2f}",       "var(--pe)")
+    + _tk_row("Day H", f"₹{_atm_pe_day_high:.2f}" if _atm_pe_day_high else "—", "var(--pe)")
+    + _tk_row("Day L", f"₹{_tk_pe_low:.2f}"        if _tk_pe_low       else "—", "var(--pe)")
+    + _tk_row("SPCL",  _fmt_s(_pe_spcl),             "var(--pe)")
+    + _tk_row("→CE L", _fmt_s(_proj_ce_low),          "var(--ce)")
+    + _tk_row("→CE H", _fmt_s(_proj_ce_high),         "var(--ce)")
+    + f"</div>"
+    f"</div>"
+    f"</div>",
+    unsafe_allow_html=True)
+
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
 if _rd_atm_ce_ltp > 0:
     st.markdown("<div class='sec-hdr'>📐 Ratio Diagonal CE &nbsp;·&nbsp; Sell 1 ATM : Buy 2 OTM Far</div>",
