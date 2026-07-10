@@ -2083,6 +2083,35 @@ for _cl_row in near_raw:
 spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma, near_ce_low, near_pe_low = parse_chain(near_raw)
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _            = parse_chain(far_raw)
 
+# ── ATM option day-highs (needed for SPCL projections) ──────────────────────
+_atm_ce_day_high = 0.0
+_atm_pe_day_high = 0.0
+for _row in (near_raw or []):
+    if int(float(_row.get("strike_price", 0))) == atm:
+        _atm_ce_day_high = float((_row.get("call_options") or {}).get("ohlc", {}).get("high") or 0)
+        _atm_pe_day_high = float((_row.get("put_options")  or {}).get("ohlc", {}).get("high") or 0)
+        break
+
+# ── SPCL projection constants (mirrors Pine Script defaults) ─────────────────
+_SPCL_RET_PCT  = 13.06   # CE/PE High retracement % → CeSPCL / PeSPCL
+_SPCL_LOW_PCT  = 19.29   # Cross-leg low % (CE High × % = Proj PE Low, etc.)
+_SPCL_HIGH_PCT = 15.04   # Low → High uplift %
+
+def _calc_spcl(ce_h: float, pe_h: float):
+    """Return (ce_spcl, pe_spcl, proj_pe_low, proj_pe_high, proj_ce_low, proj_ce_high)."""
+    if not ce_h or not pe_h:
+        return None, None, None, None, None, None
+    ce_spcl      = ce_h * (1 - _SPCL_RET_PCT  / 100)
+    pe_spcl      = pe_h * (1 - _SPCL_RET_PCT  / 100)
+    proj_pe_low  = ce_h * _SPCL_LOW_PCT  / 100
+    proj_pe_high = proj_pe_low  * (1 + _SPCL_HIGH_PCT / 100)
+    proj_ce_low  = pe_h * _SPCL_LOW_PCT  / 100
+    proj_ce_high = proj_ce_low  * (1 + _SPCL_HIGH_PCT / 100)
+    return ce_spcl, pe_spcl, proj_pe_low, proj_pe_high, proj_ce_low, proj_ce_high
+
+_ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
+    _calc_spcl(_atm_ce_day_high, _atm_pe_day_high)
+
 # ── ATM CE/PE VWAP — from Upstox v3 intraday 1-min candles ──────────────────
 # Cache key: changes when date, instrument, or ATM strike changes
 # Only cache successful (non-None) results so failures retry on next refresh
@@ -3451,6 +3480,90 @@ with pb4:
             "<div class='card'><div class='lbl'>SPP · UIP Reference</div>"
             "<div class='val-big' style='color:var(--muted);'>N/A</div>"
             "<div class='lbl'>H/L data not yet available</div></div>",
+            unsafe_allow_html=True)
+
+# ── SPCL Projections — 3 columns ─────────────────────────────────────────────
+if _ce_spcl is not None:
+    _spcl_ret_tag  = f"−{_SPCL_RET_PCT:.2f}%"
+    _spcl_low_tag  = f"{_SPCL_LOW_PCT:.2f}%"
+    _spcl_high_tag = f"+{_SPCL_HIGH_PCT:.2f}%"
+
+    _sc1, _sc2, _sc3 = st.columns(3)
+
+    with _sc1:
+        st.markdown(
+            f"<div class='card'>"
+            f"<div class='lbl' style='margin-bottom:6px;'>SPCL &nbsp;·&nbsp; {_spcl_ret_tag} Retracement</div>"
+            # CeSPCL row
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+            f"padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<span style='font-size:10px;color:var(--ce);font-weight:700;letter-spacing:.06em;'>CeSPCL</span>"
+            f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>"
+            f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_ce_day_high:.1f} → </span>"
+            f"<span style='font-weight:700;'>{_ce_spcl:.2f}</span></span>"
+            f"</div>"
+            # PeSPCL row
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;'>"
+            f"<span style='font-size:10px;color:var(--pe);font-weight:700;letter-spacing:.06em;'>PeSPCL</span>"
+            f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>"
+            f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_pe_day_high:.1f} → </span>"
+            f"<span style='font-weight:700;'>{_pe_spcl:.2f}</span></span>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True)
+
+    with _sc2:
+        st.markdown(
+            f"<div class='card'>"
+            f"<div class='lbl' style='margin-bottom:6px;'>Proj Low &nbsp;·&nbsp; {_spcl_low_tag} cross-leg</div>"
+            # →PE Low (from CE High)
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+            f"padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<span style='font-size:10px;color:var(--muted);'>→PE Low</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
+            f"{_proj_pe_low:.2f}</span>"
+            f"</div>"
+            # →CE Low (from PE High)
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;'>"
+            f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
+            f"{_proj_ce_low:.2f}</span>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True)
+
+    with _sc3:
+        # proj_pe_high as % of PE day high; proj_ce_high as % of CE day high
+        _pct_pe_h1 = (_proj_pe_high / _atm_pe_day_high * 100) if _atm_pe_day_high else 0
+        _pct_pe_h2 = 2 * _pct_pe_h1
+        _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if _atm_ce_day_high else 0
+        _pct_ce_h2 = 2 * _pct_ce_h1
+        st.markdown(
+            f"<div class='card'>"
+            f"<div class='lbl' style='margin-bottom:6px;'>Proj High &nbsp;·&nbsp; {_spcl_high_tag} uplift</div>"
+            # →PE High
+            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
+            f"<span style='font-size:10px;color:var(--muted);'>→PE High</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
+            f"{_proj_pe_high:.2f}</span>"
+            f"</div>"
+            f"<div style='text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>"
+            f"{_pct_pe_h1:.2f}% of PE H &nbsp;·&nbsp; {_pct_pe_h2:.2f}%"
+            f"</div>"
+            f"</div>"
+            # →CE High
+            f"<div style='padding:4px 0;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
+            f"<span style='font-size:10px;color:var(--muted);'>→CE High</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
+            f"{_proj_ce_high:.2f}</span>"
+            f"</div>"
+            f"<div style='text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>"
+            f"{_pct_ce_h1:.2f}% of CE H &nbsp;·&nbsp; {_pct_ce_h2:.2f}%"
+            f"</div>"
+            f"</div>"
+            f"</div>",
             unsafe_allow_html=True)
 
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
