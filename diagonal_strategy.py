@@ -2698,7 +2698,9 @@ with r1c2:
         f"<div class='card card-gold'>"
         f"<div class='lbl'>ATM Strike</div>"
         f"<div class='val-big val-gold' style='margin-bottom:6px;'>{atm}</div>"
-        f"<div style='display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;'>"
+        # VIX range info row — ABOVE the CE|badge|PE flex row
+        + (f"<div style='text-align:center;margin-bottom:6px;'>{_vix_range_html}</div>" if _vix_range_html else "")
+        + f"<div style='display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;'>"
         # CE column
         f"<div style='flex:1;'>"
         f"<div style='font-size:10px;color:var(--ce);letter-spacing:1px;font-weight:700;margin-bottom:3px;'>CE</div>"
@@ -2713,8 +2715,7 @@ with r1c2:
             f"<div style='color:{_regime_col};font-size:14px;line-height:1;'>{_regime_icon}</div>"
             f"<div style='color:{_regime_col};font-size:9px;font-weight:700;letter-spacing:1px;'>{_regime_label}</div>"
             f"<div style='color:var(--muted);font-size:8px;margin-top:2px;'>₹{_straddle_ltp:.0f} vs ₹{_straddle_vwap:.0f}</div>"
-            + _vix_range_html
-            + f"</div>"
+            f"</div>"
             if _straddle_vwap else
             f"<div style='min-width:72px;text-align:center;color:var(--muted);font-size:10px;'>—</div>"
         )
