@@ -3585,47 +3585,95 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>",
             unsafe_allow_html=True)
 
-# ── ATM Toolkit Card (mirrors TradingView table) ─────────────────────────────
-_tk_ce_low = near_ce_low.get(float(atm), 0)
-_tk_pe_low = near_pe_low.get(float(atm), 0)
+# ── ATM Toolkit Table (mirrors TradingView Raj_ToolKit table) ────────────────
+_tk_ce_low  = near_ce_low.get(float(atm), 0)
+_tk_pe_low  = near_pe_low.get(float(atm), 0)
+_tk_atm_str = str(atm)
+_tk_f       = lambda v, d=2: f"{v:.{d}f}" if v else "—"
 
-def _tk_row(label, val, col):
+# SPCL tag strings
+_tk_ret  = f"(-{_SPCL_RET_PCT:.2f}%)"
+_tk_low  = f"({_SPCL_LOW_PCT:.2f}%)"
+_tk_high = f"(+{_SPCL_HIGH_PCT:.2f}%)"
+
+# TSI from session state if available (computed by SPCL VAL block)
+_tk_tsi_lbl = _sent_lbl if '_sent_lbl' in dir() else "—"
+_tk_tsi_col = _sent_col if '_sent_col' in dir() else "var(--muted)"
+
+def _tr(metric, value, vcol="var(--fg)", span=3):
+    """Single metric row — value spans remaining columns."""
     return (
-        f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
-        f"padding:3px 0;border-bottom:1px solid var(--border);'>"
-        f"<span style='font-size:10px;color:var(--muted);min-width:90px;'>{label}</span>"
-        f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{col};'>{val}</span>"
-        f"</div>"
+        f"<tr>"
+        f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;"
+        f"border-bottom:1px solid var(--border);white-space:nowrap;'>{metric}</td>"
+        f"<td colspan='{span}' style='font-family:var(--mono);font-size:11px;"
+        f"font-weight:700;color:{vcol};padding:4px 8px;"
+        f"border-bottom:1px solid var(--border);'>{value}</td>"
+        f"</tr>"
     )
 
 st.markdown(
-    f"<div class='card'>"
-    f"<div class='lbl' style='margin-bottom:6px;letter-spacing:1px;'>📊 ATM TOOLKIT · {atm}</div>"
-    f"<div style='display:flex;gap:24px;'>"
-    # CE column
-    f"<div style='flex:1;'>"
-    f"<div style='font-size:9px;color:var(--ce);font-weight:700;letter-spacing:1.5px;margin-bottom:4px;'>CE {atm}</div>"
-    + _tk_row("LTP",  f"₹{_atm_ce_ltp:.2f}",       "var(--ce)")
-    + _tk_row("Day H", f"₹{_atm_ce_day_high:.2f}" if _atm_ce_day_high else "—", "var(--ce)")
-    + _tk_row("Day L", f"₹{_tk_ce_low:.2f}"        if _tk_ce_low       else "—", "var(--ce)")
-    + _tk_row("SPCL",  _fmt_s(_ce_spcl),             "var(--ce)")
-    + _tk_row("→PE L", _fmt_s(_proj_pe_low),          "var(--pe)")
-    + _tk_row("→PE H", _fmt_s(_proj_pe_high),         "var(--pe)")
-    + f"</div>"
-    # divider
-    f"<div style='width:1px;background:var(--border);'></div>"
-    # PE column
-    + f"<div style='flex:1;'>"
-    f"<div style='font-size:9px;color:var(--pe);font-weight:700;letter-spacing:1.5px;margin-bottom:4px;'>PE {atm}</div>"
-    + _tk_row("LTP",  f"₹{_atm_pe_ltp:.2f}",       "var(--pe)")
-    + _tk_row("Day H", f"₹{_atm_pe_day_high:.2f}" if _atm_pe_day_high else "—", "var(--pe)")
-    + _tk_row("Day L", f"₹{_tk_pe_low:.2f}"        if _tk_pe_low       else "—", "var(--pe)")
-    + _tk_row("SPCL",  _fmt_s(_pe_spcl),             "var(--pe)")
-    + _tk_row("→CE L", _fmt_s(_proj_ce_low),          "var(--ce)")
-    + _tk_row("→CE H", _fmt_s(_proj_ce_high),         "var(--ce)")
-    + f"</div>"
-    f"</div>"
-    f"</div>",
+    f"<div class='card' style='padding:0;overflow:hidden;'>"
+    f"<table style='width:100%;border-collapse:collapse;font-size:11px;'>"
+    # Header
+    f"<thead><tr>"
+    f"<th style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
+    f"letter-spacing:1.5px;padding:5px 8px;text-align:left;width:34%;'>METRIC</th>"
+    f"<th style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
+    f"letter-spacing:1.5px;padding:5px 8px;text-align:left;'>VALUE</th>"
+    f"<th style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
+    f"letter-spacing:1.5px;padding:5px 8px;text-align:left;'>PROJ LOW</th>"
+    f"<th style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
+    f"letter-spacing:1.5px;padding:5px 8px;text-align:left;'>PROJ HIGH</th>"
+    f"</tr></thead>"
+    f"<tbody>"
+    # Row 1 — ATM Strike
+    + _tr("ATM Strike", f"{atm}", "var(--gold)")
+    # Row 2 — Spot
+    + _tr("Spot", f"{spot:,.2f}" if spot else "—", "color:rgb(255,165,0)")
+    # Row 3 — Anchor (SPP ATM locked)
+    + _tr("Anchor (SPP ATM)", f"{_spp_atm}" if _spp is not None else "—", "var(--muted)")
+    # Row 4 — CE LTP
+    + _tr(f"{_tk_atm_str} CE LTP", _tk_f(_atm_ce_ltp), "var(--ce)")
+    # Row 5 — CE 5min (VWAP as proxy)
+    + _tr(f"{_tk_atm_str} CE VWAP", _tk_f(_atm_ce_vwap) if _atm_ce_vwap else "—", "var(--ce)")
+    # Row 6 — CE H/L
+    + _tr(f"{_tk_atm_str} CE H/L",
+          f"H:{_tk_f(_atm_ce_day_high)} L:{_tk_f(_tk_ce_low)}", "var(--ce)")
+    # Row 7 — PE LTP
+    + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_atm_pe_ltp), "var(--pe)")
+    # Row 8 — PE 5min (VWAP as proxy)
+    + _tr(f"{_tk_atm_str} PE VWAP", _tk_f(_atm_pe_vwap) if _atm_pe_vwap else "—", "var(--pe)")
+    # Row 9 — PE H/L
+    + _tr(f"{_tk_atm_str} PE H/L",
+          f"H:{_tk_f(_atm_pe_day_high)} L:{_tk_f(_tk_pe_low)}", "var(--pe)")
+    # Row 10 — PCR Sentiment (TSI proxy)
+    + _tr("PCR Sentiment", _tk_tsi_lbl, _tk_tsi_col)
+    # Rows 11-12 — SPCL block (4-column layout)
+    f"<tr>"
+    f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;"
+    f"border-bottom:1px solid var(--border);white-space:nowrap;'>CeSPCL {_tk_ret}</td>"
+    f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
+    f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
+    f"{_tk_f(_atm_ce_day_high)} | {_fmt_s(_ce_spcl)}</td>"
+    f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
+    f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
+    f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
+    f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
+    f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
+    f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}</td>"
+    f"</tr>"
+    f"<tr>"
+    f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
+    f"PeSPCL {_tk_ret}</td>"
+    f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
+    f"padding:4px 8px;'>{_tk_f(_atm_pe_day_high)} | {_fmt_s(_pe_spcl)}</td>"
+    f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
+    f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
+    f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
+    f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}</td>"
+    f"</tr>"
+    f"</tbody></table></div>",
     unsafe_allow_html=True)
 
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
