@@ -3586,8 +3586,26 @@ if True:  # always render — individual cells show "—" if data missing
             unsafe_allow_html=True)
 
 # ── ATM Toolkit Table (mirrors TradingView Raj_ToolKit table) ────────────────
+# Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
+_tk_ce_ltp  = near_ce.get(float(atm), 0)
+_tk_pe_ltp  = near_pe.get(float(atm), 0)
+# OHLC lows from chain (0 when chain doesn't provide them)
 _tk_ce_low  = near_ce_low.get(float(atm), 0)
 _tk_pe_low  = near_pe_low.get(float(atm), 0)
+# Fallback L to SPP prev-day if chain returned no low
+_tk_ce_l    = _tk_ce_low if _tk_ce_low else (_spp_ce_l if _spp is not None else 0)
+_tk_pe_l    = _tk_pe_low if _tk_pe_low else (_spp_pe_l if _spp is not None else 0)
+_tk_l_sfx   = "" if _tk_ce_low else " ᵖ"   # superscript p marks prev-day fallback
+
+# VWAP sanity: reject prev-day candle contamination (expect within 0.15×–5× of LTP)
+def _sane_vwap(vwap, ltp):
+    if not vwap or not ltp:
+        return None
+    return vwap if 0.15 * ltp < vwap < 5.0 * ltp else None
+
+_tk_ce_vwap = _sane_vwap(_atm_ce_vwap, _tk_ce_ltp)
+_tk_pe_vwap = _sane_vwap(_atm_pe_vwap, _tk_pe_ltp)
+
 _tk_atm_str = str(atm)
 _tk_f       = lambda v, d=2: f"{v:.{d}f}" if v else "—"
 
@@ -3634,19 +3652,19 @@ st.markdown(
     # Row 3 — Anchor (SPP ATM locked)
     + _tr("Anchor (SPP ATM)", f"{_spp_atm}" if _spp is not None else "—", "var(--muted)")
     # Row 4 — CE LTP
-    + _tr(f"{_tk_atm_str} CE LTP", _tk_f(_atm_ce_ltp), "var(--ce)")
-    # Row 5 — CE 5min (VWAP as proxy)
-    + _tr(f"{_tk_atm_str} CE VWAP", _tk_f(_atm_ce_vwap) if _atm_ce_vwap else "—", "var(--ce)")
-    # Row 6 — CE H/L
+    + _tr(f"{_tk_atm_str} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
+    # Row 5 — CE VWAP (sanity-filtered; "—" if prev-day contamination detected)
+    + _tr(f"{_tk_atm_str} CE VWAP", _tk_f(_tk_ce_vwap) if _tk_ce_vwap else "—", "var(--ce)")
+    # Row 6 — CE H/L (L falls back to SPP prev-day marked with ᵖ)
     + _tr(f"{_tk_atm_str} CE H/L",
-          f"H:{_tk_f(_atm_ce_day_high)} L:{_tk_f(_tk_ce_low)}", "var(--ce)")
+          f"H:{_tk_f(_atm_ce_day_high)} L:{_tk_f(_tk_ce_l)}{_tk_l_sfx}", "var(--ce)")
     # Row 7 — PE LTP
-    + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_atm_pe_ltp), "var(--pe)")
-    # Row 8 — PE 5min (VWAP as proxy)
-    + _tr(f"{_tk_atm_str} PE VWAP", _tk_f(_atm_pe_vwap) if _atm_pe_vwap else "—", "var(--pe)")
+    + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
+    # Row 8 — PE VWAP (sanity-filtered)
+    + _tr(f"{_tk_atm_str} PE VWAP", _tk_f(_tk_pe_vwap) if _tk_pe_vwap else "—", "var(--pe)")
     # Row 9 — PE H/L
     + _tr(f"{_tk_atm_str} PE H/L",
-          f"H:{_tk_f(_atm_pe_day_high)} L:{_tk_f(_tk_pe_low)}", "var(--pe)")
+          f"H:{_tk_f(_atm_pe_day_high)} L:{_tk_f(_tk_pe_l)}{_tk_l_sfx}", "var(--pe)")
     # Row 10 — PCR Sentiment (TSI proxy)
     + _tr("PCR Sentiment", _tk_tsi_lbl, _tk_tsi_col)
     # Rows 11-12 — SPCL block (4-column layout)
