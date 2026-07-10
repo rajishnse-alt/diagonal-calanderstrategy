@@ -611,6 +611,27 @@ def fetch_ideal_premium(ikey_ce_a, ikey_pe_a, ikey_ce_b, ikey_pe_b,
     today_str = str(today_dt)
     from_str  = str(today_dt - timedelta(days=7))
 
+    def _prev_candle(candles):
+        """
+        Return yesterday's candle from a newest-first list.
+        Checks if candles[0] is today; if so, yesterday is candles[1].
+        If candles[0] is already yesterday (pre-market / option not yet traded today),
+        use candles[0].
+        """
+        if not candles:
+            return None
+        try:
+            # Upstox timestamp: "2026-07-09T00:00:00+0530" — parse date only
+            c0_date = str(candles[0][0])[:10]
+            if c0_date == today_str:
+                # today's candle is present → yesterday is index 1
+                return candles[1] if len(candles) >= 2 else None
+            else:
+                # no today candle yet → index 0 is yesterday
+                return candles[0]
+        except Exception:
+            return candles[1] if len(candles) >= 2 else candles[0]
+
     lows = {}
     for leg_name, ikey in [
         (f"{strike_a}_CE", ikey_ce_a),
@@ -621,8 +642,7 @@ def fetch_ideal_premium(ikey_ce_a, ikey_pe_a, ikey_ce_b, ikey_pe_b,
         if not ikey:
             continue
         candles = _fetch_candles(ikey, today_str, from_str, tok)
-        # newest-first; index 1 = yesterday when today's candle is present
-        yest = candles[1] if len(candles) >= 2 else (candles[0] if candles else None)
+        yest = _prev_candle(candles)
         if yest:
             low = float(yest[3])   # [ts, open, high, LOW, close, vol, oi]
             if low > 0:
