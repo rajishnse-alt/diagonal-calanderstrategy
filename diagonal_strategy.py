@@ -2634,6 +2634,28 @@ with r1c2:
         if not vwap or not ltp: return ""
         return "<span style='color:var(--bull);'>▲</span>" if ltp > vwap else "<span style='color:var(--bear);'>▼</span>"
 
+    # VIX daily expected move in ₹ points  =  Spot × (VIX% / √252)
+    _vix_daily_pts = (
+        spot * (_curr_vix / 100.0) / math.sqrt(252)
+        if (spot and _curr_vix and _curr_vix > 0) else None
+    )
+    if _vix_daily_pts:
+        _straddle_now = near_ce.get(float(atm), 0) + near_pe.get(float(atm), 0)
+        if _straddle_now <= _vix_daily_pts * 1.1:
+            _vix_range_lbl = "✓ IN RANGE"
+            _vix_range_col = "var(--bull)"
+        else:
+            _vix_range_lbl = "↑ ELEVATED"
+            _vix_range_col = "var(--bear)"
+        _vix_range_html = (
+            f"<div style='margin-top:3px;padding-top:3px;border-top:1px solid rgba(128,128,128,0.25);'>"
+            f"<span style='font-size:7px;font-weight:700;color:{_vix_range_col};'>{_vix_range_lbl}</span>"
+            f"<div style='font-size:7px;color:var(--muted);'>VIX/day ₹{_vix_daily_pts:.0f}</div>"
+            f"</div>"
+        )
+    else:
+        _vix_range_html = ""
+
     # Straddle sum vs VWAP sum → market regime
     _straddle_ltp  = _atm_ce_ltp + _atm_pe_ltp
     _straddle_vwap = (_atm_ce_vwap + _atm_pe_vwap) if (_atm_ce_vwap and _atm_pe_vwap) else None
@@ -2676,13 +2698,14 @@ with r1c2:
         # Centre regime badge
         + (
             f"<div style='text-align:center;padding:4px 6px;border-radius:6px;"
-            f"background:{_regime_bg};border:1px solid {_regime_col};min-width:64px;'>"
+            f"background:{_regime_bg};border:1px solid {_regime_col};min-width:72px;'>"
             f"<div style='color:{_regime_col};font-size:14px;line-height:1;'>{_regime_icon}</div>"
             f"<div style='color:{_regime_col};font-size:9px;font-weight:700;letter-spacing:1px;'>{_regime_label}</div>"
             f"<div style='color:var(--muted);font-size:8px;margin-top:2px;'>₹{_straddle_ltp:.0f} vs ₹{_straddle_vwap:.0f}</div>"
-            f"</div>"
+            + _vix_range_html
+            + f"</div>"
             if _straddle_vwap else
-            f"<div style='min-width:64px;text-align:center;color:var(--muted);font-size:10px;'>—</div>"
+            f"<div style='min-width:72px;text-align:center;color:var(--muted);font-size:10px;'>—</div>"
         )
         # PE column
         + f"<div style='flex:1;text-align:right;'>"
