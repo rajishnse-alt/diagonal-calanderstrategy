@@ -598,57 +598,39 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_ideal_premium(expiry_str, strike_a, strike_b):
+def fetch_ideal_premium(ikey_ce_a, ikey_pe_a, ikey_ce_b, ikey_pe_b,
+                        strike_a, strike_b, tok):
     """
-    Ideal Premium (IP) — crossover-strike method:
-      strike_a = last strike where CE LTP > PE LTP  (e.g. 23950)
-      strike_b = first strike where PE LTP > CE LTP (e.g. 24000)
-    Uses a SINGLE NSE session for all 4 calls to avoid rate-limiting.
-    Returns (ip, lows_dict) or (None, {}).
+    Ideal Premium (IP) — crossover-strike method using Upstox historical candles.
+    Fetches YESTERDAY's low for each of the 4 legs:
+      strike_a CE low + strike_a PE low + strike_b CE low + strike_b PE low
+    IP = average of 4 lows.
+    Candle format (newest-first): [ts, open, high, low, close, volume, oi]
     """
-    try:
-        exp_dt     = datetime.strptime(expiry_str, "%Y-%m-%d")
-        expiry_nse = exp_dt.strftime("%d-%b-%Y")
-        prev       = _prev_biz_day()
-        date_str   = prev.strftime("%d-%m-%Y")
+    today_dt  = datetime.now(IST).date()
+    today_str = str(today_dt)
+    from_str  = str(today_dt - timedelta(days=7))
 
-        sess = requests.Session()
-        sess.headers.update(_NSE_HEADERS)
-        sess.get("https://www.nseindia.com", timeout=8)
-        sess.get("https://www.nseindia.com/option-chain", timeout=6)
+    lows = {}
+    for leg_name, ikey in [
+        (f"{strike_a}_CE", ikey_ce_a),
+        (f"{strike_a}_PE", ikey_pe_a),
+        (f"{strike_b}_CE", ikey_ce_b),
+        (f"{strike_b}_PE", ikey_pe_b),
+    ]:
+        if not ikey:
+            continue
+        candles = _fetch_candles(ikey, today_str, from_str, tok)
+        # newest-first; index 1 = yesterday when today's candle is present
+        yest = candles[1] if len(candles) >= 2 else (candles[0] if candles else None)
+        if yest:
+            low = float(yest[3])   # [ts, open, high, LOW, close, vol, oi]
+            if low > 0:
+                lows[leg_name] = low
 
-        lows = {}
-        for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
-                               (strike_b, "CE"), (strike_b, "PE")]:
-            try:
-                r = sess.get(
-                    _NSE_FO_HIST,
-                    params={
-                        "from":           date_str,
-                        "to":             date_str,
-                        "instrumentType": "OPTIDX",
-                        "symbol":         "NIFTY",
-                        "expiryDate":     expiry_nse,
-                        "optionType":     otype,
-                        "strikePrice":    str(int(strike)),
-                    },
-                    timeout=15,
-                )
-                rows = r.json().get("data") or []
-                if rows:
-                    row = rows[-1]
-                    l   = float(row.get("FH_TRADE_LOW_PRICE") or 0)
-                    if l > 0:
-                        lows[f"{strike}_{otype}"] = l
-            except Exception:
-                continue
-
-        if len(lows) == 4:
-            return sum(lows.values()) / 4, lows
-        # Partial: return whatever we got with None ip
-        return None, lows
-    except Exception:
-        return None, {}
+    if len(lows) == 4:
+        return sum(lows.values()) / 4, lows
+    return None, lows
 
 
 def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
@@ -3235,8 +3217,8 @@ with pb3:
         + f"</div>",
         unsafe_allow_html=True)
 # ── Ideal Premium crossover calculation ───────────────────────────────────────
-# Find last strike where CE LTP > PE LTP, and first where PE LTP > CE LTP.
-# Lows come directly from today's Upstox chain OHLC — no extra API calls.
+# Find last strike where CE LTP > PE LTP (cross_low) and first where PE > CE (cross_high).
+# Fetch YESTERDAY's low for each leg via Upstox historical candle.
 _ip_cross_low  = None
 _ip_cross_high = None
 _ip_val        = None
@@ -3255,24 +3237,22 @@ try:
             break
 
     if _ip_cross_low and _ip_cross_high:
-        _k_a  = float(_ip_cross_low)
-        _k_b  = float(_ip_cross_high)
-        _la_ce = near_ce_low.get(_k_a, 0)
-        _la_pe = near_pe_low.get(_k_a, 0)
-        _lb_ce = near_ce_low.get(_k_b, 0)
-        _lb_pe = near_pe_low.get(_k_b, 0)
-        _ip_lows = {
-            str(_ip_cross_low)  + "_CE": _la_ce,
-            str(_ip_cross_low)  + "_PE": _la_pe,
-            str(_ip_cross_high) + "_CE": _lb_ce,
-            str(_ip_cross_high) + "_PE": _lb_pe,
-        }
-        _ip_all = [v for v in [_la_ce, _la_pe, _lb_ce, _lb_pe] if v > 0]
-        if len(_ip_all) == 4:
-            _ip_val = sum(_ip_all) / 4
-        elif _ip_all:
-            # fallback: average whatever lows we have (OHLC may not be set pre-open)
-            _ip_val = sum(_ip_all) / len(_ip_all)
+        # Pull instrument keys from near_raw for the 4 legs
+        _ip_ikeys = {}
+        for _row in (near_raw or []):
+            _rs = int(float(_row.get("strike_price", 0)))
+            if _rs == _ip_cross_low:
+                _ip_ikeys["ce_a"] = (_row.get("call_options") or {}).get("instrument_key")
+                _ip_ikeys["pe_a"] = (_row.get("put_options")  or {}).get("instrument_key")
+            elif _rs == _ip_cross_high:
+                _ip_ikeys["ce_b"] = (_row.get("call_options") or {}).get("instrument_key")
+                _ip_ikeys["pe_b"] = (_row.get("put_options")  or {}).get("instrument_key")
+
+        _ip_val, _ip_lows = fetch_ideal_premium(
+            _ip_ikeys.get("ce_a"), _ip_ikeys.get("pe_a"),
+            _ip_ikeys.get("ce_b"), _ip_ikeys.get("pe_b"),
+            _ip_cross_low, _ip_cross_high, token,
+        )
 except Exception:
     pass
 
