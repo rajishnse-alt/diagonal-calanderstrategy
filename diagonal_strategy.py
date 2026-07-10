@@ -3290,29 +3290,44 @@ _ip_lows       = st.session_state.get("_ip_lows", {})
 # Recompute only if: new day, or no value locked yet
 if st.session_state.get("_ip_date") != _ip_today_key or _ip_val is None:
     try:
-        # Restrict scan to ATM ± 8 steps to avoid deep-OTM noise
-        _ip_lo = atm - 8 * STEP
-        _ip_hi = atm + 8 * STEP
-        _ip_strikes = sorted(
-            s for s in set(near_ce) | set(near_pe)
-            if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0
-            and _ip_lo <= s <= _ip_hi
-        )
-        _ip_cl = None
-        _ip_ch = None
-        _found = False
-        for _s in _ip_strikes:
-            _ce_v = near_ce.get(_s, 0)
-            _pe_v = near_pe.get(_s, 0)
-            if _ce_v > _pe_v:
-                # keep updating — we want the LAST strike where CE > PE
-                _ip_cl = int(_s)
-                _found = False
-            elif _pe_v > _ce_v and _ip_cl and not _found:
-                # first strike above the last CE>PE where PE > CE
-                _ip_ch = int(_s)
-                _found = True
-                break
+        _is_new_day = st.session_state.get("_ip_date") != _ip_today_key
+        _strikes_locked = bool(_ip_cross_low and _ip_cross_high and not _is_new_day)
+
+        if _strikes_locked:
+            # Strikes already locked for today — use them, just retry the historical fetch
+            _ip_cl = _ip_cross_low
+            _ip_ch = _ip_cross_high
+        else:
+            # New day or first run — scan chain for crossover strikes ONCE and lock them
+            _ip_lo = atm - 8 * STEP
+            _ip_hi = atm + 8 * STEP
+            _ip_strikes = sorted(
+                s for s in set(near_ce) | set(near_pe)
+                if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0
+                and _ip_lo <= s <= _ip_hi
+            )
+            _ip_cl = None
+            _ip_ch = None
+            _found = False
+            for _s in _ip_strikes:
+                _ce_v = near_ce.get(_s, 0)
+                _pe_v = near_pe.get(_s, 0)
+                if _ce_v > _pe_v:
+                    # keep updating — we want the LAST strike where CE > PE
+                    _ip_cl = int(_s)
+                    _found = False
+                elif _pe_v > _ce_v and _ip_cl and not _found:
+                    # first strike above the last CE>PE where PE > CE
+                    _ip_ch = int(_s)
+                    _found = True
+                    break
+
+            if _ip_cl and _ip_ch:
+                # Lock crossover strikes immediately — prevent them from drifting on next refresh
+                st.session_state["_ip_cross_low"]  = _ip_cl
+                st.session_state["_ip_cross_high"] = _ip_ch
+                _ip_cross_low  = _ip_cl
+                _ip_cross_high = _ip_ch
 
         if _ip_cl and _ip_ch:
             _ip_ikeys = {}
@@ -3331,20 +3346,12 @@ if st.session_state.get("_ip_date") != _ip_today_key or _ip_val is None:
                 _ip_cl, _ip_ch, token,
             )
             if _ip_v is not None:
-                # Lock for the day
-                st.session_state["_ip_date"]       = _ip_today_key
-                st.session_state["_ip_cross_low"]  = _ip_cl
-                st.session_state["_ip_cross_high"] = _ip_ch
-                st.session_state["_ip_val"]        = _ip_v
-                st.session_state["_ip_lows"]       = _ip_l
-                _ip_cross_low  = _ip_cl
-                _ip_cross_high = _ip_ch
-                _ip_val        = _ip_v
-                _ip_lows       = _ip_l
-            elif _ip_cl:
-                # Strikes found but lows not yet available — store strikes so we retry
-                _ip_cross_low  = _ip_cl
-                _ip_cross_high = _ip_ch
+                # Lock value for the day
+                st.session_state["_ip_date"]  = _ip_today_key
+                st.session_state["_ip_val"]   = _ip_v
+                st.session_state["_ip_lows"]  = _ip_l
+                _ip_val  = _ip_v
+                _ip_lows = _ip_l
     except Exception:
         pass
 
