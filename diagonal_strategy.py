@@ -2084,12 +2084,15 @@ spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_
 _,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _            = parse_chain(far_raw)
 
 # ── ATM option day-highs (needed for SPCL projections) ──────────────────────
+# Structure: call_options → market_data → ohlc → high
 _atm_ce_day_high = 0.0
 _atm_pe_day_high = 0.0
 for _row in (near_raw or []):
     if int(float(_row.get("strike_price", 0))) == atm:
-        _atm_ce_day_high = float((_row.get("call_options") or {}).get("ohlc", {}).get("high") or 0)
-        _atm_pe_day_high = float((_row.get("put_options")  or {}).get("ohlc", {}).get("high") or 0)
+        _c_md = ((_row.get("call_options") or {}).get("market_data") or {})
+        _p_md = ((_row.get("put_options")  or {}).get("market_data") or {})
+        _atm_ce_day_high = float((_c_md.get("ohlc") or {}).get("high") or _c_md.get("ltp") or 0)
+        _atm_pe_day_high = float((_p_md.get("ohlc") or {}).get("high") or _p_md.get("ltp") or 0)
         break
 
 # ── SPCL projection constants (mirrors Pine Script defaults) ─────────────────
@@ -3483,7 +3486,23 @@ with pb4:
             unsafe_allow_html=True)
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
-if _ce_spcl is not None:
+# Final fallback chain: OHLC high → LTP from market_data → LTP from near_ce dict
+if not _atm_ce_day_high:
+    _atm_ce_day_high = float(near_ce.get(float(atm), 0) or near_ce.get(atm, 0))
+if not _atm_pe_day_high:
+    _atm_pe_day_high = float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
+# Always recompute here so even a mid-day data gap gets recovered
+_ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
+    _calc_spcl(_atm_ce_day_high, _atm_pe_day_high)
+
+_spcl_ret_tag  = f"−{_SPCL_RET_PCT:.2f}%"
+_spcl_low_tag  = f"{_SPCL_LOW_PCT:.2f}%"
+_spcl_high_tag = f"+{_SPCL_HIGH_PCT:.2f}%"
+_fmt_s = lambda v: f"{v:.2f}" if v is not None else "—"
+
+_sc1, _sc2, _sc3 = st.columns(3)
+
+if True:  # always render — individual cells show "—" if data missing
     _spcl_ret_tag  = f"−{_SPCL_RET_PCT:.2f}%"
     _spcl_low_tag  = f"{_SPCL_LOW_PCT:.2f}%"
     _spcl_high_tag = f"+{_SPCL_HIGH_PCT:.2f}%"
@@ -3500,14 +3519,14 @@ if _ce_spcl is not None:
             f"<span style='font-size:10px;color:var(--ce);font-weight:700;letter-spacing:.06em;'>CeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>"
             f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_ce_day_high:.1f} → </span>"
-            f"<span style='font-weight:700;'>{_ce_spcl:.2f}</span></span>"
+            f"<span style='font-weight:700;'>{_fmt_s(_ce_spcl)}</span></span>"
             f"</div>"
             # PeSPCL row
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;'>"
             f"<span style='font-size:10px;color:var(--pe);font-weight:700;letter-spacing:.06em;'>PeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>"
             f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_pe_day_high:.1f} → </span>"
-            f"<span style='font-weight:700;'>{_pe_spcl:.2f}</span></span>"
+            f"<span style='font-weight:700;'>{_fmt_s(_pe_spcl)}</span></span>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
@@ -3521,22 +3540,22 @@ if _ce_spcl is not None:
             f"padding:4px 0;border-bottom:1px solid var(--border);'>"
             f"<span style='font-size:10px;color:var(--muted);'>→PE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
-            f"{_proj_pe_low:.2f}</span>"
+            f"{_fmt_s(_proj_pe_low)}</span>"
             f"</div>"
             # →CE Low (from PE High)
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
-            f"{_proj_ce_low:.2f}</span>"
+            f"{_fmt_s(_proj_ce_low)}</span>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
     with _sc3:
         # proj_pe_high as % of PE day high; proj_ce_high as % of CE day high
-        _pct_pe_h1 = (_proj_pe_high / _atm_pe_day_high * 100) if _atm_pe_day_high else 0
+        _pct_pe_h1 = (_proj_pe_high / _atm_pe_day_high * 100) if (_proj_pe_high and _atm_pe_day_high) else 0
         _pct_pe_h2 = 2 * _pct_pe_h1
-        _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if _atm_ce_day_high else 0
+        _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if (_proj_ce_high and _atm_ce_day_high) else 0
         _pct_ce_h2 = 2 * _pct_ce_h1
         st.markdown(
             f"<div class='card'>"
@@ -3546,22 +3565,22 @@ if _ce_spcl is not None:
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→PE High</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
-            f"{_proj_pe_high:.2f}</span>"
+            f"{_fmt_s(_proj_pe_high)}</span>"
             f"</div>"
             f"<div style='text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>"
-            f"{_pct_pe_h1:.2f}% of PE H &nbsp;·&nbsp; {_pct_pe_h2:.2f}%"
-            f"</div>"
+            + (f"{_pct_pe_h1:.2f}% of PE H &nbsp;·&nbsp; {_pct_pe_h2:.2f}%" if _pct_pe_h1 else "—")
+            + f"</div>"
             f"</div>"
             # →CE High
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE High</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
-            f"{_proj_ce_high:.2f}</span>"
+            f"{_fmt_s(_proj_ce_high)}</span>"
             f"</div>"
             f"<div style='text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>"
-            f"{_pct_ce_h1:.2f}% of CE H &nbsp;·&nbsp; {_pct_ce_h2:.2f}%"
-            f"</div>"
+            + (f"{_pct_ce_h1:.2f}% of CE H &nbsp;·&nbsp; {_pct_ce_h2:.2f}%" if _pct_ce_h1 else "—")
+            + f"</div>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
