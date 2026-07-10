@@ -693,10 +693,12 @@ def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
 def fetch_atm_vwap(tok, chain_data, atm_strike):
     """
     Compute VWAP = Σ((H+L+C)/3 × Vol) / Σ(Vol) for ATM CE and PE.
+    Also returns intraday day high and day low from the same candles.
     1. Tries Upstox v3 intraday 1-min API (current session).
     2. If empty (market closed / weekend), falls back to v2 historical
-       1-minute candles for the previous business day.
-    Returns (ce_vwap, pe_vwap, ce_vol, pe_vol) — any may be None.
+       1-minute candles for the previous business day (VWAP only; H/L stays None).
+    Returns (ce_vwap, pe_vwap, ce_vol, pe_vol, ce_h, ce_l, pe_h, pe_l).
+    H/L are None when intraday candles unavailable (no prev-day fallback for H/L).
     """
     ce_inst = pe_inst = None
     for row in chain_data:
@@ -707,23 +709,30 @@ def fetch_atm_vwap(tok, chain_data, atm_strike):
 
     _hdrs = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
 
-    def _compute_vwap(candles):
+    def _compute_vwap_hl(candles):
+        """Returns (vwap, vol, day_high, day_low) from 1-min candles."""
         cum_tp_vol = cum_vol = 0.0
+        day_h = day_l = None
         for c in candles:
             try:
                 h, l, cl, vol = float(c[2]), float(c[3]), float(c[4]), float(c[5])
                 if vol > 0:
                     cum_tp_vol += ((h + l + cl) / 3) * vol
                     cum_vol    += vol
+                # H/L from ALL candles (even zero-vol ticks)
+                day_h = h if day_h is None else max(day_h, h)
+                day_l = l if day_l is None else min(day_l, l)
             except Exception:
                 pass
-        return (cum_tp_vol / cum_vol, cum_vol) if cum_vol > 0 else (None, None)
+        vwap = (cum_tp_vol / cum_vol) if cum_vol > 0 else None
+        return vwap, (cum_vol if cum_vol > 0 else None), day_h, day_l
 
-    def _vwap_for(inst_key):
+    def _fetch_for(inst_key):
+        """Returns (vwap, vol, day_h, day_l, is_intraday)."""
         if not inst_key:
-            return None, None
+            return None, None, None, None, False
         enc = urllib.parse.quote(inst_key, safe="")
-        # 1. Intraday v3 (today's session)
+        # 1. Intraday v3 (today's session) — H/L valid
         try:
             r = requests.get(
                 f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
@@ -731,10 +740,11 @@ def fetch_atm_vwap(tok, chain_data, atm_strike):
             )
             candles = (r.json().get("data") or {}).get("candles") or []
             if candles:
-                return _compute_vwap(candles)
+                vwap, vol, h, l = _compute_vwap_hl(candles)
+                return vwap, vol, h, l, True
         except Exception:
             pass
-        # 2. Historical v2 fallback — previous business day 1-min candles
+        # 2. Historical v2 fallback — prev-day candles for VWAP only (H/L not today's)
         try:
             prev_day = _prev_biz_day().strftime("%Y-%m-%d")
             r = requests.get(
@@ -743,14 +753,83 @@ def fetch_atm_vwap(tok, chain_data, atm_strike):
             )
             candles = (r.json().get("data") or {}).get("candles") or []
             if candles:
-                return _compute_vwap(candles)
+                vwap, vol, _, _ = _compute_vwap_hl(candles)
+                return vwap, vol, None, None, False  # H/L=None: prev-day data, not today
         except Exception:
             pass
-        return None, None
+        return None, None, None, None, False
 
-    ce_vwap, ce_vol = _vwap_for(ce_inst)
-    pe_vwap, pe_vol = _vwap_for(pe_inst)
-    return ce_vwap, pe_vwap, ce_vol, pe_vol
+    ce_vwap, ce_vol, ce_h, ce_l, _ = _fetch_for(ce_inst)
+    pe_vwap, pe_vol, pe_h, pe_l, _ = _fetch_for(pe_inst)
+    return ce_vwap, pe_vwap, ce_vol, pe_vol, ce_h, ce_l, pe_h, pe_l
+
+
+def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
+    """
+    True Strength Index on the spot index (daily closes).
+    TSI = 100 × EMA(EMA(Δclose, r), s) / EMA(EMA(|Δclose|, r), s)
+    Signal = EMA(TSI, s)
+    Returns (tsi, signal, label, color) where:
+      label  = "STRENGTHENING" | "WEAKENING" | "NEUTRAL"
+      color  = CSS variable string
+    Returns (None, None, "—", "var(--muted)") on failure.
+    """
+    try:
+        enc      = urllib.parse.quote(inst_key, safe="")
+        to_date  = datetime.now(IST).strftime("%Y-%m-%d")
+        from_dt  = (datetime.now(IST) - timedelta(days=lookback * 2)).strftime("%Y-%m-%d")
+        hdrs     = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+        resp = requests.get(
+            f"https://api.upstox.com/v2/historical-candle/{enc}/day/{to_date}/{from_dt}",
+            headers=hdrs, timeout=12,
+        )
+        candles = (resp.json().get("data") or {}).get("candles") or []
+        if len(candles) < r + s + 5:
+            return None, None, "—", "var(--muted)"
+
+        # Upstox returns newest-first → reverse to chronological
+        closes = [float(c[4]) for c in reversed(candles)]
+
+        # TSI via iterative EMA (no pandas dependency)
+        def _ema_series(vals, period):
+            k = 2 / (period + 1)
+            out = [vals[0]]
+            for v in vals[1:]:
+                out.append(v * k + out[-1] * (1 - k))
+            return out
+
+        momentum  = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+        abs_mom   = [abs(m) for m in momentum]
+
+        sm1  = _ema_series(momentum, r)
+        dsm  = _ema_series(sm1,      s)
+        asm1 = _ema_series(abs_mom,  r)
+        dasm = _ema_series(asm1,     s)
+
+        tsi_series = [
+            100 * dsm[i] / dasm[i] if dasm[i] != 0 else 0
+            for i in range(len(dsm))
+        ]
+        signal_series = _ema_series(tsi_series, s)
+
+        tsi    = tsi_series[-1]
+        sig    = signal_series[-1]
+        prev   = tsi_series[-2] if len(tsi_series) >= 2 else tsi
+
+        if tsi > sig and tsi > prev:
+            label, color = "STRENGTHENING", "var(--bull)"
+        elif tsi < sig and tsi < prev:
+            label, color = "WEAKENING",     "var(--bear)"
+        elif tsi > sig:
+            label, color = "STRENGTHENING", "var(--bull)"
+        elif tsi < sig:
+            label, color = "WEAKENING",     "var(--bear)"
+        else:
+            label, color = "NEUTRAL",       "var(--muted)"
+
+        return tsi, sig, label, color
+    except Exception:
+        return None, None, "—", "var(--muted)"
 
 
 def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
@@ -2123,20 +2202,28 @@ _vwap_cached    = st.session_state.get("atm_vwap_cache", {})
 _vwap_hit = (_vwap_cached.get("key") == _vwap_cache_key
              and _vwap_cached.get("ce_vwap") is not None)
 if _vwap_hit:
-    _atm_ce_vwap = _vwap_cached["ce_vwap"]
-    _atm_pe_vwap = _vwap_cached["pe_vwap"]
-    _atm_ce_vol  = _vwap_cached["ce_vol"]
-    _atm_pe_vol  = _vwap_cached["pe_vol"]
+    _atm_ce_vwap  = _vwap_cached["ce_vwap"]
+    _atm_pe_vwap  = _vwap_cached["pe_vwap"]
+    _atm_ce_vol   = _vwap_cached["ce_vol"]
+    _atm_pe_vol   = _vwap_cached["pe_vol"]
+    _atm_ce_candle_h = _vwap_cached.get("ce_h")   # intraday high from candles
+    _atm_ce_candle_l = _vwap_cached.get("ce_l")   # intraday low from candles
+    _atm_pe_candle_h = _vwap_cached.get("pe_h")
+    _atm_pe_candle_l = _vwap_cached.get("pe_l")
 else:
     _atm_ce_vwap = _atm_pe_vwap = _atm_ce_vol = _atm_pe_vol = None
+    _atm_ce_candle_h = _atm_ce_candle_l = _atm_pe_candle_h = _atm_pe_candle_l = None
     if token:
-        _atm_ce_vwap, _atm_pe_vwap, _atm_ce_vol, _atm_pe_vol = \
+        _atm_ce_vwap, _atm_pe_vwap, _atm_ce_vol, _atm_pe_vol, \
+        _atm_ce_candle_h, _atm_ce_candle_l, _atm_pe_candle_h, _atm_pe_candle_l = \
             fetch_atm_vwap(token, near_raw, atm)
         if _atm_ce_vwap is not None:   # only cache on success
             st.session_state["atm_vwap_cache"] = {
-                "key": _vwap_cache_key,
-                "ce_vwap": _atm_ce_vwap, "pe_vwap": _atm_pe_vwap,
-                "ce_vol": _atm_ce_vol,   "pe_vol": _atm_pe_vol,
+                "key":     _vwap_cache_key,
+                "ce_vwap": _atm_ce_vwap,     "pe_vwap": _atm_pe_vwap,
+                "ce_vol":  _atm_ce_vol,       "pe_vol":  _atm_pe_vol,
+                "ce_h":    _atm_ce_candle_h,  "ce_l":    _atm_ce_candle_l,
+                "pe_h":    _atm_pe_candle_h,  "pe_l":    _atm_pe_candle_l,
             }
 
 # ── Intraday OI baseline tracking ─────────────────────────────────────────────
@@ -2787,6 +2874,26 @@ except Exception:
 _prev_pcr = st.session_state.get("prev_pcr", _pcr)
 st.session_state["prev_pcr"] = _pcr
 _pcr_delta = _pcr - _prev_pcr
+
+# ── True Strength Index (TSI) on spot index — daily closes ───────────────────
+# Cached once per session-day per instrument; ~120 daily candles, TSI(25,13)
+_tsi_cache_key = f"{now.date().isoformat()}_{_inst_choice}_tsi"
+_tsi_cached    = st.session_state.get("spot_tsi_cache", {})
+if _tsi_cached.get("key") == _tsi_cache_key and _tsi_cached.get("tsi") is not None:
+    _spot_tsi     = _tsi_cached["tsi"]
+    _spot_tsi_sig = _tsi_cached["sig"]
+    _tsi_trend    = _tsi_cached["label"]
+    _tsi_col      = _tsi_cached["color"]
+else:
+    _spot_inst_key = _INST["key"]
+    _spot_tsi, _spot_tsi_sig, _tsi_trend, _tsi_col = \
+        fetch_spot_tsi(token, _spot_inst_key) if token else (None, None, "—", "var(--muted)")
+    if _spot_tsi is not None:
+        st.session_state["spot_tsi_cache"] = {
+            "key": _tsi_cache_key,
+            "tsi": _spot_tsi, "sig": _spot_tsi_sig,
+            "label": _tsi_trend, "color": _tsi_col,
+        }
 _pcr_has_oi = _tot_ce_oi > 0
 
 # ATM-specific OI (single strike)
@@ -3486,9 +3593,16 @@ with pb4:
             unsafe_allow_html=True)
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
-# Final fallback chain: OHLC high → LTP from market_data → LTP from near_ce dict
+# Fallback chain for day high:
+#   1. chain OHLC high (market_data.ohlc.high)
+#   2. candle-computed day high from intraday 1-min data   ← real H
+#   3. LTP from near_ce/near_pe dict (last resort)
+if not _atm_ce_day_high and _atm_ce_candle_h:
+    _atm_ce_day_high = _atm_ce_candle_h
 if not _atm_ce_day_high:
     _atm_ce_day_high = float(near_ce.get(float(atm), 0) or near_ce.get(atm, 0))
+if not _atm_pe_day_high and _atm_pe_candle_h:
+    _atm_pe_day_high = _atm_pe_candle_h
 if not _atm_pe_day_high:
     _atm_pe_day_high = float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 # Always recompute here so even a mid-day data gap gets recovered
@@ -3589,13 +3703,11 @@ if True:  # always render — individual cells show "—" if data missing
 # Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
 _tk_ce_ltp  = near_ce.get(float(atm), 0)
 _tk_pe_ltp  = near_pe.get(float(atm), 0)
-# OHLC lows from chain (0 when chain doesn't provide them)
-_tk_ce_low  = near_ce_low.get(float(atm), 0)
-_tk_pe_low  = near_pe_low.get(float(atm), 0)
-# Fallback L to SPP prev-day if chain returned no low
-_tk_ce_l    = _tk_ce_low if _tk_ce_low else (_spp_ce_l if _spp is not None else 0)
-_tk_pe_l    = _tk_pe_low if _tk_pe_low else (_spp_pe_l if _spp is not None else 0)
-_tk_l_sfx   = "" if _tk_ce_low else " ᵖ"   # superscript p marks prev-day fallback
+# Real intraday H/L from 1-min candles (preferred), then chain OHLC, then nothing
+_tk_ce_h = _atm_ce_candle_h or (_atm_ce_day_high if _atm_ce_day_high != _tk_ce_ltp else None)
+_tk_pe_h = _atm_pe_candle_h or (_atm_pe_day_high if _atm_pe_day_high != _tk_pe_ltp else None)
+_tk_ce_l = _atm_ce_candle_l or near_ce_low.get(float(atm), 0) or None
+_tk_pe_l = _atm_pe_candle_l or near_pe_low.get(float(atm), 0) or None
 
 # VWAP sanity: reject prev-day candle contamination (expect within 0.15×–5× of LTP)
 def _sane_vwap(vwap, ltp):
@@ -3614,9 +3726,9 @@ _tk_ret  = f"(-{_SPCL_RET_PCT:.2f}%)"
 _tk_low  = f"({_SPCL_LOW_PCT:.2f}%)"
 _tk_high = f"(+{_SPCL_HIGH_PCT:.2f}%)"
 
-# TSI from session state if available (computed by SPCL VAL block)
-_tk_tsi_lbl = _sent_lbl if '_sent_lbl' in dir() else "—"
-_tk_tsi_col = _sent_col if '_sent_col' in dir() else "var(--muted)"
+# TSI = True Strength Index on spot (daily closes, TSI 25,13)
+_tk_tsi_val = f"{_spot_tsi:.2f} {_tsi_trend}" if _spot_tsi is not None else "—"
+_tk_tsi_col = _tsi_col
 
 def _tr(metric, value, vcol="var(--fg)", span=3):
     """Single metric row — value spans remaining columns."""
@@ -3655,18 +3767,18 @@ st.markdown(
     + _tr(f"{_tk_atm_str} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
     # Row 5 — CE VWAP (sanity-filtered; "—" if prev-day contamination detected)
     + _tr(f"{_tk_atm_str} CE VWAP", _tk_f(_tk_ce_vwap) if _tk_ce_vwap else "—", "var(--ce)")
-    # Row 6 — CE H/L (L falls back to SPP prev-day marked with ᵖ)
+    # Row 6 — CE H/L (from intraday 1-min candles)
     + _tr(f"{_tk_atm_str} CE H/L",
-          f"H:{_tk_f(_atm_ce_day_high)} L:{_tk_f(_tk_ce_l)}{_tk_l_sfx}", "var(--ce)")
+          f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
     # Row 7 — PE LTP
     + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
     # Row 8 — PE VWAP (sanity-filtered)
     + _tr(f"{_tk_atm_str} PE VWAP", _tk_f(_tk_pe_vwap) if _tk_pe_vwap else "—", "var(--pe)")
-    # Row 9 — PE H/L
+    # Row 9 — PE H/L (from intraday 1-min candles)
     + _tr(f"{_tk_atm_str} PE H/L",
-          f"H:{_tk_f(_atm_pe_day_high)} L:{_tk_f(_tk_pe_l)}{_tk_l_sfx}", "var(--pe)")
-    # Row 10 — PCR Sentiment (TSI proxy)
-    + _tr("PCR Sentiment", _tk_tsi_lbl, _tk_tsi_col)
+          f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
+    # Row 10 — TSI (SPCL VAL) with trend signal
+    + _tr("TSI", _tk_tsi_val, _tk_tsi_col)
     # Rows 11-12 — SPCL block (4-column layout)
     + f"<tr>"
     f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;"
