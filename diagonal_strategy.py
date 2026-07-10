@@ -2639,46 +2639,6 @@ with r1c2:
         spot * (_curr_vix / 100.0) / math.sqrt(252)
         if (spot and _curr_vix and _curr_vix > 0) else None
     )
-    # VIX range only meaningful when TRENDING (not sideways — straddle already decaying)
-    _vix_range_html = ""
-    if _vix_daily_pts:
-        _straddle_now = near_ce.get(float(atm), 0) + near_pe.get(float(atm), 0)
-        _is_sideways_now = (_straddle_vwap is not None and _straddle_now < _straddle_vwap)
-        if not _is_sideways_now:
-            if _straddle_now <= _vix_daily_pts * 1.1:
-                _vix_range_lbl = "✓ IN RANGE"
-                _vix_range_col = "var(--bull)"
-            else:
-                _vix_range_lbl = "↑ ELEVATED"
-                _vix_range_col = "var(--bear)"
-            _actual_move     = abs(spot - _nifty_day_open) if _nifty_day_open else None
-            _moved_pct       = (_actual_move / _vix_daily_pts * 100) if (_actual_move and _vix_daily_pts) else None
-            _moved_col       = "var(--bear)" if (_moved_pct and _moved_pct > 100) else "var(--bull)"
-            _vix_range_html = (
-                f"<div style='margin-top:3px;padding-top:3px;border-top:1px solid rgba(128,128,128,0.25);'>"
-                f"<span style='font-size:7px;font-weight:700;color:{_vix_range_col};'>{_vix_range_lbl}</span>"
-                f"<div style='font-size:7px;color:var(--muted);'>exp ₹{_vix_daily_pts:.0f} (VIX {_curr_vix:.1f})</div>"
-                + (
-                    f"<div style='font-size:7px;font-weight:700;color:{_moved_col};'>"
-                    f"moved ₹{_actual_move:.0f} · {_moved_pct:.0f}%</div>"
-                    if _actual_move is not None else ""
-                )
-                + f"</div>"
-            )
-        else:
-            _actual_move     = abs(spot - _nifty_day_open) if _nifty_day_open else None
-            _moved_pct       = (_actual_move / _vix_daily_pts * 100) if (_actual_move and _vix_daily_pts) else None
-            _moved_col       = "var(--bear)" if (_moved_pct and _moved_pct > 100) else "var(--muted)"
-            _vix_range_html = (
-                f"<div style='margin-top:3px;padding-top:3px;border-top:1px solid rgba(128,128,128,0.25);'>"
-                f"<div style='font-size:7px;color:var(--muted);'>exp ₹{_vix_daily_pts:.0f} (VIX {_curr_vix:.1f})</div>"
-                + (
-                    f"<div style='font-size:7px;font-weight:700;color:{_moved_col};'>"
-                    f"moved ₹{_actual_move:.0f} · {_moved_pct:.0f}%</div>"
-                    if _actual_move is not None else ""
-                )
-                + f"</div>"
-            )
 
     # Straddle sum vs VWAP sum → market regime
     _straddle_ltp  = _atm_ce_ltp + _atm_pe_ltp
@@ -2705,7 +2665,34 @@ with r1c2:
                 _regime_bg    = "var(--bear-dim)"
                 _regime_icon  = "↘"
     else:
-        pass
+        _is_sideways = False
+
+    # VIX range html — built AFTER _is_sideways and _straddle_vwap are known
+    _vix_range_html = ""
+    if _vix_daily_pts:
+        _actual_move = abs(spot - _nifty_day_open) if _nifty_day_open else None
+        _moved_pct   = (_actual_move / _vix_daily_pts * 100) if (_actual_move and _vix_daily_pts) else None
+        _moved_col   = "var(--bear)" if (_moved_pct and _moved_pct > 100) else "var(--bull)"
+        _moved_line  = (
+            f"<div style='font-size:7px;font-weight:700;color:{_moved_col};'>"
+            f"moved ₹{_actual_move:.0f} · {_moved_pct:.0f}%</div>"
+            if _actual_move is not None else ""
+        )
+        if not _is_sideways:
+            _vix_range_lbl = "✓ IN RANGE" if _straddle_ltp <= _vix_daily_pts * 1.1 else "↑ ELEVATED"
+            _vix_range_col = "var(--bull)" if _straddle_ltp <= _vix_daily_pts * 1.1 else "var(--bear)"
+            _vix_range_html = (
+                f"<div style='margin-top:3px;padding-top:3px;border-top:1px solid rgba(128,128,128,0.25);'>"
+                f"<span style='font-size:7px;font-weight:700;color:{_vix_range_col};'>{_vix_range_lbl}</span>"
+                f"<div style='font-size:7px;color:var(--muted);'>exp ₹{_vix_daily_pts:.0f} (VIX {_curr_vix:.1f})</div>"
+                + _moved_line + f"</div>"
+            )
+        else:
+            _vix_range_html = (
+                f"<div style='margin-top:3px;padding-top:3px;border-top:1px solid rgba(128,128,128,0.25);'>"
+                f"<div style='font-size:7px;color:var(--muted);'>exp ₹{_vix_daily_pts:.0f} (VIX {_curr_vix:.1f})</div>"
+                + _moved_line + f"</div>"
+            )
 
     st.markdown(
         f"<div class='card card-gold'>"
