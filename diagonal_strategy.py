@@ -3243,45 +3243,66 @@ with pb3:
         + _diag_scan_html
         + f"</div>",
         unsafe_allow_html=True)
-# ── Ideal Premium crossover calculation ───────────────────────────────────────
-# Find last strike where CE LTP > PE LTP (cross_low) and first where PE > CE (cross_high).
-# Fetch YESTERDAY's low for each leg via Upstox historical candle.
-_ip_cross_low  = None
-_ip_cross_high = None
-_ip_val        = None
-_ip_lows       = {}
-try:
-    _ip_strikes = sorted(s for s in set(near_ce) | set(near_pe)
-                         if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
-    _ip_found_cross = False
-    for _s in _ip_strikes:
-        if near_ce.get(_s, 0) > near_pe.get(_s, 0):
-            _ip_cross_low   = int(_s)
-            _ip_found_cross = False
-        elif near_pe.get(_s, 0) > near_ce.get(_s, 0) and _ip_cross_low and not _ip_found_cross:
-            _ip_cross_high  = int(_s)
-            _ip_found_cross = True
-            break
+# ── Ideal Premium — locked for the day (like SPP) ─────────────────────────────
+# Crossover strikes identified once from the first live chain read.
+# Yesterday's lows fetched once via Upstox historical candle.
+# Both stored in session_state and NOT recomputed until next calendar day.
+_ip_today_key  = datetime.now(IST).strftime("%Y-%m-%d")
+_ip_cross_low  = st.session_state.get("_ip_cross_low")
+_ip_cross_high = st.session_state.get("_ip_cross_high")
+_ip_val        = st.session_state.get("_ip_val")
+_ip_lows       = st.session_state.get("_ip_lows", {})
 
-    if _ip_cross_low and _ip_cross_high:
-        # Pull instrument keys from near_raw for the 4 legs
-        _ip_ikeys = {}
-        for _row in (near_raw or []):
-            _rs = int(float(_row.get("strike_price", 0)))
-            if _rs == _ip_cross_low:
-                _ip_ikeys["ce_a"] = (_row.get("call_options") or {}).get("instrument_key")
-                _ip_ikeys["pe_a"] = (_row.get("put_options")  or {}).get("instrument_key")
-            elif _rs == _ip_cross_high:
-                _ip_ikeys["ce_b"] = (_row.get("call_options") or {}).get("instrument_key")
-                _ip_ikeys["pe_b"] = (_row.get("put_options")  or {}).get("instrument_key")
+# Recompute only if: new day, or no value locked yet
+if st.session_state.get("_ip_date") != _ip_today_key or _ip_val is None:
+    try:
+        _ip_strikes = sorted(s for s in set(near_ce) | set(near_pe)
+                             if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
+        _ip_cl = None
+        _ip_ch = None
+        _found = False
+        for _s in _ip_strikes:
+            if near_ce.get(_s, 0) > near_pe.get(_s, 0):
+                _ip_cl  = int(_s)
+                _found  = False
+            elif near_pe.get(_s, 0) > near_ce.get(_s, 0) and _ip_cl and not _found:
+                _ip_ch  = int(_s)
+                _found  = True
+                break
 
-        _ip_val, _ip_lows = fetch_ideal_premium(
-            _ip_ikeys.get("ce_a"), _ip_ikeys.get("pe_a"),
-            _ip_ikeys.get("ce_b"), _ip_ikeys.get("pe_b"),
-            _ip_cross_low, _ip_cross_high, token,
-        )
-except Exception:
-    pass
+        if _ip_cl and _ip_ch:
+            _ip_ikeys = {}
+            for _row in (near_raw or []):
+                _rs = int(float(_row.get("strike_price", 0)))
+                if _rs == _ip_cl:
+                    _ip_ikeys["ce_a"] = (_row.get("call_options") or {}).get("instrument_key")
+                    _ip_ikeys["pe_a"] = (_row.get("put_options")  or {}).get("instrument_key")
+                elif _rs == _ip_ch:
+                    _ip_ikeys["ce_b"] = (_row.get("call_options") or {}).get("instrument_key")
+                    _ip_ikeys["pe_b"] = (_row.get("put_options")  or {}).get("instrument_key")
+
+            _ip_v, _ip_l = fetch_ideal_premium(
+                _ip_ikeys.get("ce_a"), _ip_ikeys.get("pe_a"),
+                _ip_ikeys.get("ce_b"), _ip_ikeys.get("pe_b"),
+                _ip_cl, _ip_ch, token,
+            )
+            if _ip_v is not None:
+                # Lock for the day
+                st.session_state["_ip_date"]       = _ip_today_key
+                st.session_state["_ip_cross_low"]  = _ip_cl
+                st.session_state["_ip_cross_high"] = _ip_ch
+                st.session_state["_ip_val"]        = _ip_v
+                st.session_state["_ip_lows"]       = _ip_l
+                _ip_cross_low  = _ip_cl
+                _ip_cross_high = _ip_ch
+                _ip_val        = _ip_v
+                _ip_lows       = _ip_l
+            elif _ip_cl:
+                # Strikes found but lows not yet available — store strikes so we retry
+                _ip_cross_low  = _ip_cl
+                _ip_cross_high = _ip_ch
+    except Exception:
+        pass
 
 with pb4:
     if _spp is not None:
@@ -3319,7 +3340,7 @@ with pb4:
             f"</div>"
             + (
                 f"<div style='border-left:1px solid var(--border);padding-left:12px;'>"
-                f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>IDEAL PREMIUM"
+                f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>IDEAL PREMIUM · locked"
                 + (f" · <span class='strike-pill-ce'>{_ip_cross_low}</span>→<span class='strike-pill'>{_ip_cross_high}</span>" if _ip_cross_low else "")
                 + f"</div>"
                 f"<div style='font-family:var(--mono);font-size:20px;font-weight:700;color:var(--gold);'>"
