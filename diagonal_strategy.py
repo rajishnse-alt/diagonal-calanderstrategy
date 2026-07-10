@@ -597,6 +597,27 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         return None
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_ideal_premium(expiry_str, strike_a, strike_b):
+    """
+    Ideal Premium (IP) — crossover-strike method:
+      strike_a = last strike where CE LTP > PE LTP  (e.g. 23950)
+      strike_b = first strike where PE LTP > CE LTP (e.g. 24000)
+    Fetch prev-day LOWs for all 4 legs, IP = avg of the 4 lows.
+    Returns (ip, lows_dict) or (None, {}).
+    """
+    lows = {}
+    for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
+                          (strike_b, "CE"), (strike_b, "PE")]:
+        h = fetch_nse_fo_hist(expiry_str, strike, otype)
+        if h and h.get("low"):
+            lows[f"{strike}_{otype}"] = h["low"]
+    if len(lows) == 4:
+        ip = sum(lows.values()) / 4
+        return ip, lows
+    return None, lows
+
+
 def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
     """
     Fallback: fetch prev-day H, L, OI from Upstox historical candle.
@@ -3176,6 +3197,31 @@ with pb3:
         + _diag_scan_html
         + f"</div>",
         unsafe_allow_html=True)
+# ── Ideal Premium crossover calculation ───────────────────────────────────────
+# Find last strike where CE LTP > PE LTP, and first where PE LTP > CE LTP
+_ip_cross_low  = None   # last  CE > PE  (e.g. 23950)
+_ip_cross_high = None   # first PE > CE  (e.g. 24000)
+_ip_val        = None
+_ip_lows       = {}
+try:
+    _ip_strikes = sorted(s for s in set(near_ce) | set(near_pe)
+                         if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
+    _ip_found_cross = False
+    for _s in _ip_strikes:
+        _ce_l = near_ce.get(_s, 0)
+        _pe_l = near_pe.get(_s, 0)
+        if _ce_l > _pe_l:
+            _ip_cross_low   = int(_s)
+            _ip_found_cross = False      # reset — keep updating as long as CE>PE
+        elif _pe_l > _ce_l and _ip_cross_low is not None and not _ip_found_cross:
+            _ip_cross_high  = int(_s)
+            _ip_found_cross = True
+            break
+    if _ip_cross_low and _ip_cross_high:
+        _ip_val, _ip_lows = fetch_ideal_premium(near_exp, _ip_cross_low, _ip_cross_high)
+except Exception:
+    pass
+
 with pb4:
     if _spp is not None:
         # Find strike where CE LTP is nearest to SPP
@@ -3205,7 +3251,32 @@ with pb4:
             f"<div class='card' style='border-left:4px solid var(--gold);'>"
             f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>"
             f"(prev {_spp_src} · ATM {_spp_atm} locked)</span></div>"
+            f"<div style='display:flex;align-items:baseline;gap:14px;'>"
+            f"<div>"
+            f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>SPP</div>"
             f"<div class='val-big val-gold'>₹{_spp:,.2f}</div>"
+            f"</div>"
+            + (
+                f"<div style='border-left:1px solid var(--border);padding-left:12px;'>"
+                f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>IDEAL PREMIUM"
+                + (f" · <span class='strike-pill-ce'>{_ip_cross_low}</span>→<span class='strike-pill'>{_ip_cross_high}</span>" if _ip_cross_low else "")
+                + f"</div>"
+                f"<div style='font-family:var(--mono);font-size:20px;font-weight:700;color:var(--gold);'>"
+                + (f"₹{_ip_val:.2f}" if _ip_val is not None else "<span style='color:var(--muted);font-size:12px;'>pending</span>")
+                + f"</div>"
+                + (
+                    f"<div style='font-size:8px;color:var(--muted);'>"
+                    f"{_ip_cross_low}CE:{_ip_lows.get(str(_ip_cross_low)+'_CE', 0):.0f} "
+                    f"{_ip_cross_low}PE:{_ip_lows.get(str(_ip_cross_low)+'_PE', 0):.0f} "
+                    f"{_ip_cross_high}CE:{_ip_lows.get(str(_ip_cross_high)+'_CE', 0):.0f} "
+                    f"{_ip_cross_high}PE:{_ip_lows.get(str(_ip_cross_high)+'_PE', 0):.0f}"
+                    f"</div>"
+                    if _ip_val is not None else ""
+                )
+                + f"</div>"
+                if (_ip_cross_low or _ip_val is not None) else ""
+            )
+            + f"</div>"
             + (
                 f"<div style='display:flex;align-items:baseline;gap:8px;margin:.2rem 0;'>"
                 f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;color:{_ref_col};'>"
@@ -3239,7 +3310,8 @@ with pb4:
             f"<span class='lbl'>ATM {_spp_atm} prev-day: "
             f"CE H:{_spp_ce_h:.0f}/L:{_spp_ce_l:.0f} OI:{_spp_ce_oi_L:.1f}L &nbsp;·&nbsp; "
             f"PE H:{_spp_pe_h:.0f}/L:{_spp_pe_l:.0f} OI:{_spp_pe_oi_L:.1f}L</span>"
-            f"</div></div>",
+            f"</div>"
+            + f"</div>",
             unsafe_allow_html=True)
     else:
         st.markdown(
