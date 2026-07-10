@@ -1056,6 +1056,25 @@ def _fetch_nse_futures_live():
         return []
 
 
+def _fetch_candles(ikey, today_str, from_str, tok):
+    """
+    Fetch Upstox day candles for any instrument key (option or future).
+    Tries %7C-encoded key first, then raw | key.
+    Returns list of candles newest-first: [ts, open, high, low, close, vol, oi]
+    """
+    for enc in (ikey.replace("|", "%7C"), ikey):
+        try:
+            r = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/day/{today_str}/{from_str}",
+                headers=hdr(tok), timeout=10,
+            )
+            if r.status_code == 200:
+                return r.json().get("data", {}).get("candles", [])
+        except Exception:
+            pass
+    return []
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_futures_buildup(tok, expiry_dates=None, underlying_key=None):
     """
@@ -1072,19 +1091,7 @@ def fetch_futures_buildup(tok, expiry_dates=None, underlying_key=None):
         if not price_up and oi_up:  return "Short Build-up"
         return "Long Unwinding"
 
-    def _fetch_candles(ikey, today_str, from_str, tok):
-        """Fetch day candles for an instrument key (tries both | and %7C)."""
-        for enc in (ikey.replace("|", "%7C"), ikey):
-            try:
-                r = requests.get(
-                    f"https://api.upstox.com/v2/historical-candle/{enc}/day/{today_str}/{from_str}",
-                    headers=hdr(tok), timeout=10,
-                )
-                if r.status_code == 200:
-                    return r.json().get("data", {}).get("candles", [])
-            except Exception:
-                pass
-        return []
+    # _fetch_candles is defined at module level
 
     today_dt  = datetime.now(IST).date()
     today_str = str(today_dt)
