@@ -790,6 +790,7 @@ def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
 def parse_chain(data):
     ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg = {}, {}, {}, {}, {}, {}
     ce_gamma, pe_gamma = {}, {}          # API greeks — gamma per strike
+    ce_low, pe_low     = {}, {}          # today's OHLC low per strike
     spot = None
     for row in data:
         s = float(row.get("strike_price", 0))
@@ -810,12 +811,15 @@ def parse_chain(data):
         # gamma is always positive; abs() guards against sign conventions
         ce_gamma[s]   = abs(float(cg.get("gamma") or 0))
         pe_gamma[s]   = abs(float(pg.get("gamma") or 0))
+        # OHLC lows (used for Ideal Premium calculation)
+        ce_low[s]     = float((c.get("ohlc") or {}).get("low") or c.get("low") or 0)
+        pe_low[s]     = float((p.get("ohlc") or {}).get("low") or p.get("low") or 0)
     if spot is None:
         common = set(ce_map) & set(pe_map)
         if common:
             spot = float(min(common, key=lambda s: abs(ce_map[s] - pe_map[s])))
     atm = int(round(spot / STEP) * STEP) if spot else 0
-    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma
+    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma, ce_low, pe_low
 
 
 def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=4):
@@ -2068,8 +2072,8 @@ for _cl_row in near_raw:
         except Exception:
             pass
 
-spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma  = parse_chain(far_raw)
+spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma, near_ce_low, near_pe_low = parse_chain(near_raw)
+_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _            = parse_chain(far_raw)
 
 # ── ATM CE/PE VWAP — from Upstox v3 intraday 1-min candles ──────────────────
 # Cache key: changes when date, instrument, or ATM strike changes
@@ -3231,9 +3235,10 @@ with pb3:
         + f"</div>",
         unsafe_allow_html=True)
 # ── Ideal Premium crossover calculation ───────────────────────────────────────
-# Find last strike where CE LTP > PE LTP, and first where PE LTP > CE LTP
-_ip_cross_low  = None   # last  CE > PE  (e.g. 23950)
-_ip_cross_high = None   # first PE > CE  (e.g. 24000)
+# Find last strike where CE LTP > PE LTP, and first where PE LTP > CE LTP.
+# Lows come directly from today's Upstox chain OHLC — no extra API calls.
+_ip_cross_low  = None
+_ip_cross_high = None
 _ip_val        = None
 _ip_lows       = {}
 try:
@@ -3241,17 +3246,33 @@ try:
                          if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
     _ip_found_cross = False
     for _s in _ip_strikes:
-        _ce_l = near_ce.get(_s, 0)
-        _pe_l = near_pe.get(_s, 0)
-        if _ce_l > _pe_l:
+        if near_ce.get(_s, 0) > near_pe.get(_s, 0):
             _ip_cross_low   = int(_s)
-            _ip_found_cross = False      # reset — keep updating as long as CE>PE
-        elif _pe_l > _ce_l and _ip_cross_low is not None and not _ip_found_cross:
+            _ip_found_cross = False
+        elif near_pe.get(_s, 0) > near_ce.get(_s, 0) and _ip_cross_low and not _ip_found_cross:
             _ip_cross_high  = int(_s)
             _ip_found_cross = True
             break
+
     if _ip_cross_low and _ip_cross_high:
-        _ip_val, _ip_lows = fetch_ideal_premium(near_exp, _ip_cross_low, _ip_cross_high)
+        _k_a  = float(_ip_cross_low)
+        _k_b  = float(_ip_cross_high)
+        _la_ce = near_ce_low.get(_k_a, 0)
+        _la_pe = near_pe_low.get(_k_a, 0)
+        _lb_ce = near_ce_low.get(_k_b, 0)
+        _lb_pe = near_pe_low.get(_k_b, 0)
+        _ip_lows = {
+            str(_ip_cross_low)  + "_CE": _la_ce,
+            str(_ip_cross_low)  + "_PE": _la_pe,
+            str(_ip_cross_high) + "_CE": _lb_ce,
+            str(_ip_cross_high) + "_PE": _lb_pe,
+        }
+        _ip_all = [v for v in [_la_ce, _la_pe, _lb_ce, _lb_pe] if v > 0]
+        if len(_ip_all) == 4:
+            _ip_val = sum(_ip_all) / 4
+        elif _ip_all:
+            # fallback: average whatever lows we have (OHLC may not be set pre-open)
+            _ip_val = sum(_ip_all) / len(_ip_all)
 except Exception:
     pass
 
