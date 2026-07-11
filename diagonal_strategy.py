@@ -835,8 +835,8 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
 def fetch_atm_day_hl(tok, chain_data, atm_strike):
     """
     Fetch today's day H/L for ATM CE and PE.
-    Strategy 1: upstox_client.MarketQuoteApi.get_full_market_quote  (official SDK)
-    Strategy 2: /v3/historical-candle/intraday/…/1minute  (max H, min L fallback)
+    Strategy 1: /v2/market-quote/quotes  (D-tf OHLC, mirrors fetch_vix_and_nifty_open)
+    Strategy 2: /v3/historical-candle/intraday/…/1minute  max(H), min(L)
     Returns (ce_h, ce_l, pe_h, pe_l) — any may be None.
     """
     ce_inst = pe_inst = None
@@ -848,35 +848,36 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
     if not ce_inst or not pe_inst:
         return None, None, None, None
 
-    # ── Strategy 1: official upstox_client SDK ───────────────────────────────
+    # ── Strategy 1: market-quote/quotes (same pattern as fetch_vix_and_nifty_open) ──
     try:
-        import upstox_client
-        cfg = upstox_client.Configuration()
-        cfg.access_token = tok
-        api = upstox_client.MarketQuoteApi(upstox_client.ApiClient(cfg))
-        instrument_keys = f"{ce_inst},{pe_inst}"
-        resp = api.get_full_market_quote(instrument_keys, "v2")
-        data = resp.data or {}
+        r = requests.get(
+            "https://api.upstox.com/v2/market-quote/quotes",
+            params={"instrument_key": f"{ce_inst},{pe_inst}"},
+            headers=hdr(tok), timeout=10,
+        )
+        d = r.json()
+        if d.get("status") == "success":
+            data = d.get("data") or {}
 
-        def _sdk_hl(inst_key):
-            k = inst_key.replace("|", ":")
-            q = data.get(k) or data.get(inst_key)
-            if q is None:
-                sfx = inst_key.split("|")[-1]
-                for dk, dv in data.items():
-                    if dk.endswith(sfx):
-                        q = dv
-                        break
-            if q and q.ohlc:
-                h = float(q.ohlc.high or 0) or None
-                l = float(q.ohlc.low  or 0) or None
+            def _ohlc(inst_key):
+                # Upstox returns response keys with ':' separator
+                k = inst_key.replace("|", ":")
+                q = data.get(k) or data.get(inst_key)
+                if q is None:
+                    sfx = inst_key.split("|")[-1]
+                    for dk, dv in data.items():
+                        if dk.endswith(sfx):
+                            q = dv
+                            break
+                o = (q or {}).get("ohlc") or {}
+                h = float(o.get("high") or 0) or None
+                l = float(o.get("low")  or 0) or None
                 return h, l
-            return None, None
 
-        ce_h, ce_l = _sdk_hl(ce_inst)
-        pe_h, pe_l = _sdk_hl(pe_inst)
-        if ce_h and pe_h:
-            return ce_h, ce_l, pe_h, pe_l
+            ce_h, ce_l = _ohlc(ce_inst)
+            pe_h, pe_l = _ohlc(pe_inst)
+            if ce_h and pe_h:
+                return ce_h, ce_l, pe_h, pe_l
     except Exception:
         pass
 
@@ -888,12 +889,14 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
                 f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
                 headers=hdr(tok), timeout=10,
             )
-            candles = (r.json().get("data") or {}).get("candles") or []
-            if candles:
-                highs = [float(c[2]) for c in candles if c[2]]
-                lows  = [float(c[3]) for c in candles if c[3]]
-                return (max(highs) if highs else None,
-                        min(lows)  if lows  else None)
+            d = r.json()
+            if d.get("status") == "success":
+                candles = (d.get("data") or {}).get("candles") or []
+                if candles:
+                    highs = [float(c[2]) for c in candles if c[2]]
+                    lows  = [float(c[3]) for c in candles if c[3]]
+                    return (max(highs) if highs else None,
+                            min(lows)  if lows  else None)
         except Exception:
             pass
         return None, None
