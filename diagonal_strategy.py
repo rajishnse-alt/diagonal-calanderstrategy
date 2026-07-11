@@ -3847,6 +3847,32 @@ _tk_high = f"(+{_SPCL_HIGH_PCT:.2f}%)"
 _tk_tsi_val = f"{_spot_tsi:.2f} {_tsi_trend}" if _spot_tsi is not None else "—"
 _tk_tsi_col = _tsi_col
 
+# Strikes in near expiry whose current LTP falls within the SPCL projected Low→High range.
+# CE side: strikes where CE LTP ∈ [proj_ce_low, proj_ce_high]
+# PE side: strikes where PE LTP ∈ [proj_pe_low, proj_pe_high]
+def _strikes_in_range(price_map, lo, hi):
+    if not lo or not hi:
+        return []
+    results = []
+    for s, ltp in sorted(price_map.items()):
+        if ltp and lo <= ltp <= hi:
+            results.append((int(s), ltp))
+    return results   # [(strike, ltp), …] sorted by strike
+
+_ce_range_strikes = _strikes_in_range(near_ce, _proj_ce_low, _proj_ce_high)
+_pe_range_strikes = _strikes_in_range(near_pe, _proj_pe_low, _proj_pe_high)
+
+def _fmt_range_strikes(items, color):
+    if not items:
+        return "<span style='color:var(--muted);'>—</span>"
+    parts = []
+    for s, ltp in items:
+        parts.append(
+            f"<span style='color:{color};font-weight:700;'>{s}</span>"
+            f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
+        )
+    return " &nbsp;·&nbsp; ".join(parts)
+
 def _tr(metric, value, vcol="var(--fg)", span=3):
     """Single metric row — value spans remaining columns."""
     return (
@@ -3887,6 +3913,9 @@ st.markdown(
     # Row 6 — CE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_tk_atm_str} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
+    # Row 6b — CE strikes within SPCL proj low→high range
+    + _tr("  ↳ CE in proj range",
+          _fmt_range_strikes(_ce_range_strikes, "var(--ce)"))
     # Row 7 — PE LTP
     + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
     # Row 8 — PE VWAP (sanity-filtered)
@@ -3894,6 +3923,9 @@ st.markdown(
     # Row 9 — PE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_tk_atm_str} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
+    # Row 9b — PE strikes within SPCL proj low→high range
+    + _tr("  ↳ PE in proj range",
+          _fmt_range_strikes(_pe_range_strikes, "var(--pe)"))
     # Row 10 — TSI (SPCL VAL) with trend signal
     + _tr("TSI", _tk_tsi_val, _tk_tsi_col)
     # Rows 11-12 — SPCL block (4-column layout)
