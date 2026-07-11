@@ -4287,6 +4287,9 @@ for i in range(-10, 11):
     is_sell_pe   = s == sell_pe_strike
     is_best_ce   = s == best_ce["strike"]
     is_best_pe   = s == best_pe["strike"]
+    # Strikes whose near LTP falls within SPCL projected range
+    in_ce_proj   = _proj_ce_low and _proj_ce_high and _proj_ce_low <= nce_ltp <= _proj_ce_high
+    in_pe_proj   = _proj_pe_low and _proj_pe_high and _proj_pe_low <= npe_ltp <= _proj_pe_high
 
     row_cls = ""
     if is_atm:       row_cls = "atm-row"
@@ -4300,6 +4303,9 @@ for i in range(-10, 11):
     elif is_best_ce:  step_lbl = f"{s} <span class='buy-tag'>CE BUY★</span>"
     elif is_best_pe:  step_lbl = f"{s} <span class='buy-tag'>PE BUY★</span>"
     else:             step_lbl = str(s)
+    # Append SPCL proj range tag(s)
+    if in_ce_proj:    step_lbl += " <span style='background:#1a3a1a;color:#00e676;font-size:8px;padding:1px 4px;border-radius:3px;border:1px solid #00e676;'>◆CE</span>"
+    if in_pe_proj:    step_lbl += " <span style='background:#3a1a2a;color:#f06292;font-size:8px;padding:1px 4px;border-radius:3px;border:1px solid #f06292;'>◆PE</span>"
 
     # CE LTP colouring
     nce_col = "var(--bear)" if is_sell_ce else ("var(--ce)" if nce_ltp > 0 else "var(--muted)")
