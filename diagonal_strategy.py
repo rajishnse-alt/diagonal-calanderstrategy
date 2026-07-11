@@ -834,8 +834,9 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
 
 def fetch_atm_day_hl(tok, chain_data, atm_strike):
     """
-    Fetch today's day H/L for ATM CE and PE via Upstox get_full_market_quote
-    (REST: GET /v2/market-quote/quotes).
+    Fetch today's day H/L for ATM CE and PE.
+    Strategy 1: upstox_client.MarketQuoteApi.get_full_market_quote  (official SDK)
+    Strategy 2: /v3/historical-candle/intraday/…/1minute  (max H, min L fallback)
     Returns (ce_h, ce_l, pe_h, pe_l) — any may be None.
     """
     ce_inst = pe_inst = None
@@ -846,35 +847,60 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
             break
     if not ce_inst or not pe_inst:
         return None, None, None, None
-    try:
-        resp = requests.get(
-            "https://api.upstox.com/v2/market-quote/quotes",
-            params={"instrument_key": f"{ce_inst},{pe_inst}"},
-            headers=hdr(tok),
-            timeout=10,
-        )
-        data = (resp.json().get("data") or {})
 
-        def _ohlc(inst_key):
-            # Upstox returns keys with ':' even though we send '|'
+    # ── Strategy 1: official upstox_client SDK ───────────────────────────────
+    try:
+        import upstox_client
+        cfg = upstox_client.Configuration()
+        cfg.access_token = tok
+        api = upstox_client.MarketQuoteApi(upstox_client.ApiClient(cfg))
+        instrument_keys = f"{ce_inst},{pe_inst}"
+        resp = api.get_full_market_quote(instrument_keys, "v2")
+        data = resp.data or {}
+
+        def _sdk_hl(inst_key):
             k = inst_key.replace("|", ":")
-            d = data.get(k) or data.get(inst_key)
-            if d is None:
+            q = data.get(k) or data.get(inst_key)
+            if q is None:
                 sfx = inst_key.split("|")[-1]
                 for dk, dv in data.items():
                     if dk.endswith(sfx):
-                        d = dv
+                        q = dv
                         break
-            o = (d or {}).get("ohlc") or {}
-            h = float(o.get("high") or 0) or None
-            l = float(o.get("low")  or 0) or None
-            return h, l
+            if q and q.ohlc:
+                h = float(q.ohlc.high or 0) or None
+                l = float(q.ohlc.low  or 0) or None
+                return h, l
+            return None, None
 
-        ce_h, ce_l = _ohlc(ce_inst)
-        pe_h, pe_l = _ohlc(pe_inst)
-        return ce_h, ce_l, pe_h, pe_l
+        ce_h, ce_l = _sdk_hl(ce_inst)
+        pe_h, pe_l = _sdk_hl(pe_inst)
+        if ce_h and pe_h:
+            return ce_h, ce_l, pe_h, pe_l
     except Exception:
-        return None, None, None, None
+        pass
+
+    # ── Strategy 2: intraday 1-min candles — max(H), min(L) ─────────────────
+    def _candle_hl(inst_key):
+        try:
+            enc = urllib.parse.quote(inst_key, safe="")
+            r = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
+                headers=hdr(tok), timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if candles:
+                highs = [float(c[2]) for c in candles if c[2]]
+                lows  = [float(c[3]) for c in candles if c[3]]
+                return (max(highs) if highs else None,
+                        min(lows)  if lows  else None)
+        except Exception:
+            pass
+        return None, None
+
+    ce_h, ce_l = _candle_hl(ce_inst)
+    pe_h, pe_l = _candle_hl(pe_inst)
+    return ce_h, ce_l, pe_h, pe_l
 
 
 def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
@@ -2249,8 +2275,7 @@ _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
 _vwap_cache_key = f"{now.date().isoformat()}_{_inst_choice}_{atm}_{near_exp}"
 _vwap_cached    = st.session_state.get("atm_vwap_cache", {})
 _vwap_hit = (_vwap_cached.get("key") == _vwap_cache_key
-             and _vwap_cached.get("ce_vwap") is not None
-             and "ce_h" in _vwap_cached)
+             and _vwap_cached.get("ce_vwap") is not None)
 if _vwap_hit:
     _atm_ce_vwap  = _vwap_cached["ce_vwap"]
     _atm_pe_vwap  = _vwap_cached["pe_vwap"]
