@@ -3740,23 +3740,38 @@ if True:  # always render — individual cells show "—" if data missing
     _sc1, _sc2, _sc3 = st.columns(3)
 
     with _sc1:
+        def _strike_pills(items, color):
+            if not items:
+                return "<span style='color:var(--muted);font-size:9px;'>—</span>"
+            return " ".join(
+                f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
+                f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
+                for s, ltp in items
+            )
         st.markdown(
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>SPCL &nbsp;·&nbsp; {_spcl_ret_tag} Retracement</div>"
             # CeSPCL row
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
-            f"padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--ce);font-weight:700;letter-spacing:.06em;'>CeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>"
             f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_ce_day_high:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_ce_spcl)}</span></span>"
             f"</div>"
+            f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>CE in range {_fmt_s(_proj_ce_low)}–{_fmt_s(_proj_ce_high)}</div>"
+            f"<div style='margin-top:2px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
+            f"</div>"
             # PeSPCL row
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;'>"
+            f"<div style='padding:4px 0;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--pe);font-weight:700;letter-spacing:.06em;'>PeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>"
             f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_pe_day_high:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_pe_spcl)}</span></span>"
+            f"</div>"
+            f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>PE in range {_fmt_s(_proj_pe_low)}–{_fmt_s(_proj_pe_high)}</div>"
+            f"<div style='margin-top:2px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
@@ -3817,46 +3832,6 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
-
-# ── Strikes in SPCL projected range ─────────────────────────────────────────
-# Full-width card: near-expiry strikes whose current LTP falls between proj Low and proj High
-st.markdown(
-    f"<div class='card' style='margin-top:8px;'>"
-    f"<div class='lbl' style='margin-bottom:8px;'>📍 Near-Expiry Strikes in SPCL Projected Range</div>"
-    f"<div style='display:flex;gap:24px;flex-wrap:wrap;'>"
-    # CE block
-    f"<div style='flex:1;min-width:200px;'>"
-    f"<div style='font-size:9px;color:var(--muted);margin-bottom:4px;letter-spacing:.08em;'>"
-    f"CE &nbsp;·&nbsp; proj range {_fmt_s(_proj_ce_low)} – {_fmt_s(_proj_ce_high)}</div>"
-    f"<div style='font-family:var(--mono);font-size:13px;line-height:1.8;'>"
-    + (
-        "".join(
-            f"<span style='color:var(--ce);font-weight:700;'>{s}</span>"
-            f"<span style='color:var(--muted);font-size:10px;'> ₹{ltp:.2f}</span>"
-            f"<br>"
-            for s, ltp in _ce_range_strikes
-        ) if _ce_range_strikes else
-        "<span style='color:var(--muted);font-size:10px;'>no strikes in range</span>"
-    )
-    + f"</div></div>"
-    # PE block
-    f"<div style='flex:1;min-width:200px;'>"
-    f"<div style='font-size:9px;color:var(--muted);margin-bottom:4px;letter-spacing:.08em;'>"
-    f"PE &nbsp;·&nbsp; proj range {_fmt_s(_proj_pe_low)} – {_fmt_s(_proj_pe_high)}</div>"
-    f"<div style='font-family:var(--mono);font-size:13px;line-height:1.8;'>"
-    + (
-        "".join(
-            f"<span style='color:var(--pe);font-weight:700;'>{s}</span>"
-            f"<span style='color:var(--muted);font-size:10px;'> ₹{ltp:.2f}</span>"
-            f"<br>"
-            for s, ltp in _pe_range_strikes
-        ) if _pe_range_strikes else
-        "<span style='color:var(--muted);font-size:10px;'>no strikes in range</span>"
-    )
-    + f"</div></div>"
-    f"</div></div>",
-    unsafe_allow_html=True,
-)
 
 # ── ATM Toolkit Table (mirrors TradingView Raj_ToolKit table) ────────────────
 # Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
