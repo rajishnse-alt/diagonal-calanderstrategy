@@ -834,8 +834,8 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
 
 def fetch_atm_day_hl(tok, chain_data, atm_strike):
     """
-    Fetch today's day H/L for ATM CE and PE via Upstox market-quote/quotes.
-    This is the most reliable source — always populated during market hours.
+    Fetch today's day H/L for ATM CE and PE via Upstox get_full_market_quote
+    (REST: GET /v2/market-quote/quotes).
     Returns (ce_h, ce_l, pe_h, pe_l) — any may be None.
     """
     ce_inst = pe_inst = None
@@ -847,26 +847,25 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
     if not ce_inst or not pe_inst:
         return None, None, None, None
     try:
-        hdrs = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
         resp = requests.get(
             "https://api.upstox.com/v2/market-quote/quotes",
             params={"instrument_key": f"{ce_inst},{pe_inst}"},
-            headers=hdrs, timeout=10,
+            headers=hdr(tok),
+            timeout=10,
         )
-        data = resp.json().get("data") or {}
+        data = (resp.json().get("data") or {})
 
         def _ohlc(inst_key):
-            k  = inst_key.replace("|", ":")
-            d  = data.get(k) or data.get(inst_key)
+            # Upstox returns keys with ':' even though we send '|'
+            k = inst_key.replace("|", ":")
+            d = data.get(k) or data.get(inst_key)
             if d is None:
-                # Fuzzy: find any key whose suffix matches (handles encoding variants)
                 sfx = inst_key.split("|")[-1]
                 for dk, dv in data.items():
                     if dk.endswith(sfx):
                         d = dv
                         break
-            d = d or {}
-            o = d.get("ohlc") or {}
+            o = (d or {}).get("ohlc") or {}
             h = float(o.get("high") or 0) or None
             l = float(o.get("low")  or 0) or None
             return h, l
