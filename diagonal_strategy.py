@@ -3705,6 +3705,26 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_atm_ce_day_high, _atm_pe_day_high)
 
+# Strikes in near expiry whose LTP falls within the SPCL proj Low→High range
+def _strikes_in_range(price_map, lo, hi):
+    if not lo or not hi:
+        return []
+    return [(int(s), ltp) for s, ltp in sorted(price_map.items())
+            if ltp and lo <= ltp <= hi]
+
+_ce_range_strikes = _strikes_in_range(near_ce, _proj_ce_low, _proj_ce_high)
+_pe_range_strikes = _strikes_in_range(near_pe, _proj_pe_low, _proj_pe_high)
+
+def _fmt_proj_strikes(items, color):
+    if not items:
+        return "<span style='color:var(--muted);font-size:9px;'>no strikes in range</span>"
+    parts = [
+        f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
+        f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
+        for s, ltp in items
+    ]
+    return " &nbsp;·&nbsp; ".join(parts)
+
 _spcl_ret_tag  = f"−{_SPCL_RET_PCT:.2f}%"
 _spcl_low_tag  = f"{_SPCL_LOW_PCT:.2f}%"
 _spcl_high_tag = f"+{_SPCL_HIGH_PCT:.2f}%"
@@ -3746,17 +3766,20 @@ if True:  # always render — individual cells show "—" if data missing
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>Proj Low &nbsp;·&nbsp; {_spcl_low_tag} cross-leg</div>"
             # →PE Low (from CE High)
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
-            f"padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→PE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
             f"{_fmt_s(_proj_pe_low)}</span>"
             f"</div>"
+            f"</div>"
             # →CE Low (from PE High)
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;'>"
+            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
             f"{_fmt_s(_proj_ce_low)}</span>"
+            f"</div>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
@@ -3794,6 +3817,46 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
+
+# ── Strikes in SPCL projected range ─────────────────────────────────────────
+# Full-width card: near-expiry strikes whose current LTP falls between proj Low and proj High
+st.markdown(
+    f"<div class='card' style='margin-top:8px;'>"
+    f"<div class='lbl' style='margin-bottom:8px;'>📍 Near-Expiry Strikes in SPCL Projected Range</div>"
+    f"<div style='display:flex;gap:24px;flex-wrap:wrap;'>"
+    # CE block
+    f"<div style='flex:1;min-width:200px;'>"
+    f"<div style='font-size:9px;color:var(--muted);margin-bottom:4px;letter-spacing:.08em;'>"
+    f"CE &nbsp;·&nbsp; proj range {_fmt_s(_proj_ce_low)} – {_fmt_s(_proj_ce_high)}</div>"
+    f"<div style='font-family:var(--mono);font-size:13px;line-height:1.8;'>"
+    + (
+        "".join(
+            f"<span style='color:var(--ce);font-weight:700;'>{s}</span>"
+            f"<span style='color:var(--muted);font-size:10px;'> ₹{ltp:.2f}</span>"
+            f"<br>"
+            for s, ltp in _ce_range_strikes
+        ) if _ce_range_strikes else
+        "<span style='color:var(--muted);font-size:10px;'>no strikes in range</span>"
+    )
+    + f"</div></div>"
+    # PE block
+    f"<div style='flex:1;min-width:200px;'>"
+    f"<div style='font-size:9px;color:var(--muted);margin-bottom:4px;letter-spacing:.08em;'>"
+    f"PE &nbsp;·&nbsp; proj range {_fmt_s(_proj_pe_low)} – {_fmt_s(_proj_pe_high)}</div>"
+    f"<div style='font-family:var(--mono);font-size:13px;line-height:1.8;'>"
+    + (
+        "".join(
+            f"<span style='color:var(--pe);font-weight:700;'>{s}</span>"
+            f"<span style='color:var(--muted);font-size:10px;'> ₹{ltp:.2f}</span>"
+            f"<br>"
+            for s, ltp in _pe_range_strikes
+        ) if _pe_range_strikes else
+        "<span style='color:var(--muted);font-size:10px;'>no strikes in range</span>"
+    )
+    + f"</div></div>"
+    f"</div></div>",
+    unsafe_allow_html=True,
+)
 
 # ── ATM Toolkit Table (mirrors TradingView Raj_ToolKit table) ────────────────
 # Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
@@ -3848,31 +3911,6 @@ _tk_tsi_val = f"{_spot_tsi:.2f} {_tsi_trend}" if _spot_tsi is not None else "—
 _tk_tsi_col = _tsi_col
 
 # Strikes in near expiry whose current LTP falls within the SPCL projected Low→High range.
-# CE side: strikes where CE LTP ∈ [proj_ce_low, proj_ce_high]
-# PE side: strikes where PE LTP ∈ [proj_pe_low, proj_pe_high]
-def _strikes_in_range(price_map, lo, hi):
-    if not lo or not hi:
-        return []
-    results = []
-    for s, ltp in sorted(price_map.items()):
-        if ltp and lo <= ltp <= hi:
-            results.append((int(s), ltp))
-    return results   # [(strike, ltp), …] sorted by strike
-
-_ce_range_strikes = _strikes_in_range(near_ce, _proj_ce_low, _proj_ce_high)
-_pe_range_strikes = _strikes_in_range(near_pe, _proj_pe_low, _proj_pe_high)
-
-def _fmt_range_strikes(items, color):
-    if not items:
-        return "<span style='color:var(--muted);'>—</span>"
-    parts = []
-    for s, ltp in items:
-        parts.append(
-            f"<span style='color:{color};font-weight:700;'>{s}</span>"
-            f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
-        )
-    return " &nbsp;·&nbsp; ".join(parts)
-
 def _tr(metric, value, vcol="var(--fg)", span=3):
     """Single metric row — value spans remaining columns."""
     return (
@@ -3913,9 +3951,6 @@ st.markdown(
     # Row 6 — CE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_tk_atm_str} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
-    # Row 6b — CE strikes within SPCL proj low→high range
-    + _tr("  ↳ CE in proj range",
-          _fmt_range_strikes(_ce_range_strikes, "var(--ce)"))
     # Row 7 — PE LTP
     + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
     # Row 8 — PE VWAP (sanity-filtered)
@@ -3923,9 +3958,6 @@ st.markdown(
     # Row 9 — PE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_tk_atm_str} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
-    # Row 9b — PE strikes within SPCL proj low→high range
-    + _tr("  ↳ PE in proj range",
-          _fmt_range_strikes(_pe_range_strikes, "var(--pe)"))
     # Row 10 — TSI (SPCL VAL) with trend signal
     + _tr("TSI", _tk_tsi_val, _tk_tsi_col)
     # Rows 11-12 — SPCL block (4-column layout)
