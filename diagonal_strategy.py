@@ -3748,6 +3748,17 @@ if True:  # always render — individual cells show "—" if data missing
                 f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
                 for s, ltp in items
             )
+
+        def _nearest_strike(price_map, target):
+            """Return (strike, ltp) whose LTP is closest to target."""
+            if not target or not price_map:
+                return None, None
+            best = min(price_map.items(), key=lambda kv: abs(kv[1] - target) if kv[1] else float("inf"))
+            return int(best[0]), best[1]
+
+        _ce_spcl_strike, _ce_spcl_strike_ltp = _nearest_strike(near_ce, _ce_spcl)
+        _pe_spcl_strike, _pe_spcl_strike_ltp = _nearest_strike(near_pe, _pe_spcl)
+
         st.markdown(
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>SPCL &nbsp;·&nbsp; {_spcl_ret_tag} Retracement</div>"
@@ -3759,7 +3770,15 @@ if True:  # always render — individual cells show "—" if data missing
             f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_ce_day_high:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_ce_spcl)}</span></span>"
             f"</div>"
-            f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>CE in range {_fmt_s(_proj_ce_low)}–{_fmt_s(_proj_ce_high)}</div>"
+            + (
+                f"<div style='margin-top:3px;font-size:10px;'>"
+                f"<span style='color:var(--muted);'>nearest strike → </span>"
+                f"<span style='color:var(--ce);font-weight:700;'>{_ce_spcl_strike}</span>"
+                f"<span style='color:var(--muted);font-size:9px;'> ₹{_ce_spcl_strike_ltp:.1f}</span>"
+                f"</div>"
+                if _ce_spcl_strike else ""
+            )
+            + f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>CE in range {_fmt_s(_proj_ce_low)}–{_fmt_s(_proj_ce_high)}</div>"
             f"<div style='margin-top:2px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
             f"</div>"
             # PeSPCL row
@@ -3770,7 +3789,15 @@ if True:  # always render — individual cells show "—" if data missing
             f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_pe_day_high:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_pe_spcl)}</span></span>"
             f"</div>"
-            f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>PE in range {_fmt_s(_proj_pe_low)}–{_fmt_s(_proj_pe_high)}</div>"
+            + (
+                f"<div style='margin-top:3px;font-size:10px;'>"
+                f"<span style='color:var(--muted);'>nearest strike → </span>"
+                f"<span style='color:var(--pe);font-weight:700;'>{_pe_spcl_strike}</span>"
+                f"<span style='color:var(--muted);font-size:9px;'> ₹{_pe_spcl_strike_ltp:.1f}</span>"
+                f"</div>"
+                if _pe_spcl_strike else ""
+            )
+            + f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>PE in range {_fmt_s(_proj_pe_low)}–{_fmt_s(_proj_pe_high)}</div>"
             f"<div style='margin-top:2px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
             f"</div>"
             f"</div>",
@@ -3780,55 +3807,48 @@ if True:  # always render — individual cells show "—" if data missing
         st.markdown(
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>Proj Low &nbsp;·&nbsp; {_spcl_low_tag} cross-leg</div>"
-            # →PE Low (from CE High)
+            # →PE Low + PE strikes in range
             f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→PE Low</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
-            f"{_fmt_s(_proj_pe_low)}</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_low)}</span>"
             f"</div>"
+            f"<div style='margin-top:3px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
             f"</div>"
-            # →CE Low (from PE High)
-            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
+            # →CE Low + CE strikes in range
+            f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
-            f"{_fmt_s(_proj_ce_low)}</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_low)}</span>"
             f"</div>"
+            f"<div style='margin-top:3px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
     with _sc3:
-        # proj_pe_high as % of PE day high; proj_ce_high as % of CE day high
         _pct_pe_h1 = (_proj_pe_high / _atm_pe_day_high * 100) if (_proj_pe_high and _atm_pe_day_high) else 0
-        _pct_pe_h2 = 2 * _pct_pe_h1
         _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if (_proj_ce_high and _atm_ce_day_high) else 0
-        _pct_ce_h2 = 2 * _pct_ce_h1
         st.markdown(
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>Proj High &nbsp;·&nbsp; {_spcl_high_tag} uplift</div>"
-            # →PE High
+            # →PE High + PE strikes
             f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→PE High</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>"
-            f"{_fmt_s(_proj_pe_high)}</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_high)}</span>"
             f"</div>"
-            f"<div style='text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>"
-            + (f"{_pct_pe_h1:.2f}% of PE H &nbsp;·&nbsp; {_pct_pe_h2:.2f}%" if _pct_pe_h1 else "—")
-            + f"</div>"
+            + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_pe_h1:.2f}% of PE H</div>" if _pct_pe_h1 else "")
+            + f"<div style='margin-top:3px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
             f"</div>"
-            # →CE High
+            # →CE High + CE strikes
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE High</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>"
-            f"{_fmt_s(_proj_ce_high)}</span>"
+            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_high)}</span>"
             f"</div>"
-            f"<div style='text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>"
-            + (f"{_pct_ce_h1:.2f}% of CE H &nbsp;·&nbsp; {_pct_ce_h2:.2f}%" if _pct_ce_h1 else "—")
-            + f"</div>"
+            + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_ce_h1:.2f}% of CE H</div>" if _pct_ce_h1 else "")
+            + f"<div style='margin-top:3px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
