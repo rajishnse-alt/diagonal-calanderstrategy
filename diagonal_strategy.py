@@ -946,6 +946,7 @@ def parse_chain(data):
     ce_gamma, pe_gamma = {}, {}          # API greeks — gamma per strike
     ce_low,  pe_low    = {}, {}          # today's OHLC low per strike
     ce_high, pe_high   = {}, {}          # today's OHLC high per strike
+    ce_vwap, pe_vwap   = {}, {}          # today's VWAP per strike (chain market_data)
     spot = None
     for row in data:
         s = float(row.get("strike_price", 0))
@@ -971,14 +972,17 @@ def parse_chain(data):
         _p_ohlc       = p.get("ohlc") or {}
         ce_high[s]    = float(_c_ohlc.get("high") or c.get("high") or 0) or None
         pe_high[s]    = float(_p_ohlc.get("high") or p.get("high") or 0) or None
-        ce_low[s]     = float(_c_ohlc.get("low")  or c.get("low")  or 0)
-        pe_low[s]     = float(_p_ohlc.get("low")  or p.get("low")  or 0)
+        ce_low[s]     = float(_c_ohlc.get("low")  or c.get("low")  or 0) or None
+        pe_low[s]     = float(_p_ohlc.get("low")  or p.get("low")  or 0) or None
+        # VWAP directly from chain market_data (same field as SDK strike_data.ce.vwap)
+        ce_vwap[s]    = float(c.get("vwap") or 0) or None
+        pe_vwap[s]    = float(p.get("vwap") or 0) or None
     if spot is None:
         common = set(ce_map) & set(pe_map)
         if common:
             spot = float(min(common, key=lambda s: abs(ce_map[s] - pe_map[s])))
     atm = int(round(spot / STEP) * STEP) if spot else 0
-    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma, ce_low, pe_low, ce_high, pe_high
+    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma, ce_low, pe_low, ce_high, pe_high, ce_vwap, pe_vwap
 
 
 def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=4):
@@ -2238,8 +2242,8 @@ for _cl_row in near_raw:
         except Exception:
             pass
 
-spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma, near_ce_low, near_pe_low, near_ce_high, near_pe_high = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _,            _,            _            = parse_chain(far_raw)
+spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma, near_ce_low, near_pe_low, near_ce_high, near_pe_high, near_ce_vwap, near_pe_vwap = parse_chain(near_raw)
+_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _,            _,            _,            _,             _             = parse_chain(far_raw)
 
 # ── ATM option day-highs from chain OHLC (already parsed into near_ce_high/near_pe_high)
 _atm_ce_day_high  = near_ce_high.get(float(atm)) or 0.0
@@ -3684,16 +3688,19 @@ with pb4:
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # Fallback chain for day high:
 #   1. chain OHLC high  (real, flagged by _atm_ce_ohlc_real)
-#   2. market-quote / candle day high  (_atm_ce_candle_h, populated above)
-#   3. LTP from near_ce dict (last resort — worst case only)
+#   2. market-quote / candle day high  (_atm_ce_candle_h)
+#   3. prev-day SPP H/L (_spp_ce_h / _spp_pe_h) — pre/post market
+#   4. LTP (last resort)
 if not _atm_ce_ohlc_real and _atm_ce_candle_h:
     _atm_ce_day_high = _atm_ce_candle_h
 elif not _atm_ce_ohlc_real and not _atm_ce_candle_h:
-    _atm_ce_day_high = float(near_ce.get(float(atm), 0) or near_ce.get(atm, 0))
+    _atm_ce_day_high = (_spp_ce_h if _spp is not None else None) \
+                       or float(near_ce.get(float(atm), 0) or near_ce.get(atm, 0))
 if not _atm_pe_ohlc_real and _atm_pe_candle_h:
     _atm_pe_day_high = _atm_pe_candle_h
 elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
-    _atm_pe_day_high = float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
+    _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
+                       or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 # Always recompute here so even a mid-day data gap gets recovered
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_atm_ce_day_high, _atm_pe_day_high)
@@ -3792,21 +3799,41 @@ if True:  # always render — individual cells show "—" if data missing
 # Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
 _tk_ce_ltp  = near_ce.get(float(atm), 0)
 _tk_pe_ltp  = near_pe.get(float(atm), 0)
-# Day H/L: chain ohlc.high/low (parsed in near_ce_high/near_pe_high/near_ce_low/near_pe_low)
-# Fallback to candle-computed H/L when chain doesn't include ohlc (pre-market etc.)
-_tk_ce_h = near_ce_high.get(float(atm)) or _atm_ce_candle_h or None
-_tk_pe_h = near_pe_high.get(float(atm)) or _atm_pe_candle_h or None
-_tk_ce_l = near_ce_low.get(float(atm), 0) or _atm_ce_candle_l or None
-_tk_pe_l = near_pe_low.get(float(atm), 0) or _atm_pe_candle_l or None
+# Day H/L priority:
+#   1. Chain OHLC (market_data.ohlc.high/low) — live during session
+#   2. market-quote / candle API (_atm_ce_candle_h/l) — live during session
+#   3. Prev-day H/L from SPP calc (_spp_ce_h/l) — fallback pre/post market, marked ᵖ
+_tk_ce_h_raw = near_ce_high.get(float(atm)) or _atm_ce_candle_h
+_tk_pe_h_raw = near_pe_high.get(float(atm)) or _atm_pe_candle_h
+_tk_ce_l_raw = near_ce_low.get(float(atm))  or _atm_ce_candle_l
+_tk_pe_l_raw = near_pe_low.get(float(atm))  or _atm_pe_candle_l
 
-# VWAP sanity: reject prev-day candle contamination (expect within 0.15×–5× of LTP)
+_tk_hl_prev = False   # flag: showing prev-day data
+if not _tk_ce_h_raw and not _tk_pe_h_raw:
+    # No intraday data yet — fall back to prev-day SPP H/L
+    _tk_ce_h_raw = _spp_ce_h if _spp is not None else None
+    _tk_pe_h_raw = _spp_pe_h if _spp is not None else None
+    _tk_ce_l_raw = _spp_ce_l if _spp is not None else None
+    _tk_pe_l_raw = _spp_pe_l if _spp is not None else None
+    _tk_hl_prev  = True
+
+_tk_ce_h = _tk_ce_h_raw
+_tk_pe_h = _tk_pe_h_raw
+_tk_ce_l = _tk_ce_l_raw
+_tk_pe_l = _tk_pe_l_raw
+
+# VWAP: chain market_data.vwap is the cleanest source (same field as SDK strike_data.ce.vwap).
+# Fall back to candle-computed VWAP only when chain returns None/0.
+# Sanity filter rejects values outside 0.15×–5× LTP (catches prev-day candle contamination).
 def _sane_vwap(vwap, ltp):
     if not vwap or not ltp:
         return None
     return vwap if 0.15 * ltp < vwap < 5.0 * ltp else None
 
-_tk_ce_vwap = _sane_vwap(_atm_ce_vwap, _tk_ce_ltp)
-_tk_pe_vwap = _sane_vwap(_atm_pe_vwap, _tk_pe_ltp)
+_chain_ce_vwap = near_ce_vwap.get(float(atm))
+_chain_pe_vwap = near_pe_vwap.get(float(atm))
+_tk_ce_vwap = _sane_vwap(_chain_ce_vwap or _atm_ce_vwap, _tk_ce_ltp)
+_tk_pe_vwap = _sane_vwap(_chain_pe_vwap or _atm_pe_vwap, _tk_pe_ltp)
 
 _tk_atm_str = str(atm)
 _tk_f       = lambda v, d=2: f"{v:.{d}f}" if v else "—"
@@ -3857,15 +3884,15 @@ st.markdown(
     + _tr(f"{_tk_atm_str} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
     # Row 5 — CE VWAP (sanity-filtered; "—" if prev-day contamination detected)
     + _tr(f"{_tk_atm_str} CE VWAP", _tk_f(_tk_ce_vwap) if _tk_ce_vwap else "—", "var(--ce)")
-    # Row 6 — CE H/L (from intraday 1-min candles)
-    + _tr(f"{_tk_atm_str} CE H/L",
+    # Row 6 — CE H/L (intraday; ᵖ = prev-day fallback)
+    + _tr(f"{_tk_atm_str} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
     # Row 7 — PE LTP
     + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
     # Row 8 — PE VWAP (sanity-filtered)
     + _tr(f"{_tk_atm_str} PE VWAP", _tk_f(_tk_pe_vwap) if _tk_pe_vwap else "—", "var(--pe)")
-    # Row 9 — PE H/L (from intraday 1-min candles)
-    + _tr(f"{_tk_atm_str} PE H/L",
+    # Row 9 — PE H/L (intraday; ᵖ = prev-day fallback)
+    + _tr(f"{_tk_atm_str} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
     # Row 10 — TSI (SPCL VAL) with trend signal
     + _tr("TSI", _tk_tsi_val, _tk_tsi_col)
