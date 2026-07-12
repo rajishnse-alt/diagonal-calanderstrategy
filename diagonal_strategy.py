@@ -832,11 +832,38 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
         return None, None, "—", "var(--muted)"
 
 
+def _calc_traditional_pivots(ph, pl, pc):
+    """
+    Traditional Pivot Points — exact match to TradingView ta.pivot_point_levels("Traditional").
+    Pine Script source:
+      P  = (H + L + C) / 3
+      R1 = 2P - L        S1 = 2P - H
+      R2 = P + (H - L)   S2 = P - (H - L)
+      R3 = H + 2*(P - L) S3 = L - 2*(H - P)
+      R4 = H + 3*(P - L) S4 = L - 3*(H - P)
+      R5 = H + 4*(P - L) S5 = L - 4*(H - P)
+    """
+    p  = (ph + pl + pc) / 3.0
+    hl = ph - pl
+    r1 = 2.0*p  - pl
+    s1 = 2.0*p  - ph
+    r2 = p  + hl
+    s2 = p  - hl
+    r3 = ph + 2.0*(p - pl)
+    s3 = pl - 2.0*(ph - p)
+    r4 = ph + 3.0*(p - pl)
+    s4 = pl - 3.0*(ph - p)
+    r5 = ph + 4.0*(p - pl)
+    s5 = pl - 4.0*(ph - p)
+    return dict(p=p, r1=r1,r2=r2,r3=r3,r4=r4,r5=r5,
+                     s1=s1,s2=s2,s3=s3,s4=s4,s5=s5,
+                prev_h=ph, prev_l=pl, prev_c=pc)
+
+
 def fetch_strike_pivots(tok, chain_data, strike, option_type):
     """
-    Standard pivot points from the prev-day OHLC of a specific option strike.
-    option_type: "CE" or "PE"
-    Returns dict with p, r1, r2, s1, s2 or None on failure.
+    Traditional pivot points from the prev-day OHLC of a specific option strike.
+    Matches TradingView's ta.pivot_point_levels("Traditional") on Daily anchor.
     """
     try:
         side_key = "call_options" if option_type == "CE" else "put_options"
@@ -863,27 +890,19 @@ def fetch_strike_pivots(tok, chain_data, strike, option_type):
         if not prev:
             return None
         c = prev[0]
+        # Upstox daily candle: [ts, open, high, low, close, volume, oi]
         ph, pl, pc = float(c[2]), float(c[3]), float(c[4])
         if ph <= 0 or pl <= 0:
             return None
-        p  = (ph + pl + pc) / 3
-        r1 = 2 * p - pl
-        r2 = p + (ph - pl)
-        s1 = 2 * p - ph
-        s2 = p - (ph - pl)
-        return dict(p=p, r1=r1, r2=r2, s1=s1, s2=s2,
-                    prev_h=ph, prev_l=pl, prev_c=pc)
+        return _calc_traditional_pivots(ph, pl, pc)
     except Exception:
         return None
 
 
 def fetch_spot_pivots(tok, inst_key):
     """
-    Standard pivot points from previous day's OHLC of the spot index.
-    P  = (H + L + C) / 3
-    R1 = 2P - L   R2 = P + (H - L)   R3 = H + 2(P - L)
-    S1 = 2P - H   S2 = P - (H - L)   S3 = L - 2(H - P)
-    Returns dict with keys p, r1, r2, r3, s1, s2, s3, prev_date, or None on failure.
+    Traditional pivot points from previous day's OHLC of the spot index.
+    Uses _calc_traditional_pivots — exact match to TradingView ta.pivot_point_levels("Traditional").
     """
     try:
         enc     = urllib.parse.quote(inst_key, safe="")
@@ -895,21 +914,13 @@ def fetch_spot_pivots(tok, inst_key):
             headers=hdrs, timeout=10,
         )
         candles = (resp.json().get("data") or {}).get("candles") or []
-        # newest first; index 0 = today (incomplete), index 1 = yesterday
         if len(candles) < 2:
             return None
-        prev = candles[1]          # [ts, open, high, low, close, vol, oi]
+        prev = candles[1]   # [ts, open, high, low, close, vol, oi]
         ph, pl, pc = float(prev[2]), float(prev[3]), float(prev[4])
-        p  = (ph + pl + pc) / 3
-        r1 = 2 * p - pl
-        r2 = p + (ph - pl)
-        r3 = ph + 2 * (p - pl)
-        s1 = 2 * p - ph
-        s2 = p - (ph - pl)
-        s3 = pl - 2 * (ph - p)
-        return dict(p=p, r1=r1, r2=r2, r3=r3, s1=s1, s2=s2, s3=s3,
-                    prev_h=ph, prev_l=pl, prev_c=pc,
-                    prev_date=str(prev[0])[:10])
+        result = _calc_traditional_pivots(ph, pl, pc)
+        result["prev_date"] = str(prev[0])[:10]
+        return result
     except Exception:
         return None
 
@@ -3821,11 +3832,20 @@ def _get_strike_pivots(strike, option_type):
     return piv
 
 def _nearest_sr(ltp, piv):
-    """Return (sup_label, sup_val, res_label, res_val) nearest to ltp."""
+    """
+    Return (sup_label, sup_val, res_label, res_val) nearest to ltp.
+    Uses all Traditional pivot levels: P, R1-R5, S1-S5.
+    """
     if not piv or not ltp:
         return None, None, None, None
-    levels = [("P", piv["p"]), ("R1", piv["r1"]), ("R2", piv["r2"]),
-              ("S1", piv["s1"]), ("S2", piv["s2"])]
+    levels = [
+        ("P",  piv.get("p")),
+        ("R1", piv.get("r1")), ("R2", piv.get("r2")), ("R3", piv.get("r3")),
+        ("R4", piv.get("r4")), ("R5", piv.get("r5")),
+        ("S1", piv.get("s1")), ("S2", piv.get("s2")), ("S3", piv.get("s3")),
+        ("S4", piv.get("s4")), ("S5", piv.get("s5")),
+    ]
+    levels = [(l, v) for l, v in levels if v is not None]
     above  = [(l, v) for l, v in levels if v > ltp]
     below  = [(l, v) for l, v in levels if v <= ltp]
     rl, rv = min(above, key=lambda x: x[1]) if above else (None, None)
