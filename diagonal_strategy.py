@@ -3859,16 +3859,39 @@ if True:  # always render — individual cells show "—" if data missing
 
     _sc1, _sc2, _sc3 = st.columns(3)
 
-    with _sc1:
-        def _strike_pills(items, color):
-            if not items:
-                return "<span style='color:var(--muted);font-size:9px;'>—</span>"
-            return " ".join(
+    def _strike_pills(items, color):
+        if not items:
+            return "<span style='color:var(--muted);font-size:9px;'>—</span>"
+        return " ".join(
+            f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
+            f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
+            for s, ltp in items
+        )
+
+    def _strike_pills_with_piv(items, option_type, color):
+        """Strike pills with nearest S/R from that strike's own prev-day OHLC."""
+        if not items:
+            return "<span style='color:var(--muted);font-size:9px;'>—</span>"
+        piv_map = _ce_strike_pivots if option_type == "CE" else _pe_strike_pivots
+        parts = []
+        for s, ltp in items:
+            piv = piv_map.get(s)
+            sl, sv, rl, rv = _nearest_sr(ltp, piv)
+            pill = (
                 f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
                 f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
-                for s, ltp in items
             )
+            sr_parts = []
+            if sl:
+                sr_parts.append(f"<span style='color:#f06292;font-size:9px;'>S:{sl} {sv:.1f}</span>")
+            if rl:
+                sr_parts.append(f"<span style='color:#4fc3f7;font-size:9px;'>R:{rl} {rv:.1f}</span>")
+            if sr_parts:
+                pill += " " + " ".join(sr_parts)
+            parts.append(pill)
+        return "  ".join(parts)
 
+    with _sc1:
         def _nearest_strike(price_map, target):
             """Return (strike, ltp) whose LTP is closest to target."""
             if not target or not price_map:
@@ -3922,29 +3945,6 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
-
-    def _strike_pills_with_piv(items, option_type, color):
-        """Strike pills with nearest S/R from that strike's own prev-day OHLC."""
-        if not items:
-            return "<span style='color:var(--muted);font-size:9px;'>—</span>"
-        piv_map = _ce_strike_pivots if option_type == "CE" else _pe_strike_pivots
-        parts = []
-        for s, ltp in items:
-            piv = piv_map.get(s)
-            sl, sv, rl, rv = _nearest_sr(ltp, piv)
-            pill = (
-                f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
-                f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
-            )
-            sr_parts = []
-            if sl:
-                sr_parts.append(f"<span style='color:#f06292;font-size:9px;'>S:{sl} {sv:.1f}</span>")
-            if rl:
-                sr_parts.append(f"<span style='color:#4fc3f7;font-size:9px;'>R:{rl} {rv:.1f}</span>")
-            if sr_parts:
-                pill += " " + " ".join(sr_parts)
-            parts.append(pill)
-        return "  ".join(parts)
 
     with _sc2:
         st.markdown(
