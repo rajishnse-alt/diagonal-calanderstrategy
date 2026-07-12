@@ -3993,51 +3993,40 @@ if True:  # always render — individual cells show "—" if data missing
             unsafe_allow_html=True)
 
     with _sc2:
+        # PE card: proj_pe_low + proj_pe_high + PE in-range strikes (once)
         st.markdown(
             f"<div class='card'>"
-            f"<div class='lbl' style='margin-bottom:6px;'>Proj Low &nbsp;·&nbsp; {_spcl_low_tag} cross-leg</div>"
-            # →PE Low + PE strikes in range
-            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
-            f"<span style='font-size:10px;color:var(--muted);'>→PE Low</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_low)}</span>"
+            f"<div class='lbl' style='margin-bottom:6px;'>PE Projections &nbsp;·&nbsp; {_spcl_low_tag} / {_spcl_high_tag}</div>"
+            # Low / High row
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;'>"
+            f"<div><div style='font-size:8px;color:var(--muted);'>Low</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_low)}</div></div>"
+            f"<div style='text-align:right;'><div style='font-size:8px;color:var(--muted);'>High</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_high)}</div></div>"
             f"</div>"
-            f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
-            f"</div>"
-            # →CE Low + CE strikes with their S/R
-            f"<div style='padding:4px 0;'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
-            f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_low)}</span>"
-            f"</div>"
-            f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
+            # PE in-range strikes with pivots (shown once)
+            f"<div style='border-top:1px solid var(--border);padding-top:4px;'>"
+            f"{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
     with _sc3:
-        _pct_pe_h1 = (_proj_pe_high / _atm_pe_day_high * 100) if (_proj_pe_high and _atm_pe_day_high) else 0
+        # CE card: proj_ce_low + proj_ce_high + CE in-range strikes (once)
         _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if (_proj_ce_high and _atm_ce_day_high) else 0
         st.markdown(
             f"<div class='card'>"
-            f"<div class='lbl' style='margin-bottom:6px;'>Proj High &nbsp;·&nbsp; {_spcl_high_tag} uplift</div>"
-            # →PE High + PE strikes
-            f"<div style='padding:4px 0;border-bottom:1px solid var(--border);'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
-            f"<span style='font-size:10px;color:var(--muted);'>→PE High</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_high)}</span>"
+            f"<div class='lbl' style='margin-bottom:6px;'>CE Projections &nbsp;·&nbsp; {_spcl_low_tag} / {_spcl_high_tag}</div>"
+            # Low / High row
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;'>"
+            f"<div><div style='font-size:8px;color:var(--muted);'>Low</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_low)}</div></div>"
+            f"<div style='text-align:right;'><div style='font-size:8px;color:var(--muted);'>High</div>"
+            f"<div style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_high)}</div></div>"
             f"</div>"
-            + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_pe_h1:.2f}% of PE H</div>" if _pct_pe_h1 else "")
-            + f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
-            f"</div>"
-            # →CE High + CE strikes with their S/R
-            f"<div style='padding:4px 0;'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
-            f"<span style='font-size:10px;color:var(--muted);'>→CE High</span>"
-            f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_high)}</span>"
-            f"</div>"
-            + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_ce_h1:.2f}% of CE H</div>" if _pct_ce_h1 else "")
-            + f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
+            # CE in-range strikes with pivots (shown once)
+            f"<div style='border-top:1px solid var(--border);padding-top:4px;'>"
+            f"{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
