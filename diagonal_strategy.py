@@ -3971,9 +3971,7 @@ if True:  # always render — individual cells show "—" if data missing
                 f"</div>"
                 if _ce_spcl_strike else ""
             )
-            + f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>CE in range {_fmt_s(_proj_ce_low)}–{_fmt_s(_proj_ce_high)}</div>"
-            f"<div style='margin-top:2px;'>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
-            f"</div>"
+            + f"</div>"
             # PeSPCL row
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
@@ -3990,9 +3988,7 @@ if True:  # always render — individual cells show "—" if data missing
                 f"</div>"
                 if _pe_spcl_strike else ""
             )
-            + f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>PE in range {_fmt_s(_proj_pe_low)}–{_fmt_s(_proj_pe_high)}</div>"
-            f"<div style='margin-top:2px;'>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
-            f"</div>"
+            + f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
