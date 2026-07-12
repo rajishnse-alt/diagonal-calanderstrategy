@@ -3889,27 +3889,57 @@ if True:  # always render — individual cells show "—" if data missing
         )
 
     def _strike_pills_with_piv(items, option_type, color):
-        """Strike pills with nearest S/R from that strike's own prev-day OHLC."""
+        """Strike + LTP + all pivot levels (P bold, R1-R5 blue, S1-S5 pink)."""
         if not items:
             return "<span style='color:var(--muted);font-size:9px;'>—</span>"
         piv_map = _ce_strike_pivots if option_type == "CE" else _pe_strike_pivots
         parts = []
         for s, ltp in items:
             piv = piv_map.get(s)
-            sl, sv, rl, rv = _nearest_sr(ltp, piv)
-            pill = (
-                f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
-                f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
+            # Strike + LTP header
+            html = (
+                f"<div style='margin-bottom:4px;'>"
+                f"<span style='color:{color};font-weight:700;font-size:12px;'>{s}</span>"
+                f"<span style='color:var(--muted);font-size:10px;'> LTP ₹{ltp:.2f}</span>"
+                f"</div>"
             )
-            sr_parts = []
-            if sl:
-                sr_parts.append(f"<span style='color:#f06292;font-size:9px;'>S:{sl} {sv:.1f}</span>")
-            if rl:
-                sr_parts.append(f"<span style='color:#4fc3f7;font-size:9px;'>R:{rl} {rv:.1f}</span>")
-            if sr_parts:
-                pill += " " + " ".join(sr_parts)
-            parts.append(pill)
-        return "  ".join(parts)
+            if piv:
+                # All pivot levels in order: R5→R1→P→S1→S5
+                pivot_rows = [
+                    ("R5", piv.get("r5"), "#b3e5fc"),
+                    ("R4", piv.get("r4"), "#81d4fa"),
+                    ("R3", piv.get("r3"), "#4fc3f7"),
+                    ("R2", piv.get("r2"), "#29b6f6"),
+                    ("R1", piv.get("r1"), "#039be5"),
+                    ("P",  piv.get("p"),  "#ffffff"),
+                    ("S1", piv.get("s1"), "#f48fb1"),
+                    ("S2", piv.get("s2"), "#f06292"),
+                    ("S3", piv.get("s3"), "#ec407a"),
+                    ("S4", piv.get("s4"), "#e91e63"),
+                    ("S5", piv.get("s5"), "#c2185b"),
+                ]
+                for lbl, val, col in pivot_rows:
+                    if val is None:
+                        continue
+                    is_p   = lbl == "P"
+                    is_sup = lbl.startswith("S")
+                    # Bold P; mark nearest S/R with ◀
+                    sl, sv, rl, rv = _nearest_sr(ltp, piv)
+                    nearest = (lbl == sl) or (lbl == rl)
+                    html += (
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"padding:1px 0;border-bottom:1px solid rgba(255,255,255,0.04);'>"
+                        f"<span style='color:{col};font-size:9px;"
+                        f"font-weight:{'900' if is_p else '400'};'>"
+                        f"{'▶ ' if nearest else ''}{lbl}</span>"
+                        f"<span style='color:{col};font-family:var(--mono);font-size:9px;"
+                        f"font-weight:{'900' if is_p else '400'};'>{val:.2f}</span>"
+                        f"</div>"
+                    )
+            else:
+                html += "<span style='color:var(--muted);font-size:9px;'>pivot data unavailable</span>"
+            parts.append(f"<div style='margin-bottom:8px;'>{html}</div>")
+        return "".join(parts)
 
     with _sc1:
         def _nearest_strike(price_map, target):
