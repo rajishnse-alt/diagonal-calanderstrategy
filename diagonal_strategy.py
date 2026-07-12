@@ -832,6 +832,43 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
         return None, None, "—", "var(--muted)"
 
 
+def fetch_spot_pivots(tok, inst_key):
+    """
+    Standard pivot points from previous day's OHLC of the spot index.
+    P  = (H + L + C) / 3
+    R1 = 2P - L   R2 = P + (H - L)   R3 = H + 2(P - L)
+    S1 = 2P - H   S2 = P - (H - L)   S3 = L - 2(H - P)
+    Returns dict with keys p, r1, r2, r3, s1, s2, s3, prev_date, or None on failure.
+    """
+    try:
+        enc     = urllib.parse.quote(inst_key, safe="")
+        to_date = datetime.now(IST).strftime("%Y-%m-%d")
+        from_dt = (datetime.now(IST) - timedelta(days=10)).strftime("%Y-%m-%d")
+        hdrs    = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+        resp    = requests.get(
+            f"https://api.upstox.com/v2/historical-candle/{enc}/day/{to_date}/{from_dt}",
+            headers=hdrs, timeout=10,
+        )
+        candles = (resp.json().get("data") or {}).get("candles") or []
+        # newest first; index 0 = today (incomplete), index 1 = yesterday
+        if len(candles) < 2:
+            return None
+        prev = candles[1]          # [ts, open, high, low, close, vol, oi]
+        ph, pl, pc = float(prev[2]), float(prev[3]), float(prev[4])
+        p  = (ph + pl + pc) / 3
+        r1 = 2 * p - pl
+        r2 = p + (ph - pl)
+        r3 = ph + 2 * (p - pl)
+        s1 = 2 * p - ph
+        s2 = p - (ph - pl)
+        s3 = pl - 2 * (ph - p)
+        return dict(p=p, r1=r1, r2=r2, r3=r3, s1=s1, s2=s2, s3=s3,
+                    prev_h=ph, prev_l=pl, prev_c=pc,
+                    prev_date=str(prev[0])[:10])
+    except Exception:
+        return None
+
+
 def fetch_atm_day_hl(tok, chain_data, atm_strike):
     """
     Fetch today's day H/L for ATM CE and PE.
@@ -2987,6 +3024,17 @@ else:
             "tsi": _spot_tsi, "sig": _spot_tsi_sig,
             "label": _tsi_trend, "color": _tsi_col,
         }
+# ── Standard Pivot Points — prev-day spot OHLC ───────────────────────────────
+_pivot_cache_key = f"{now.date().isoformat()}_{_inst_choice}_pivots"
+_pivot_cached    = st.session_state.get("spot_pivot_cache", {})
+if _pivot_cached.get("key") == _pivot_cache_key and _pivot_cached.get("p") is not None:
+    _pivots = _pivot_cached
+else:
+    _pivots = fetch_spot_pivots(token, _INST["key"]) if token else None
+    if _pivots:
+        _pivots["key"] = _pivot_cache_key
+        st.session_state["spot_pivot_cache"] = _pivots
+
 _pcr_has_oi = _tot_ce_oi > 0
 
 # ATM-specific OI (single strike)
@@ -3803,6 +3851,31 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>",
             unsafe_allow_html=True)
 
+    # ── Pivot helper: nearest S/R to a price level ───────────────────────────
+    def _pivot_near(price):
+        """Return (label, value) of nearest support and resistance to price."""
+        if not _pivots or not price:
+            return None, None, None, None
+        levels = [
+            ("P",  _pivots["p"]),
+            ("R1", _pivots["r1"]), ("R2", _pivots["r2"]), ("R3", _pivots["r3"]),
+            ("S1", _pivots["s1"]), ("S2", _pivots["s2"]), ("S3", _pivots["s3"]),
+        ]
+        above = [(lbl, v) for lbl, v in levels if v > price]
+        below = [(lbl, v) for lbl, v in levels if v <= price]
+        res_lbl, res_val = min(above, key=lambda x: x[1]) if above else (None, None)
+        sup_lbl, sup_val = max(below, key=lambda x: x[1]) if below else (None, None)
+        return sup_lbl, sup_val, res_lbl, res_val
+
+    def _pivot_html(price, color_sup="var(--pe)", color_res="var(--ce)"):
+        sup_lbl, sup_val, res_lbl, res_val = _pivot_near(price)
+        parts = []
+        if sup_lbl:
+            parts.append(f"<span style='color:{color_sup};font-size:9px;font-weight:700;'>{sup_lbl} {sup_val:,.0f}</span>")
+        if res_lbl:
+            parts.append(f"<span style='color:{color_res};font-size:9px;font-weight:700;'>{res_lbl} {res_val:,.0f}</span>")
+        return " &nbsp;·&nbsp; ".join(parts) if parts else ""
+
     with _sc2:
         st.markdown(
             f"<div class='card'>"
@@ -3814,15 +3887,17 @@ if True:  # always render — individual cells show "—" if data missing
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_low)}</span>"
             f"</div>"
             f"<div style='margin-top:3px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
-            f"</div>"
-            # →CE Low + CE strikes in range
+            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_pe_low)}</div>" if _pivots else "")
+            + f"</div>"
+            # →CE Low + CE strikes in range + pivot
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_low)}</span>"
             f"</div>"
             f"<div style='margin-top:3px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
-            f"</div>"
+            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_ce_low)}</div>" if _pivots else "")
+            + f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
@@ -3840,8 +3915,9 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>"
             + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_pe_h1:.2f}% of PE H</div>" if _pct_pe_h1 else "")
             + f"<div style='margin-top:3px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
-            f"</div>"
-            # →CE High + CE strikes
+            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_pe_high)}</div>" if _pivots else "")
+            + f"</div>"
+            # →CE High + CE strikes + pivot
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE High</span>"
@@ -3849,7 +3925,8 @@ if True:  # always render — individual cells show "—" if data missing
             f"</div>"
             + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_ce_h1:.2f}% of CE H</div>" if _pct_ce_h1 else "")
             + f"<div style='margin-top:3px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
-            f"</div>"
+            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_ce_high)}</div>" if _pivots else "")
+            + f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
