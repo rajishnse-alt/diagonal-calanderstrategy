@@ -832,6 +832,51 @@ def fetch_spot_tsi(tok, inst_key, r=25, s=13, lookback=120):
         return None, None, "—", "var(--muted)"
 
 
+def fetch_strike_pivots(tok, chain_data, strike, option_type):
+    """
+    Standard pivot points from the prev-day OHLC of a specific option strike.
+    option_type: "CE" or "PE"
+    Returns dict with p, r1, r2, s1, s2 or None on failure.
+    """
+    try:
+        side_key = "call_options" if option_type == "CE" else "put_options"
+        inst_key = None
+        for row in chain_data:
+            if int(float(row.get("strike_price", 0))) == int(strike):
+                inst_key = (row.get(side_key) or {}).get("instrument_key")
+                break
+        if not inst_key:
+            return None
+        today     = datetime.now(IST).date()
+        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_date   = today.strftime("%Y-%m-%d")
+        enc       = urllib.parse.quote(inst_key, safe="")
+        r = requests.get(
+            f"https://api.upstox.com/v2/historical-candle/{enc}/day/{to_date}/{from_date}",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
+            timeout=10,
+        )
+        candles = (r.json().get("data") or {}).get("candles") or []
+        today_s = today.isoformat()
+        prev = sorted([c for c in candles if str(c[0])[:10] < today_s],
+                      key=lambda c: c[0], reverse=True)
+        if not prev:
+            return None
+        c = prev[0]
+        ph, pl, pc = float(c[2]), float(c[3]), float(c[4])
+        if ph <= 0 or pl <= 0:
+            return None
+        p  = (ph + pl + pc) / 3
+        r1 = 2 * p - pl
+        r2 = p + (ph - pl)
+        s1 = 2 * p - ph
+        s2 = p - (ph - pl)
+        return dict(p=p, r1=r1, r2=r2, s1=s1, s2=s2,
+                    prev_h=ph, prev_l=pl, prev_c=pc)
+    except Exception:
+        return None
+
+
 def fetch_spot_pivots(tok, inst_key):
     """
     Standard pivot points from previous day's OHLC of the spot index.
@@ -3763,6 +3808,33 @@ def _strikes_in_range(price_map, lo, hi):
 _ce_range_strikes = _strikes_in_range(near_ce, _proj_ce_low, _proj_ce_high)
 _pe_range_strikes = _strikes_in_range(near_pe, _proj_pe_low, _proj_pe_high)
 
+# Pivot points for each in-range strike (from that strike's own prev-day OHLC)
+def _get_strike_pivots(strike, option_type):
+    """Cached per strike per day."""
+    _key = f"{now.date().isoformat()}_{_inst_choice}_{strike}_{option_type}_piv"
+    _c   = st.session_state.get(_key)
+    if _c:
+        return _c
+    piv = fetch_strike_pivots(token, near_raw, strike, option_type) if token else None
+    if piv:
+        st.session_state[_key] = piv
+    return piv
+
+def _nearest_sr(ltp, piv):
+    """Return (sup_label, sup_val, res_label, res_val) nearest to ltp."""
+    if not piv or not ltp:
+        return None, None, None, None
+    levels = [("P", piv["p"]), ("R1", piv["r1"]), ("R2", piv["r2"]),
+              ("S1", piv["s1"]), ("S2", piv["s2"])]
+    above  = [(l, v) for l, v in levels if v > ltp]
+    below  = [(l, v) for l, v in levels if v <= ltp]
+    rl, rv = min(above, key=lambda x: x[1]) if above else (None, None)
+    sl, sv = max(below, key=lambda x: x[1]) if below else (None, None)
+    return sl, sv, rl, rv
+
+_ce_strike_pivots = {s: _get_strike_pivots(s, "CE") for s, _ in _ce_range_strikes}
+_pe_strike_pivots = {s: _get_strike_pivots(s, "PE") for s, _ in _pe_range_strikes}
+
 def _fmt_proj_strikes(items, color):
     if not items:
         return "<span style='color:var(--muted);font-size:9px;'>no strikes in range</span>"
@@ -3827,7 +3899,7 @@ if True:  # always render — individual cells show "—" if data missing
                 if _ce_spcl_strike else ""
             )
             + f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>CE in range {_fmt_s(_proj_ce_low)}–{_fmt_s(_proj_ce_high)}</div>"
-            f"<div style='margin-top:2px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
+            f"<div style='margin-top:2px;'>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
             f"</div>"
             # PeSPCL row
             f"<div style='padding:4px 0;'>"
@@ -3846,35 +3918,33 @@ if True:  # always render — individual cells show "—" if data missing
                 if _pe_spcl_strike else ""
             )
             + f"<div style='font-size:9px;color:var(--muted);margin-top:3px;'>PE in range {_fmt_s(_proj_pe_low)}–{_fmt_s(_proj_pe_high)}</div>"
-            f"<div style='margin-top:2px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
+            f"<div style='margin-top:2px;'>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
-    # ── Pivot helper: nearest S/R to a price level ───────────────────────────
-    def _pivot_near(price):
-        """Return (label, value) of nearest support and resistance to price."""
-        if not _pivots or not price:
-            return None, None, None, None
-        levels = [
-            ("P",  _pivots["p"]),
-            ("R1", _pivots["r1"]), ("R2", _pivots["r2"]), ("R3", _pivots["r3"]),
-            ("S1", _pivots["s1"]), ("S2", _pivots["s2"]), ("S3", _pivots["s3"]),
-        ]
-        above = [(lbl, v) for lbl, v in levels if v > price]
-        below = [(lbl, v) for lbl, v in levels if v <= price]
-        res_lbl, res_val = min(above, key=lambda x: x[1]) if above else (None, None)
-        sup_lbl, sup_val = max(below, key=lambda x: x[1]) if below else (None, None)
-        return sup_lbl, sup_val, res_lbl, res_val
-
-    def _pivot_html(price, color_sup="var(--pe)", color_res="var(--ce)"):
-        sup_lbl, sup_val, res_lbl, res_val = _pivot_near(price)
+    def _strike_pills_with_piv(items, option_type, color):
+        """Strike pills with nearest S/R from that strike's own prev-day OHLC."""
+        if not items:
+            return "<span style='color:var(--muted);font-size:9px;'>—</span>"
+        piv_map = _ce_strike_pivots if option_type == "CE" else _pe_strike_pivots
         parts = []
-        if sup_lbl:
-            parts.append(f"<span style='color:{color_sup};font-size:9px;font-weight:700;'>{sup_lbl} {sup_val:,.0f}</span>")
-        if res_lbl:
-            parts.append(f"<span style='color:{color_res};font-size:9px;font-weight:700;'>{res_lbl} {res_val:,.0f}</span>")
-        return " &nbsp;·&nbsp; ".join(parts) if parts else ""
+        for s, ltp in items:
+            piv = piv_map.get(s)
+            sl, sv, rl, rv = _nearest_sr(ltp, piv)
+            pill = (
+                f"<span style='color:{color};font-weight:700;font-size:11px;'>{s}</span>"
+                f"<span style='color:var(--muted);font-size:9px;'> ₹{ltp:.1f}</span>"
+            )
+            sr_parts = []
+            if sl:
+                sr_parts.append(f"<span style='color:#f06292;font-size:9px;'>S:{sl} {sv:.1f}</span>")
+            if rl:
+                sr_parts.append(f"<span style='color:#4fc3f7;font-size:9px;'>R:{rl} {rv:.1f}</span>")
+            if sr_parts:
+                pill += " " + " ".join(sr_parts)
+            parts.append(pill)
+        return "  ".join(parts)
 
     with _sc2:
         st.markdown(
@@ -3886,18 +3956,16 @@ if True:  # always render — individual cells show "—" if data missing
             f"<span style='font-size:10px;color:var(--muted);'>→PE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_low)}</span>"
             f"</div>"
-            f"<div style='margin-top:3px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
-            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_pe_low)}</div>" if _pivots else "")
-            + f"</div>"
-            # →CE Low + CE strikes in range + pivot
+            f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
+            f"</div>"
+            # →CE Low + CE strikes with their S/R
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE Low</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_low)}</span>"
             f"</div>"
-            f"<div style='margin-top:3px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
-            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_ce_low)}</div>" if _pivots else "")
-            + f"</div>"
+            f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
+            f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
@@ -3914,19 +3982,17 @@ if True:  # always render — individual cells show "—" if data missing
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pe);'>{_fmt_s(_proj_pe_high)}</span>"
             f"</div>"
             + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_pe_h1:.2f}% of PE H</div>" if _pct_pe_h1 else "")
-            + f"<div style='margin-top:3px;'>{_strike_pills(_pe_range_strikes, 'var(--pe)')}</div>"
-            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_pe_high)}</div>" if _pivots else "")
-            + f"</div>"
-            # →CE High + CE strikes + pivot
+            + f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
+            f"</div>"
+            # →CE High + CE strikes with their S/R
             f"<div style='padding:4px 0;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--muted);'>→CE High</span>"
             f"<span style='font-family:var(--mono);font-size:16px;font-weight:700;color:var(--ce);'>{_fmt_s(_proj_ce_high)}</span>"
             f"</div>"
             + (f"<div style='font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px;'>{_pct_ce_h1:.2f}% of CE H</div>" if _pct_ce_h1 else "")
-            + f"<div style='margin-top:3px;'>{_strike_pills(_ce_range_strikes, 'var(--ce)')}</div>"
-            + (f"<div style='margin-top:2px;'>{_pivot_html(_proj_ce_high)}</div>" if _pivots else "")
-            + f"</div>"
+            + f"<div style='margin-top:3px;'>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
+            f"</div>"
             f"</div>",
             unsafe_allow_html=True)
 
