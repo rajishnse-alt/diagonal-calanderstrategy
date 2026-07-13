@@ -481,6 +481,25 @@ def fetch_expiries(tok):
         return None, str(e)
 
 
+def get_nearest_expiry(all_exp, now_ist):
+    """
+    Auto-pick the truly nearest live expiry from all_exp.
+    Rules:
+      - If today is an expiry date AND it's before 15:30 IST → return today's expiry.
+      - If past 15:30 IST on expiry day (market closed) → skip to the next one.
+      - Always returns the soonest future expiry otherwise.
+    """
+    today        = now_ist.date()
+    past_cutoff  = now_ist >= now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    for exp in sorted(all_exp):
+        exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+        if exp_date > today:
+            return exp
+        if exp_date == today and not past_cutoff:
+            return exp
+    return sorted(all_exp)[-1] if all_exp else None
+
+
 def fetch_chain(tok, expiry):
     for url in UPSTOX_OC_URLS:
         try:
@@ -2285,11 +2304,13 @@ if exp_err == "token_expired":
 if exp_err or not all_exp:
     st.error(f"Expiry fetch failed: {exp_err}"); st.stop()
 
-today         = datetime.now(IST).date()
-near_cutoff   = today + timedelta(weeks=3)
-far_cutoff    = today + timedelta(weeks=2)
-near_expiries = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() <= near_cutoff] or all_exp[:2]
-far_expiries  = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() >= far_cutoff]  or all_exp[4:]
+today           = datetime.now(IST).date()
+near_cutoff     = today + timedelta(weeks=3)
+far_cutoff      = today + timedelta(weeks=2)
+near_expiries   = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() <= near_cutoff] or all_exp[:2]
+far_expiries    = [d for d in all_exp if datetime.strptime(d,"%Y-%m-%d").date() >= far_cutoff]  or all_exp[4:]
+# Auto nearest expiry — always the soonest live one (independent of trading selection)
+_auto_near_exp  = get_nearest_expiry(all_exp, now)
 
 col_e1, col_e2 = st.columns(2)
 with col_e1:
@@ -3161,7 +3182,8 @@ if "spp_cache_loaded" not in st.session_state:
     st.session_state["spp_cache_loaded"] = True
 
 _spp_store  = st.session_state["spp_cache"]          # live reference
-_spp_key    = f"{_today_str}|{_inst_choice}|{near_exp}"
+# SPP always uses the auto-detected nearest expiry (not the trading selection)
+_spp_key    = f"{_today_str}|{_inst_choice}|{_auto_near_exp}"
 _spp_cached = _spp_store.get(_spp_key, {})
 
 # Invalidate cache if it was computed before 09:05 IST and market has since opened
@@ -3189,9 +3211,9 @@ if _spp_cached:
 else:
     # Miss — compute once for this instrument+expiry today
     _spp_atm = _open_atm if _open_atm else atm
-    with st.spinner(f"Computing SPP for {_inst_choice} (open ATM={_spp_atm})…"):
+    with st.spinner(f"Computing SPP for {_inst_choice} (open ATM={_spp_atm}, exp={_auto_near_exp})…"):
         _spp, _spp_ce_h, _spp_ce_l, _spp_pe_h, _spp_pe_l, _spp_ce_oi_L, _spp_pe_oi_L, _spp_src = \
-            calc_spp(near_exp, _spp_atm, tok=token, chain_data=near_raw)
+            calc_spp(_auto_near_exp, _spp_atm, tok=token, chain_data=near_raw)
     if _spp is not None:
         _entry = {
             "spp": _spp, "atm": _spp_atm,
@@ -3719,7 +3741,7 @@ with pb4:
         st.markdown(
             f"<div class='card' style='border-left:4px solid var(--gold);'>"
             f"<div class='lbl'>SPP &nbsp;·&nbsp; UIP Reference <span style='font-size:9px;color:var(--muted);'>"
-            f"(prev {_spp_src} · ATM {_spp_atm} locked)</span></div>"
+            f"(prev {_spp_src} · ATM {_spp_atm} · exp {_auto_near_exp})</span></div>"
             f"<div style='display:flex;align-items:baseline;gap:14px;'>"
             f"<div>"
             f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>SPP</div>"
@@ -3788,6 +3810,30 @@ with pb4:
             "<div class='val-big' style='color:var(--muted);'>N/A</div>"
             "<div class='lbl'>H/L data not yet available</div></div>",
             unsafe_allow_html=True)
+
+# ── Intraday Straddle Chart (ATM CE+PE LTP vs SPP) ───────────────────────────
+_straddle_hist_key = f"straddle_hist_{_inst_choice}_{_today_str}"
+if _straddle_hist_key not in st.session_state:
+    st.session_state[_straddle_hist_key] = {}   # {HH:MM: ltp}
+_s_hist = st.session_state[_straddle_hist_key]
+if _straddle_ltp and _straddle_ltp > 0:
+    _s_hist[now.strftime("%H:%M")] = round(_straddle_ltp, 2)
+    st.session_state[_straddle_hist_key] = _s_hist
+
+if len(_s_hist) >= 2:
+    import pandas as pd
+    _df_straddle = pd.DataFrame(
+        sorted(_s_hist.items()), columns=["Time", "Straddle LTP"]
+    ).set_index("Time")
+    st.markdown(
+        f"<div style='font-size:9px;color:var(--muted);margin:4px 0 2px;'>"
+        f"ATM {atm} Straddle (nearest exp: {_auto_near_exp}) · SPP ref ₹{_spp:.2f}" if _spp else
+        f"ATM {atm} Straddle (nearest exp: {_auto_near_exp})"
+        + f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.line_chart(_df_straddle, color=["#ffc940"], height=120, use_container_width=True)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # Fallback chain for day high:
