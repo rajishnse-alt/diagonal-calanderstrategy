@@ -4206,6 +4206,151 @@ st.markdown(
     f"</tbody></table></div>",
     unsafe_allow_html=True)
 
+# ── OTM Erosion / Dominance Engine (mirrors Pine Script Raj_Pro Options Engine) ──
+# Detect strike gap from chain
+_sorted_strikes = sorted(near_ce.keys())
+_gap = 50  # NIFTY default
+if len(_sorted_strikes) >= 2:
+    _diffs = [int(_sorted_strikes[i+1] - _sorted_strikes[i]) for i in range(len(_sorted_strikes)-1)]
+    if _diffs:
+        from collections import Counter
+        _gap = Counter(_diffs).most_common(1)[0][0]
+
+# 1-OTM through 4-OTM strikes
+_otm_ce_strikes = [float(atm + i * _gap) for i in range(1, 5)]
+_otm_pe_strikes = [float(atm - i * _gap) for i in range(1, 5)]
+
+_otm_ce_ltps = [near_ce.get(s) or 0.0 for s in _otm_ce_strikes]
+_otm_pe_ltps = [near_pe.get(s) or 0.0 for s in _otm_pe_strikes]
+
+# Cache day-open premiums (reset daily, keyed by date+inst+ATM)
+_otm_open_key = f"otm_open_{_today_str}_{_inst_choice}_{int(atm)}"
+if _otm_open_key not in st.session_state:
+    st.session_state[_otm_open_key] = {
+        "ce": _otm_ce_ltps[:],
+        "pe": _otm_pe_ltps[:],
+    }
+_otm_open = st.session_state[_otm_open_key]
+_ce_opens = _otm_open["ce"]
+_pe_opens = _otm_open["pe"]
+
+# Erosion = (open – current) / open  (positive = decaying = seller wins)
+def _erode(curr, opn): return (opn - curr) / opn if opn and opn > 0 else 0.0
+
+_ce_eros = [_erode(_otm_ce_ltps[i], _ce_opens[i]) for i in range(4)]
+_pe_eros = [_erode(_otm_pe_ltps[i], _pe_opens[i]) for i in range(4)]
+_ce_avg  = sum(_ce_eros) / 4
+_pe_avg  = sum(_pe_eros) / 4
+_dom     = _pe_avg - _ce_avg          # +ve = PE eroding more = market bullish
+_thr_dom = 0.04
+
+_dom_col  = "var(--bull)" if _dom > _thr_dom else ("var(--bear)" if _dom < -_thr_dom else "var(--muted)")
+_dom_sig  = "BULL ▲" if _dom > _thr_dom else ("BEAR ▼" if _dom < -_thr_dom else "NEUTRAL")
+
+# Spike scores (gamma proximity × erosion strength × directional bias)
+_dist_atm    = abs(spot - atm) if spot else 0
+_gamma_score = 100.0 / (1 + _dist_atm / max(_gap, 1))
+_buf         = _gap * 0.25
+_ce_bias     = 1.2 if spot and spot > atm + _buf else (0.8 if spot and spot < atm - _buf else 1.0)
+_pe_bias     = 1.2 if spot and spot < atm - _buf else (0.8 if spot and spot > atm + _buf else 1.0)
+_ce_spike    = _gamma_score * (1 + abs(_ce_avg) * 10) * _ce_bias
+_pe_spike    = _gamma_score * (1 + abs(_pe_avg) * 10) * _pe_bias
+_score_diff  = _ce_spike - _pe_spike
+_spike_edge  = 0.01
+
+# Multi-layer confluence signal
+_spk_bull = _score_diff < -_spike_edge   # PE spike > CE spike → bullish
+_spk_bear = _score_diff >  _spike_edge
+
+if   _dom > _thr_dom and _spk_bull:   _confluence, _conf_col = "UP CONFIRMED + SPIKE",  "var(--bull)"
+elif _dom > _thr_dom:                  _confluence, _conf_col = "UP CONFIRMED",           "var(--bull)"
+elif _dom < -_thr_dom and _spk_bear:  _confluence, _conf_col = "DN CONFIRMED + SPIKE",   "var(--bear)"
+elif _dom < -_thr_dom:                 _confluence, _conf_col = "DN CONFIRMED",            "var(--bear)"
+elif _spk_bull:                        _confluence, _conf_col = "UP SPIKE ONLY",           "#00bcd4"
+elif _spk_bear:                        _confluence, _conf_col = "DN SPIKE ONLY",           "#ff7043"
+else:                                  _confluence, _conf_col = "SIDEWAYS / WAIT",         "var(--muted)"
+
+_gs_col  = "var(--bull)" if _gamma_score > 70 else ("var(--gold)" if _gamma_score > 40 else "var(--bear)")
+_gs_lbl  = "NEAR ATM — HIGH" if _gamma_score > 70 else ("MEDIUM" if _gamma_score > 40 else "FAR OTM — LOW")
+
+# Render table (Pine-Script style)
+def _otm_cell(ltp, opn, eros, is_gamma=False):
+    _c = "var(--bull)" if eros > 0.05 else ("var(--bear)" if eros < -0.05 else "var(--fg)")
+    _g = " 🔺G" if is_gamma else ""
+    return (f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;"
+            f"color:{_c};padding:3px 8px;border:1px solid var(--border);text-align:right;'>"
+            f"{ltp:.2f}{_g}<br>"
+            f"<span style='font-size:8px;color:var(--muted);'>"
+            f"o:{opn:.1f} Δe:{eros*100:.1f}%</span></td>")
+
+_hdr = ("<th style='font-size:9px;color:var(--muted);padding:3px 8px;"
+        "border:1px solid var(--border);font-weight:400;'>")
+
+st.markdown(
+    f"<div class='card' style='padding:8px;margin-top:6px;'>"
+    f"<div class='lbl' style='margin-bottom:6px;'>OTM Erosion · Dominance Engine"
+    f"<span style='font-size:9px;color:var(--muted);margin-left:6px;'>gap={_gap} · nearest exp {_auto_near_exp}</span></div>"
+    f"<div style='overflow-x:auto;'>"
+    f"<table style='width:100%;border-collapse:collapse;font-size:11px;'>"
+    f"<thead><tr>"
+    f"{_hdr}ATM/Open</th>{_hdr}Type</th>{_hdr}Strike</th>"
+    f"{_hdr}1-OTM</th>{_hdr}2-OTM</th>{_hdr}3-OTM</th>"
+    f"<th style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);font-weight:700;'>4-OTM</th>"
+    f"{_hdr}Signal</th></tr></thead><tbody>"
+
+    # CE row
+    f"<tr>"
+    f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+    + (f"{spot:.2f}" if spot else "—")
+    + f"</td>"
+    f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE</td>"
+    f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>{int(atm)}</td>"
+    + _otm_cell(_otm_ce_ltps[0], _ce_opens[0], _ce_eros[0])
+    + _otm_cell(_otm_ce_ltps[1], _ce_opens[1], _ce_eros[1])
+    + _otm_cell(_otm_ce_ltps[2], _ce_opens[2], _ce_eros[2])
+    + _otm_cell(_otm_ce_ltps[3], _ce_opens[3], _ce_eros[3])
+    + f"<td rowspan='2' style='font-size:12px;font-weight:700;color:{_dom_col};"
+      f"padding:6px 8px;border:1px solid var(--border);text-align:center;vertical-align:middle;'>"
+      f"{_dom_sig}<br>"
+      f"<span style='font-size:8px;color:var(--muted);font-weight:400;'>"
+      f"dom {_dom*100:.2f}%</span></td>"
+    f"</tr>"
+
+    # PE row
+    f"<tr>"
+    f"<td style='font-size:10px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>{int(atm)}</td>"
+    f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE</td>"
+    f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>{int(atm)}</td>"
+    + _otm_cell(_otm_pe_ltps[0], _pe_opens[0], _pe_eros[0])
+    + _otm_cell(_otm_pe_ltps[1], _pe_opens[1], _pe_eros[1])
+    + _otm_cell(_otm_pe_ltps[2], _pe_opens[2], _pe_eros[2])
+    + _otm_cell(_otm_pe_ltps[3], _pe_opens[3], _pe_eros[3])
+    + f"</tr>"
+
+    # Spike Confluence row
+    + f"<tr style='background:rgba(0,0,150,0.15);'>"
+      f"<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Spike Confluence</td>"
+      f"<td colspan='3' style='font-size:11px;font-weight:700;color:{_conf_col};"
+      f"padding:3px 8px;border:1px solid var(--border);'>{_confluence}</td>"
+      f"<td style='font-size:9px;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE Score: {_ce_spike:.1f}</td>"
+      f"<td style='font-size:9px;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE Score: {_pe_spike:.1f}</td>"
+      f"<td style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>Edge: {abs(_score_diff):.1f}</td>"
+      f"</tr>"
+
+    # Gamma Score row
+    + f"<tr>"
+      f"<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Gamma Score</td>"
+      f"<td style='font-size:11px;font-weight:700;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gamma_score:.1f}</td>"
+      f"<td colspan='2' style='font-size:9px;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gs_lbl}</td>"
+      f"<td colspan='3' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+      f"CE avg Δe:{_ce_avg*100:.1f}% &nbsp; PE avg Δe:{_pe_avg*100:.1f}%</td>"
+      f"</tr>"
+
+    + f"</tbody></table></div></div>",
+    unsafe_allow_html=True,
+)
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
 if _rd_atm_ce_ltp > 0:
     st.markdown("<div class='sec-hdr'>📐 Ratio Diagonal CE &nbsp;·&nbsp; Sell 1 ATM : Buy 2 OTM Far</div>",
