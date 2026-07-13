@@ -4207,21 +4207,22 @@ st.markdown(
     unsafe_allow_html=True)
 
 # ── OTM Erosion / Dominance Engine (mirrors Pine Script Raj_Pro Options Engine) ──
-# Detect strike gap from chain
-_sorted_strikes = sorted(near_ce.keys())
-_gap = 50  # NIFTY default
-if len(_sorted_strikes) >= 2:
-    _diffs = [int(_sorted_strikes[i+1] - _sorted_strikes[i]) for i in range(len(_sorted_strikes)-1)]
-    if _diffs:
-        from collections import Counter
-        _gap = Counter(_diffs).most_common(1)[0][0]
+# Use the per-instrument STEP (already correct for NIFTY/BANKNIFTY/etc.)
+_gap = int(STEP)
 
-# 1-OTM through 4-OTM strikes
-_otm_ce_strikes = [float(atm + i * _gap) for i in range(1, 5)]
-_otm_pe_strikes = [float(atm - i * _gap) for i in range(1, 5)]
+# Helper: look up a strike from near_ce/near_pe — tries float then int key
+def _chain_ltp(price_map, strike):
+    v = price_map.get(float(strike))
+    if v is None:
+        v = price_map.get(int(strike))
+    return float(v) if v else 0.0
 
-_otm_ce_ltps = [near_ce.get(s) or 0.0 for s in _otm_ce_strikes]
-_otm_pe_ltps = [near_pe.get(s) or 0.0 for s in _otm_pe_strikes]
+# 1-OTM through 4-OTM strikes (OTM = AWAY from ATM)
+_otm_ce_strikes = [atm + i * _gap for i in range(1, 5)]   # calls go UP
+_otm_pe_strikes = [atm - i * _gap for i in range(1, 5)]   # puts go DOWN
+
+_otm_ce_ltps = [_chain_ltp(near_ce, s) for s in _otm_ce_strikes]
+_otm_pe_ltps = [_chain_ltp(near_pe, s) for s in _otm_pe_strikes]
 
 # Cache day-open premiums (reset daily, keyed by date+inst+ATM)
 _otm_open_key = f"otm_open_{_today_str}_{_inst_choice}_{int(atm)}"
@@ -4249,7 +4250,7 @@ _dom_sig  = "BULL ▲" if _dom > _thr_dom else ("BEAR ▼" if _dom < -_thr_dom e
 
 # Spike scores (gamma proximity × erosion strength × directional bias)
 _dist_atm    = abs(spot - atm) if spot else 0
-_gamma_score = 100.0 / (1 + _dist_atm / max(_gap, 1))
+_gamma_score = 100.0 / (1.0 + _dist_atm / max(_gap, 1))
 _buf         = _gap * 0.25
 _ce_bias     = 1.2 if spot and spot > atm + _buf else (0.8 if spot and spot < atm - _buf else 1.0)
 _pe_bias     = 1.2 if spot and spot < atm - _buf else (0.8 if spot and spot > atm + _buf else 1.0)
