@@ -1018,6 +1018,84 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
     return ce_h, ce_l, pe_h, pe_l
 
 
+def fetch_otm_day_opens(tok, chain_data, ce_strikes, pe_strikes):
+    """
+    Fetch today's day-open price for 4 OTM CE and 4 OTM PE strikes.
+    Mirrors Pine Script's ce1O/pe1O (price at first 1-min candle of the day).
+    Strategy 1: batch market-quote/quotes → ohlc.open
+    Strategy 2: first 1-min intraday candle (candles[-1][1])
+    Returns (ce_opens, pe_opens) — lists of 4 floats, 0.0 if unavailable.
+    """
+    # Build strike → instrument_key map from chain
+    inst_map = {}
+    for row in chain_data:
+        s  = int(float(row.get("strike_price", 0)))
+        ck = (row.get("call_options") or {}).get("instrument_key")
+        pk = (row.get("put_options")  or {}).get("instrument_key")
+        if ck: inst_map[(s, "CE")] = ck
+        if pk: inst_map[(s, "PE")] = pk
+
+    all_keys = []
+    for s in ce_strikes:
+        k = inst_map.get((int(s), "CE"))
+        if k: all_keys.append((int(s), "CE", k))
+    for s in pe_strikes:
+        k = inst_map.get((int(s), "PE"))
+        if k: all_keys.append((int(s), "PE", k))
+
+    opens = {}
+
+    # ── Strategy 1: batch market-quote (single call for all 8 keys) ──────────
+    batch = ",".join(k for _, _, k in all_keys)
+    try:
+        r = requests.get(
+            "https://api.upstox.com/v2/market-quote/quotes",
+            params={"instrument_key": batch},
+            headers=hdr(tok), timeout=10,
+        )
+        d = r.json()
+        if d.get("status") == "success":
+            data = d.get("data") or {}
+            for s, otype, inst_key in all_keys:
+                k = inst_key.replace("|", ":")
+                q = data.get(k) or data.get(inst_key)
+                if q is None:
+                    sfx = inst_key.split("|")[-1]
+                    for dk, dv in data.items():
+                        if dk.endswith(sfx):
+                            q = dv; break
+                opn = float(((q or {}).get("ohlc") or {}).get("open") or 0)
+                if opn > 0:
+                    opens[(s, otype)] = opn
+    except Exception:
+        pass
+
+    # ── Strategy 2: first 1-min candle open for any still missing ────────────
+    for s, otype, inst_key in all_keys:
+        if (s, otype) in opens:
+            continue
+        try:
+            enc = urllib.parse.quote(inst_key, safe="")
+            r = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
+                headers=hdr(tok), timeout=10,
+            )
+            d = r.json()
+            if d.get("status") == "success":
+                candles = (d.get("data") or {}).get("candles") or []
+                if candles:
+                    # candles in reverse-chron order; last = first candle of day
+                    opn = float(candles[-1][1])
+                    if opn > 0:
+                        opens[(s, otype)] = opn
+        except Exception:
+            pass
+
+    ce_opens = [opens.get((int(s), "CE"), 0.0) for s in ce_strikes]
+    pe_opens = [opens.get((int(s), "PE"), 0.0) for s in pe_strikes]
+    return ce_opens, pe_opens
+
+
 def calc_spp(expiry_str, atm_strike, tok=None, chain_data=None):
     """
     SPP (UIP concept):
@@ -4205,27 +4283,25 @@ _otm_pe_strikes = [atm - i * _gap for i in range(1, 5)]   # puts go DOWN
 _otm_ce_ltps = [_chain_ltp(near_ce, s) for s in _otm_ce_strikes]
 _otm_pe_ltps = [_chain_ltp(near_pe, s) for s in _otm_pe_strikes]
 
-# Day-open premiums: use ohlc.open from chain (same as Pine Script's ce1O / pe1O).
-# Falls back to session_state first-seen value pre-market when ohlc.open is 0.
-_otm_open_key = f"otm_open_{_today_str}_{_inst_choice}_{int(atm)}"
-_ce_opens_chain = [_chain_ltp(near_ce_open, s) for s in _otm_ce_strikes]
-_pe_opens_chain = [_chain_ltp(near_pe_open, s) for s in _otm_pe_strikes]
+# Day-open premiums — mirrors Pine Script's ce1O/pe1O (first 1-min candle open).
+# Cached per day+inst+ATM; refreshed if any strike still has 0 (pre-market / late load).
+_otm_open_key = f"otm_day_opens_{_today_str}_{_inst_choice}_{int(atm)}"
+_otm_cached   = st.session_state.get(_otm_open_key, {"ce": [0.0]*4, "pe": [0.0]*4})
 
-if _otm_open_key not in st.session_state:
-    # First load today — seed with chain open (or ltp if open not yet populated)
-    st.session_state[_otm_open_key] = {
-        "ce": [o or l for o, l in zip(_ce_opens_chain, _otm_ce_ltps)],
-        "pe": [o or l for o, l in zip(_pe_opens_chain, _otm_pe_ltps)],
-    }
-else:
-    # Update stored opens if chain now provides real ohlc.open
-    _stored = st.session_state[_otm_open_key]
-    _stored["ce"] = [o or s for o, s in zip(_ce_opens_chain, _stored["ce"])]
-    _stored["pe"] = [o or s for o, s in zip(_pe_opens_chain, _stored["pe"])]
+if any(v == 0.0 for v in _otm_cached["ce"] + _otm_cached["pe"]):
+    # Fetch real day-open from market-quote + 1-min candles
+    _fetched_ce, _fetched_pe = fetch_otm_day_opens(token, near_raw,
+                                                    _otm_ce_strikes, _otm_pe_strikes)
+    # Merge: keep any already-good cached value; accept new non-zero fetched value
+    _merged_ce = [f if f > 0 else c for f, c in zip(_fetched_ce, _otm_cached["ce"])]
+    _merged_pe = [f if f > 0 else c for f, c in zip(_fetched_pe, _otm_cached["pe"])]
+    # Final fallback: if still 0, use current LTP (pre-market guard)
+    _merged_ce = [v if v > 0 else l for v, l in zip(_merged_ce, _otm_ce_ltps)]
+    _merged_pe = [v if v > 0 else l for v, l in zip(_merged_pe, _otm_pe_ltps)]
+    st.session_state[_otm_open_key] = {"ce": _merged_ce, "pe": _merged_pe}
 
-_otm_open = st.session_state[_otm_open_key]
-_ce_opens = _otm_open["ce"]
-_pe_opens = _otm_open["pe"]
+_ce_opens = st.session_state[_otm_open_key]["ce"]
+_pe_opens = st.session_state[_otm_open_key]["pe"]
 
 # Erosion = (open – current) / open  (positive = decaying = seller wins)
 def _erode(curr, opn): return (opn - curr) / opn if opn and opn > 0 else 0.0
