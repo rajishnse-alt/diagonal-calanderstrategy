@@ -4342,6 +4342,63 @@ else:                                  _confluence, _conf_col = "SIDEWAYS / WAIT
 _gs_col  = "var(--bull)" if _gamma_score > 70 else ("var(--gold)" if _gamma_score > 40 else "var(--bear)")
 _gs_lbl  = "NEAR ATM — HIGH" if _gamma_score > 70 else ("MEDIUM" if _gamma_score > 40 else "FAR OTM — LOW")
 
+# ── Median (Pine Script: avg of all 8 OTM premiums) ──────────────────────────
+_med_vals = [l for l in _otm_ce_ltps + _otm_pe_ltps if l > 0]
+_med      = sum(_med_vals) / len(_med_vals) if _med_vals else 0.0
+
+# ── EMA-gated Trend (mirrors Pine Script mD + confirmedTrend + coreTrend) ────
+_trendEmaLen    = 5
+_trendConfBars  = 3
+_strongCoeff    = 1.2
+_alpha          = 2.0 / (_trendEmaLen + 1)
+
+_trend_state_key = f"otm_trend_{_inst_choice}_{_today_str}"
+_ts = st.session_state.get(_trend_state_key, {
+    "ce_ema": _ce_avg, "pe_ema": _pe_avg,
+    "dom_hist": [_dom], "bull_cnt": 0, "bear_cnt": 0, "confirmed": "neutral",
+})
+
+# EMA update
+_ce_ema  = _alpha * _ce_avg + (1 - _alpha) * _ts["ce_ema"]
+_pe_ema  = _alpha * _pe_avg + (1 - _alpha) * _ts["pe_ema"]
+_mD      = _pe_ema - _ce_ema          # Pine Script: mD = putEma - callEma
+
+# VOL = stdev of last 20 dom values
+_dom_hist = (_ts["dom_hist"] + [_dom])[-20:]
+import statistics as _stats
+_vol = _stats.stdev(_dom_hist) if len(_dom_hist) >= 2 else abs(_thr_dom)
+_vol = _vol if _vol > 0 else abs(_thr_dom)
+
+# Strong move
+_strongMove = abs(_mD) > _vol * _strongCoeff
+
+# Bar-count gating
+_bull_cnt = _ts["bull_cnt"]
+_bear_cnt = _ts["bear_cnt"]
+if _mD > 0:   _bull_cnt += 1; _bear_cnt  = 0
+elif _mD < 0: _bear_cnt += 1; _bull_cnt  = 0
+else:          _bull_cnt  = 0; _bear_cnt  = 0
+
+_confirmed = _ts["confirmed"]
+if   _bull_cnt >= _trendConfBars: _confirmed = "bull"
+elif _bear_cnt >= _trendConfBars: _confirmed = "bear"
+
+# coreTrend string
+if   _confirmed == "bull" and _strongMove: _coreTrend, _trend_col = "UP STRONG",  "var(--bull)"
+elif _confirmed == "bull":                  _coreTrend, _trend_col = "UP",          "var(--bull)"
+elif _confirmed == "bear" and _strongMove: _coreTrend, _trend_col = "DN STRONG",   "var(--bear)"
+elif _confirmed == "bear":                  _coreTrend, _trend_col = "DN",           "var(--bear)"
+elif _bull_cnt > 0:                         _coreTrend, _trend_col = "UP PENDING",   "var(--gold)"
+elif _bear_cnt > 0:                         _coreTrend, _trend_col = "DN PENDING",   "var(--gold)"
+else:                                       _coreTrend, _trend_col = "NEUTRAL",      "var(--muted)"
+
+# Save updated state
+st.session_state[_trend_state_key] = {
+    "ce_ema": _ce_ema, "pe_ema": _pe_ema,
+    "dom_hist": _dom_hist, "bull_cnt": _bull_cnt,
+    "bear_cnt": _bear_cnt, "confirmed": _confirmed,
+}
+
 # Render table (Pine-Script style)
 def _otm_cell(ltp, opn, eros, is_gamma=False):
     _c = "var(--bull)" if eros > 0.05 else ("var(--bear)" if eros < -0.05 else "var(--fg)")
@@ -4378,11 +4435,10 @@ st.markdown(
     + _otm_cell(_otm_ce_ltps[1], _ce_opens[1], _ce_eros[1])
     + _otm_cell(_otm_ce_ltps[2], _ce_opens[2], _ce_eros[2])
     + _otm_cell(_otm_ce_ltps[3], _ce_opens[3], _ce_eros[3])
-    + f"<td rowspan='2' style='font-size:12px;font-weight:700;color:{_dom_col};"
-      f"padding:6px 8px;border:1px solid var(--border);text-align:center;vertical-align:middle;'>"
-      f"{_dom_sig}<br>"
-      f"<span style='font-size:8px;color:var(--muted);font-weight:400;'>"
-      f"dom {_dom*100:.2f}%</span></td>"
+    + f"<td rowspan='2' style='font-size:13px;font-weight:900;color:{_trend_col};"
+      f"padding:6px 8px;border:1px solid var(--border);text-align:center;vertical-align:middle;"
+      f"letter-spacing:.04em;'>"
+      f"{_coreTrend}</td>"
     f"</tr>"
 
     # PE row
@@ -4415,16 +4471,17 @@ st.markdown(
       f"CE avg Δe:{_ce_avg:.4f} &nbsp; PE avg Δe:{_pe_avg:.4f}</td>"
       f"</tr>"
 
-    # DOM / MOM / VOL row — mirrors Pine Script DOM/MOM/VOL + big bull/bear label
+    # DOM / MOM / VOL row + Median + big bull/bear
     + f"<tr>"
       f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>DOM / MOM / VOL</td>"
       f"<td style='font-family:var(--mono);font-size:10px;color:{_dom_col};padding:3px 8px;border:1px solid var(--border);'>{_dom:.4f}</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _ce_avg>_pe_avg else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>{_ce_avg:.4f}</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>{_pe_avg:.4f}</td>"
-      f"<td colspan='3' style='font-size:28px;font-weight:900;font-family:var(--mono);"
-      f"color:{'#ffa500' if _dom > _thr_dom else ('#ff4444' if _dom < -_thr_dom else 'var(--muted)')}"
+      f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _mD>0 else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>{_mD:.4f}</td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>{_vol:.4f}</td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>med {_med:.2f}</td>"
+      f"<td colspan='2' style='font-size:26px;font-weight:900;font-family:var(--mono);"
+      f"color:{'#00e676' if _confirmed=='bull' else ('#ff4444' if _confirmed=='bear' else 'var(--muted)')}"
       f";padding:3px 8px;border:1px solid var(--border);text-align:center;letter-spacing:.08em;'>"
-      f"{'bull' if _dom > _thr_dom else ('bear' if _dom < -_thr_dom else 'wait')}"
+      f"{'bull' if _confirmed=='bull' else ('bear' if _confirmed=='bear' else 'wait')}"
       f"</td>"
       f"</tr>"
 
