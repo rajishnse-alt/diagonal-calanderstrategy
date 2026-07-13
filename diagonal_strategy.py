@@ -1059,6 +1059,7 @@ def parse_chain(data):
     ce_low,  pe_low    = {}, {}          # today's OHLC low per strike
     ce_high, pe_high   = {}, {}          # today's OHLC high per strike
     ce_vwap, pe_vwap   = {}, {}          # today's VWAP per strike (chain market_data)
+    ce_open, pe_open   = {}, {}          # today's day-open price per strike (ohlc.open)
     spot = None
     for row in data:
         s = float(row.get("strike_price", 0))
@@ -1079,13 +1080,16 @@ def parse_chain(data):
         # gamma is always positive; abs() guards against sign conventions
         ce_gamma[s]   = abs(float(cg.get("gamma") or 0))
         pe_gamma[s]   = abs(float(pg.get("gamma") or 0))
-        # OHLC high/low from chain market_data (populated during market hours)
+        # OHLC from chain market_data (populated during market hours)
         _c_ohlc       = c.get("ohlc") or {}
         _p_ohlc       = p.get("ohlc") or {}
         ce_high[s]    = float(_c_ohlc.get("high") or c.get("high") or 0) or None
         pe_high[s]    = float(_p_ohlc.get("high") or p.get("high") or 0) or None
         ce_low[s]     = float(_c_ohlc.get("low")  or c.get("low")  or 0) or None
         pe_low[s]     = float(_p_ohlc.get("low")  or p.get("low")  or 0) or None
+        # Day-open price (mirrors Pine Script ce1O — the true day open for each strike)
+        ce_open[s]    = float(_c_ohlc.get("open") or 0) or None
+        pe_open[s]    = float(_p_ohlc.get("open") or 0) or None
         # VWAP directly from chain market_data (same field as SDK strike_data.ce.vwap)
         ce_vwap[s]    = float(c.get("vwap") or 0) or None
         pe_vwap[s]    = float(p.get("vwap") or 0) or None
@@ -1094,7 +1098,7 @@ def parse_chain(data):
         if common:
             spot = float(min(common, key=lambda s: abs(ce_map[s] - pe_map[s])))
     atm = int(round(spot / STEP) * STEP) if spot else 0
-    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma, ce_low, pe_low, ce_high, pe_high, ce_vwap, pe_vwap
+    return spot, atm, ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, ce_gamma, pe_gamma, ce_low, pe_low, ce_high, pe_high, ce_vwap, pe_vwap, ce_open, pe_open
 
 
 def calc_pcr_spcl(ce_map, pe_map, ce_oi, pe_oi, ce_oi_chg, pe_oi_chg, atm, vix_day_open=None, n_strikes=4):
@@ -2356,8 +2360,8 @@ for _cl_row in near_raw:
         except Exception:
             pass
 
-spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma, near_ce_low, near_pe_low, near_ce_high, near_pe_high, near_ce_vwap, near_pe_vwap = parse_chain(near_raw)
-_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _,            _,            _,            _,             _             = parse_chain(far_raw)
+spot, atm, near_ce, near_pe, near_ce_oi, near_pe_oi, near_ce_oi_chg, near_pe_oi_chg, near_ce_gamma, near_pe_gamma, near_ce_low, near_pe_low, near_ce_high, near_pe_high, near_ce_vwap, near_pe_vwap, near_ce_open, near_pe_open = parse_chain(near_raw)
+_,    _,   far_ce,  far_pe,  far_ce_oi,  far_pe_oi,  far_ce_oi_chg,  far_pe_oi_chg,  far_ce_gamma,  far_pe_gamma,  _,            _,            _,            _,            _,             _,             _,             _             = parse_chain(far_raw)
 
 # ── ATM option day-highs from chain OHLC (already parsed into near_ce_high/near_pe_high)
 _atm_ce_day_high  = near_ce_high.get(float(atm)) or 0.0
@@ -3811,29 +3815,6 @@ with pb4:
             "<div class='lbl'>H/L data not yet available</div></div>",
             unsafe_allow_html=True)
 
-# ── Intraday Straddle Chart (ATM CE+PE LTP vs SPP) ───────────────────────────
-_straddle_hist_key = f"straddle_hist_{_inst_choice}_{_today_str}"
-if _straddle_hist_key not in st.session_state:
-    st.session_state[_straddle_hist_key] = {}   # {HH:MM: ltp}
-_s_hist = st.session_state[_straddle_hist_key]
-if _straddle_ltp and _straddle_ltp > 0:
-    _s_hist[now.strftime("%H:%M")] = round(_straddle_ltp, 2)
-    st.session_state[_straddle_hist_key] = _s_hist
-
-if len(_s_hist) >= 2:
-    import pandas as pd
-    _df_straddle = pd.DataFrame(
-        sorted(_s_hist.items()), columns=["Time", "Straddle LTP"]
-    ).set_index("Time")
-    st.markdown(
-        f"<div style='font-size:9px;color:var(--muted);margin:4px 0 2px;'>"
-        f"ATM {atm} Straddle (nearest exp: {_auto_near_exp}) · SPP ref ₹{_spp:.2f}" if _spp else
-        f"ATM {atm} Straddle (nearest exp: {_auto_near_exp})"
-        + f"</div>",
-        unsafe_allow_html=True,
-    )
-    st.line_chart(_df_straddle, color=["#ffc940"], height=120, use_container_width=True)
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # Fallback chain for day high:
@@ -4224,13 +4205,24 @@ _otm_pe_strikes = [atm - i * _gap for i in range(1, 5)]   # puts go DOWN
 _otm_ce_ltps = [_chain_ltp(near_ce, s) for s in _otm_ce_strikes]
 _otm_pe_ltps = [_chain_ltp(near_pe, s) for s in _otm_pe_strikes]
 
-# Cache day-open premiums (reset daily, keyed by date+inst+ATM)
+# Day-open premiums: use ohlc.open from chain (same as Pine Script's ce1O / pe1O).
+# Falls back to session_state first-seen value pre-market when ohlc.open is 0.
 _otm_open_key = f"otm_open_{_today_str}_{_inst_choice}_{int(atm)}"
+_ce_opens_chain = [_chain_ltp(near_ce_open, s) for s in _otm_ce_strikes]
+_pe_opens_chain = [_chain_ltp(near_pe_open, s) for s in _otm_pe_strikes]
+
 if _otm_open_key not in st.session_state:
+    # First load today — seed with chain open (or ltp if open not yet populated)
     st.session_state[_otm_open_key] = {
-        "ce": _otm_ce_ltps[:],
-        "pe": _otm_pe_ltps[:],
+        "ce": [o or l for o, l in zip(_ce_opens_chain, _otm_ce_ltps)],
+        "pe": [o or l for o, l in zip(_pe_opens_chain, _otm_pe_ltps)],
     }
+else:
+    # Update stored opens if chain now provides real ohlc.open
+    _stored = st.session_state[_otm_open_key]
+    _stored["ce"] = [o or s for o, s in zip(_ce_opens_chain, _stored["ce"])]
+    _stored["pe"] = [o or s for o, s in zip(_pe_opens_chain, _stored["pe"])]
+
 _otm_open = st.session_state[_otm_open_key]
 _ce_opens = _otm_open["ce"]
 _pe_opens = _otm_open["pe"]
@@ -4344,7 +4336,20 @@ st.markdown(
       f"<td style='font-size:11px;font-weight:700;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gamma_score:.1f}</td>"
       f"<td colspan='2' style='font-size:9px;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gs_lbl}</td>"
       f"<td colspan='3' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"CE avg Δe:{_ce_avg*100:.1f}% &nbsp; PE avg Δe:{_pe_avg*100:.1f}%</td>"
+      f"CE avg Δe:{_ce_avg:.4f} &nbsp; PE avg Δe:{_pe_avg:.4f}</td>"
+      f"</tr>"
+
+    # DOM / MOM / VOL row — mirrors Pine Script DOM/MOM/VOL + big bull/bear label
+    + f"<tr>"
+      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>DOM / MOM / VOL</td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:{_dom_col};padding:3px 8px;border:1px solid var(--border);'>{_dom:.4f}</td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _ce_avg>_pe_avg else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>{_ce_avg:.4f}</td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>{_pe_avg:.4f}</td>"
+      f"<td colspan='3' style='font-size:28px;font-weight:900;font-family:var(--mono);"
+      f"color:{'#ffa500' if _dom > _thr_dom else ('#ff4444' if _dom < -_thr_dom else 'var(--muted)')}"
+      f";padding:3px 8px;border:1px solid var(--border);text-align:center;letter-spacing:.08em;'>"
+      f"{'bull' if _dom > _thr_dom else ('bear' if _dom < -_thr_dom else 'wait')}"
+      f"</td>"
       f"</tr>"
 
     + f"</tbody></table></div></div>",
