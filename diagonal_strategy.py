@@ -4363,9 +4363,11 @@ else:                                  _confluence, _conf_col = "SIDEWAYS / WAIT
 _gs_col  = "var(--bull)" if _gamma_score > 70 else ("var(--gold)" if _gamma_score > 40 else "var(--bear)")
 _gs_lbl  = "NEAR ATM — HIGH" if _gamma_score > 70 else ("MEDIUM" if _gamma_score > 40 else "FAR OTM — LOW")
 
-# ── Median (Pine Script: avg of all 8 OTM premiums) ──────────────────────────
-_med_vals = [l for l in _otm_ce_ltps + _otm_pe_ltps if l > 0]
-_med      = sum(_med_vals) / len(_med_vals) if _med_vals else 0.0
+# ── Median (Pine Script: sp/vc using ce1N/pe1N = erosion fractions, not raw LTPs)
+# Only include strikes where day-open is known (else NA in Pine Script)
+_med_eros = ([_ce_eros[i] for i in range(4) if _ce_opens[i] > 0]
+           + [_pe_eros[i] for i in range(4) if _pe_opens[i] > 0])
+_med      = sum(_med_eros) / len(_med_eros) if _med_eros else 0.0
 
 # ── EMA-gated Trend (mirrors Pine Script mD + confirmedTrend + coreTrend) ────
 _trendEmaLen    = 5
@@ -4493,17 +4495,18 @@ st.markdown(
       f"</tr>"
 
     # DOM + MEDIAN row (big, prominent — Pine Script primary signals)
+    # DOM/MOM/VOL displayed ×100 (percentage points) to match Pine Script
     + f"<tr style='background:rgba(255,200,0,0.06);'>"
       f"<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>DOM</td>"
       f"<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
       f"color:{_dom_col};padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
-      f"{_dom:.4f}"
-      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>pe_avg–ce_avg</span></td>"
+      f"{_dom*100:.2f}"
+      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>%pt</span></td>"
       f"<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>MEDIAN</td>"
       f"<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
       f"color:var(--gold);padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
-      f"{_med:.2f}"
-      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>avg {len(_med_vals)} OTM</span></td>"
+      f"{_med:.4f}"
+      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>avg {len(_med_eros)} eros</span></td>"
       f"<td colspan='2' style='font-size:26px;font-weight:900;font-family:var(--mono);"
       f"color:{'#00e676' if _confirmed=='bull' else ('#ff4444' if _confirmed=='bear' else 'var(--muted)')}"
       f";padding:4px 8px;border:1px solid var(--border);text-align:center;letter-spacing:.08em;'>"
@@ -4515,11 +4518,11 @@ st.markdown(
     + f"<tr>"
       f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>MOM / VOL</td>"
       f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _mD>0 else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>"
-      f"{_mD:.4f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>mD</span></td>"
+      f"{_mD*100:.2f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>mD</span></td>"
       f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"{_vol:.4f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>vol</span></td>"
+      f"{_vol*100:.2f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>vol</span></td>"
       f"<td colspan='4' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"CE avg Δe: {_ce_avg:.4f} &nbsp;│&nbsp; PE avg Δe: {_pe_avg:.4f}</td>"
+      f"CE avg Δe: {_ce_avg*100:.2f}% &nbsp;│&nbsp; PE avg Δe: {_pe_avg*100:.2f}%</td>"
       f"</tr>"
 
     + f"</tbody></table></div></div>",
@@ -4545,7 +4548,7 @@ with st.expander("🔍 DOM Debug — strikes & raw LTPs", expanded=False):
         })
     import pandas as _pd_dbg
     st.dataframe(_pd_dbg.DataFrame(_dbg_rows), use_container_width=True, hide_index=True)
-    st.caption(f"CE avg eros={_ce_avg:.4f}  PE avg eros={_pe_avg:.4f}  DOM={_dom:.4f}  MOM(mD)={_mD:.4f}  VOL={_vol:.4f}")
+    st.caption(f"CE avg eros={_ce_avg*100:.2f}%  PE avg eros={_pe_avg*100:.2f}%  DOM={_dom*100:.2f}  MOM={_mD*100:.2f}  VOL={_vol*100:.2f}  med(eros)={_med:.4f}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
