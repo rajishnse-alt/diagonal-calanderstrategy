@@ -4492,18 +4492,34 @@ st.markdown(
       f"CE avg Δe:{_ce_avg:.4f} &nbsp; PE avg Δe:{_pe_avg:.4f}</td>"
       f"</tr>"
 
-    # DOM / MOM / VOL row + Median + big bull/bear
-    + f"<tr>"
-      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>DOM / MOM / VOL</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:{_dom_col};padding:3px 8px;border:1px solid var(--border);'>{_dom:.4f}</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _mD>0 else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>{_mD:.4f}</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>{_vol:.4f}</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>med {_med:.2f}</td>"
+    # DOM + MEDIAN row (big, prominent — Pine Script primary signals)
+    + f"<tr style='background:rgba(255,200,0,0.06);'>"
+      f"<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>DOM</td>"
+      f"<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
+      f"color:{_dom_col};padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
+      f"{_dom:.4f}"
+      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>pe_avg–ce_avg</span></td>"
+      f"<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>MEDIAN</td>"
+      f"<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
+      f"color:var(--gold);padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
+      f"{_med:.2f}"
+      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>avg {len(_med_vals)} OTM</span></td>"
       f"<td colspan='2' style='font-size:26px;font-weight:900;font-family:var(--mono);"
       f"color:{'#00e676' if _confirmed=='bull' else ('#ff4444' if _confirmed=='bear' else 'var(--muted)')}"
-      f";padding:3px 8px;border:1px solid var(--border);text-align:center;letter-spacing:.08em;'>"
+      f";padding:4px 8px;border:1px solid var(--border);text-align:center;letter-spacing:.08em;'>"
       f"{'bull' if _confirmed=='bull' else ('bear' if _confirmed=='bear' else 'wait')}"
       f"</td>"
+      f"</tr>"
+
+    # MOM / VOL sub-row
+    + f"<tr>"
+      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>MOM / VOL</td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _mD>0 else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>"
+      f"{_mD:.4f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>mD</span></td>"
+      f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+      f"{_vol:.4f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>vol</span></td>"
+      f"<td colspan='4' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+      f"CE avg Δe: {_ce_avg:.4f} &nbsp;│&nbsp; PE avg Δe: {_pe_avg:.4f}</td>"
       f"</tr>"
 
     + f"</tbody></table></div></div>",
