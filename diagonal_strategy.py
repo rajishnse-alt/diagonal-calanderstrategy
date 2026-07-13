@@ -4266,31 +4266,52 @@ st.markdown(
     unsafe_allow_html=True)
 
 # ── OTM Erosion / Dominance Engine (mirrors Pine Script Raj_Pro Options Engine) ──
-# Use the per-instrument STEP (already correct for NIFTY/BANKNIFTY/etc.)
+# ALWAYS uses the AUTO-NEAREST expiry chain (not the user's trading selection).
+# This matches Pine Script which tracks the soonest live expiry for premium erosion.
 _gap = int(STEP)
 
-# Helper: look up a strike from near_ce/near_pe — tries float then int key
+# Fetch/reuse chain for _auto_near_exp (may differ from user-selected near_exp)
+if _auto_near_exp == near_exp:
+    # Same expiry — reuse already-fetched chain, no extra API call
+    _dom_raw = near_raw
+    _dom_spot, _dom_atm = spot, atm
+    _dom_ce,  _dom_pe   = near_ce, near_pe
+else:
+    # Different expiry — fetch the true nearest expiry chain
+    _dom_raw, _dom_err = fetch_chain(token, _auto_near_exp)
+    if _dom_raw:
+        _dom_spot, _dom_atm, _dom_ce, _dom_pe, *_ = parse_chain(_dom_raw)
+    else:
+        # Fallback to trading chain if fetch fails
+        _dom_raw, _dom_spot, _dom_atm = near_raw, spot, atm
+        _dom_ce,  _dom_pe              = near_ce,  near_pe
+
+# Helper: look up a strike from _dom_ce/_dom_pe — tries float then int key
 def _chain_ltp(price_map, strike):
     v = price_map.get(float(strike))
     if v is None:
         v = price_map.get(int(strike))
     return float(v) if v else 0.0
 
-# 1-OTM through 4-OTM strikes (OTM = AWAY from ATM)
-_otm_ce_strikes = [atm + i * _gap for i in range(1, 5)]   # calls go UP
-_otm_pe_strikes = [atm - i * _gap for i in range(1, 5)]   # puts go DOWN
+# 1-OTM through 4-OTM strikes relative to DOM ATM (nearest expiry ATM)
+_otm_ce_strikes = [_dom_atm + i * _gap for i in range(1, 5)]   # calls go UP
+_otm_pe_strikes = [_dom_atm - i * _gap for i in range(1, 5)]   # puts go DOWN
 
-_otm_ce_ltps = [_chain_ltp(near_ce, s) for s in _otm_ce_strikes]
-_otm_pe_ltps = [_chain_ltp(near_pe, s) for s in _otm_pe_strikes]
+_otm_ce_ltps = [_chain_ltp(_dom_ce, s) for s in _otm_ce_strikes]
+_otm_pe_ltps = [_chain_ltp(_dom_pe, s) for s in _otm_pe_strikes]
 
 # Day-open premiums — mirrors Pine Script's ce1O/pe1O (first 1-min candle open).
 # Cached per day+inst+ATM; refreshed if any strike still has 0 (pre-market / late load).
-_otm_open_key = f"otm_day_opens_{_today_str}_{_inst_choice}_{int(atm)}"
+_otm_open_key = f"otm_day_opens_{_today_str}_{_inst_choice}_{int(_dom_atm)}"
+# Purge any stale same-day keys for wrong ATM (happens if spot moves cross-step)
+for _k in list(st.session_state.keys()):
+    if _k.startswith(f"otm_day_opens_{_today_str}_{_inst_choice}_") and _k != _otm_open_key:
+        del st.session_state[_k]
 _otm_cached   = st.session_state.get(_otm_open_key, {"ce": [0.0]*4, "pe": [0.0]*4})
 
 if any(v == 0.0 for v in _otm_cached["ce"] + _otm_cached["pe"]):
     # Fetch real day-open from market-quote + 1-min candles
-    _fetched_ce, _fetched_pe = fetch_otm_day_opens(token, near_raw,
+    _fetched_ce, _fetched_pe = fetch_otm_day_opens(token, _dom_raw,
                                                     _otm_ce_strikes, _otm_pe_strikes)
     # Merge: keep any already-good cached value; accept new non-zero fetched value
     _merged_ce = [f if f > 0 else c for f, c in zip(_fetched_ce, _otm_cached["ce"])]
@@ -4317,11 +4338,11 @@ _dom_col  = "var(--bull)" if _dom > _thr_dom else ("var(--bear)" if _dom < -_thr
 _dom_sig  = "BULL ▲" if _dom > _thr_dom else ("BEAR ▼" if _dom < -_thr_dom else "NEUTRAL")
 
 # Spike scores (gamma proximity × erosion strength × directional bias)
-_dist_atm    = abs(spot - atm) if spot else 0
+_dist_atm    = abs(_dom_spot - _dom_atm) if _dom_spot else 0
 _gamma_score = 100.0 / (1.0 + _dist_atm / max(_gap, 1))
 _buf         = _gap * 0.25
-_ce_bias     = 1.2 if spot and spot > atm + _buf else (0.8 if spot and spot < atm - _buf else 1.0)
-_pe_bias     = 1.2 if spot and spot < atm - _buf else (0.8 if spot and spot > atm + _buf else 1.0)
+_ce_bias     = 1.2 if _dom_spot and _dom_spot > _dom_atm + _buf else (0.8 if _dom_spot and _dom_spot < _dom_atm - _buf else 1.0)
+_pe_bias     = 1.2 if _dom_spot and _dom_spot < _dom_atm - _buf else (0.8 if _dom_spot and _dom_spot > _dom_atm + _buf else 1.0)
 _ce_spike    = _gamma_score * (1 + abs(_ce_avg) * 10) * _ce_bias
 _pe_spike    = _gamma_score * (1 + abs(_pe_avg) * 10) * _pe_bias
 _score_diff  = _ce_spike - _pe_spike
@@ -4427,10 +4448,10 @@ st.markdown(
     # CE row
     f"<tr>"
     f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-    + (f"{spot:.2f}" if spot else "—")
+    + (f"{_dom_spot:.2f}" if _dom_spot else "—")
     + f"</td>"
     f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE</td>"
-    f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>{int(atm)}</td>"
+    f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
     + _otm_cell(_otm_ce_ltps[0], _ce_opens[0], _ce_eros[0])
     + _otm_cell(_otm_ce_ltps[1], _ce_opens[1], _ce_eros[1])
     + _otm_cell(_otm_ce_ltps[2], _ce_opens[2], _ce_eros[2])
@@ -4443,9 +4464,9 @@ st.markdown(
 
     # PE row
     f"<tr>"
-    f"<td style='font-size:10px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>{int(atm)}</td>"
+    f"<td style='font-size:10px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
     f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE</td>"
-    f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>{int(atm)}</td>"
+    f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
     + _otm_cell(_otm_pe_ltps[0], _pe_opens[0], _pe_eros[0])
     + _otm_cell(_otm_pe_ltps[1], _pe_opens[1], _pe_eros[1])
     + _otm_cell(_otm_pe_ltps[2], _pe_opens[2], _pe_eros[2])
@@ -4488,6 +4509,27 @@ st.markdown(
     + f"</tbody></table></div></div>",
     unsafe_allow_html=True,
 )
+
+# Debug expander — shows exact strikes/LTPs/opens so user can verify DOM values
+with st.expander("🔍 DOM Debug — strikes & raw LTPs", expanded=False):
+    _dbg_exp_note = "" if _auto_near_exp == near_exp else f"  ⚠️ nearest exp ({_auto_near_exp}) ≠ trading exp ({near_exp})"
+    st.caption(f"DOM ATM={_dom_atm}  spot={_dom_spot}  exp={_auto_near_exp}{_dbg_exp_note}")
+    _dbg_rows = []
+    for i in range(4):
+        _dbg_rows.append({
+            "OTM": f"{i+1}-OTM",
+            "CE Strike": _otm_ce_strikes[i],
+            "CE LTP": _otm_ce_ltps[i],
+            "CE Open": _ce_opens[i],
+            "CE Eros%": f"{_ce_eros[i]*100:.2f}%",
+            "PE Strike": _otm_pe_strikes[i],
+            "PE LTP": _otm_pe_ltps[i],
+            "PE Open": _pe_opens[i],
+            "PE Eros%": f"{_pe_eros[i]*100:.2f}%",
+        })
+    import pandas as _pd_dbg
+    st.dataframe(_pd_dbg.DataFrame(_dbg_rows), use_container_width=True, hide_index=True)
+    st.caption(f"CE avg eros={_ce_avg:.4f}  PE avg eros={_pe_avg:.4f}  DOM={_dom:.4f}  MOM(mD)={_mD:.4f}  VOL={_vol:.4f}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
