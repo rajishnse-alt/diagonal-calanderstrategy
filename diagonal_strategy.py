@@ -2981,7 +2981,7 @@ with r1c2:
         _moved_line  = (
             f"<div style='font-size:7px;font-weight:700;color:{_moved_col};'>"
             f"moved ₹{_actual_move:.0f} · {_moved_pct:.0f}%</div>"
-            if _actual_move is not None else ""
+            if (_actual_move is not None and _moved_pct is not None) else ""
         )
         if not _is_sideways:
             _vix_range_lbl = "✓ IN RANGE" if _straddle_ltp <= _vix_daily_pts * 1.1 else "↑ ELEVATED"
