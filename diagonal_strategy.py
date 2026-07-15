@@ -616,59 +616,44 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         return None
 
 
-def fetch_ideal_premium(ikey_ce_a, ikey_pe_a, ikey_ce_b, ikey_pe_b,
-                        strike_a, strike_b, tok):
+def fetch_ideal_premium(atm_strike, expiry_str, tok, chain_data):
     """
-    Ideal Premium (IP) — crossover-strike method using Upstox historical candles.
-    Fetches YESTERDAY's low for each of the 4 legs:
-      strike_a CE low + strike_a PE low + strike_b CE low + strike_b PE low
-    IP = average of 4 lows.
-    Candle format (newest-first): [ts, open, high, low, close, volume, oi]
+    Ideal Premium (IP) — OI-weighted previous-day midpoint of ATM CE + PE.
+
+    Formula (user-defined):
+      A   = (prevday_CE_high + prevday_CE_low) / 2  ×  CE_OI
+      B   = (prevday_PE_high + prevday_PE_low) / 2  ×  PE_OI
+      C   = CE_OI + PE_OI
+      IP  = (A + B) / C
+
+    Data source: NSE FO historical (primary) → Upstox daily candle (fallback).
+    Returns (ip_value, ce_h, ce_l, pe_h, pe_l, ce_oi_L, pe_oi_L, date_label) or all-None.
     """
-    today_dt  = datetime.now(IST).date()
-    today_str = str(today_dt)
-    from_str  = str(today_dt - timedelta(days=7))
+    # Primary: NSE FO historical (same source as SPP)
+    ce_can = fetch_nse_fo_hist(expiry_str, atm_strike, "CE")
+    pe_can = fetch_nse_fo_hist(expiry_str, atm_strike, "PE")
+    src    = "NSE"
 
-    def _prev_candle(candles):
-        """
-        Return yesterday's candle from a newest-first list.
-        Checks if candles[0] is today; if so, yesterday is candles[1].
-        If candles[0] is already yesterday (pre-market / option not yet traded today),
-        use candles[0].
-        """
-        if not candles:
-            return None
-        try:
-            # Upstox timestamp: "2026-07-09T00:00:00+0530" — parse date only
-            c0_date = str(candles[0][0])[:10]
-            if c0_date == today_str:
-                # today's candle is present → yesterday is index 1
-                return candles[1] if len(candles) >= 2 else None
-            else:
-                # no today candle yet → index 0 is yesterday
-                return candles[0]
-        except Exception:
-            return candles[1] if len(candles) >= 2 else candles[0]
+    # Fallback: Upstox daily candle
+    if (not ce_can or not pe_can) and tok and chain_data:
+        ce_can = fetch_upstox_fo_hist(tok, chain_data, atm_strike, "CE")
+        pe_can = fetch_upstox_fo_hist(tok, chain_data, atm_strike, "PE")
+        src    = "Upstox"
 
-    lows = {}
-    for leg_name, ikey in [
-        (f"{strike_a}_CE", ikey_ce_a),
-        (f"{strike_a}_PE", ikey_pe_a),
-        (f"{strike_b}_CE", ikey_ce_b),
-        (f"{strike_b}_PE", ikey_pe_b),
-    ]:
-        if not ikey:
-            continue
-        candles = _fetch_candles(ikey, today_str, from_str, tok)
-        yest = _prev_candle(candles)
-        if yest:
-            low = float(yest[3])   # [ts, open, high, LOW, close, vol, oi]
-            if low > 0:
-                lows[leg_name] = low
+    if not ce_can or not pe_can:
+        return None, None, None, None, None, None, None, None
 
-    if len(lows) == 4:
-        return sum(lows.values()) / 4, lows
-    return None, lows
+    ce_h, ce_l, ce_oi = ce_can["high"], ce_can["low"], ce_can["oi"]
+    pe_h, pe_l, pe_oi = pe_can["high"], pe_can["low"], pe_can["oi"]
+
+    ce_mid    = (ce_h + ce_l) / 2
+    pe_mid    = (pe_h + pe_l) / 2
+    tot_oi    = ce_oi + pe_oi
+    ip        = (ce_mid * ce_oi + pe_mid * pe_oi) / tot_oi if tot_oi > 0 else (ce_mid + pe_mid) / 2
+
+    date_lbl  = f"{ce_can['date']} ({src})"
+    return (round(ip, 2), ce_h, ce_l, pe_h, pe_l,
+            round(ce_oi / 1e5, 2), round(pe_oi / 1e5, 2), date_lbl)
 
 
 def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
@@ -3718,80 +3703,42 @@ with pb3:
         + f"</div>",
         unsafe_allow_html=True)
 # ── Ideal Premium — locked for the day (like SPP) ─────────────────────────────
-# Crossover strikes identified once from the first live chain read.
-# Yesterday's lows fetched once via Upstox historical candle.
-# Both stored in session_state and NOT recomputed until next calendar day.
-_ip_today_key  = datetime.now(IST).strftime("%Y-%m-%d")
-_ip_cross_low  = st.session_state.get("_ip_cross_low")
-_ip_cross_high = st.session_state.get("_ip_cross_high")
-_ip_val        = st.session_state.get("_ip_val")
-_ip_lows       = st.session_state.get("_ip_lows", {})
+# Formula: IP = (prevday_CE_mid × CE_OI + prevday_PE_mid × PE_OI) / (CE_OI + PE_OI)
+# where mid = (prevday_high + prevday_low) / 2
+# ATM is locked at day-open (same anchor as SPP).
+_ip_today_key = f"{_today_str}|{_inst_choice}|{_auto_near_exp}"
+_ip_val       = st.session_state.get("_ip_val_v2")
+_ip_ce_h      = st.session_state.get("_ip_ce_h")
+_ip_ce_l      = st.session_state.get("_ip_ce_l")
+_ip_pe_h      = st.session_state.get("_ip_pe_h")
+_ip_pe_l      = st.session_state.get("_ip_pe_l")
+_ip_ce_oi_L   = st.session_state.get("_ip_ce_oi_L")
+_ip_pe_oi_L   = st.session_state.get("_ip_pe_oi_L")
+_ip_src       = st.session_state.get("_ip_src_v2", "")
+_ip_atm       = st.session_state.get("_ip_atm_v2")
 
-# Recompute only if: new day, or no value locked yet
-if st.session_state.get("_ip_date") != _ip_today_key or _ip_val is None:
+# Recompute only if: new day/expiry/instrument, or no value yet
+if st.session_state.get("_ip_date_v2") != _ip_today_key or _ip_val is None:
     try:
-        _is_new_day = st.session_state.get("_ip_date") != _ip_today_key
-        _strikes_locked = bool(_ip_cross_low and _ip_cross_high and not _is_new_day)
-
-        if _strikes_locked:
-            # Strikes already locked for today — use them, just retry the historical fetch
-            _ip_cl = _ip_cross_low
-            _ip_ch = _ip_cross_high
-        else:
-            # New day or first run — scan chain for crossover strikes ONCE and lock them
-            _ip_lo = atm - 8 * STEP
-            _ip_hi = atm + 8 * STEP
-            _ip_strikes = sorted(
-                s for s in set(near_ce) | set(near_pe)
-                if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0
-                and _ip_lo <= s <= _ip_hi
-            )
-            _ip_cl = None
-            _ip_ch = None
-            _found = False
-            for _s in _ip_strikes:
-                _ce_v = near_ce.get(_s, 0)
-                _pe_v = near_pe.get(_s, 0)
-                if _ce_v > _pe_v:
-                    # keep updating — we want the LAST strike where CE > PE
-                    _ip_cl = int(_s)
-                    _found = False
-                elif _pe_v > _ce_v and _ip_cl and not _found:
-                    # first strike above the last CE>PE where PE > CE
-                    _ip_ch = int(_s)
-                    _found = True
-                    break
-
-            if _ip_cl and _ip_ch:
-                # Lock crossover strikes immediately — prevent them from drifting on next refresh
-                st.session_state["_ip_cross_low"]  = _ip_cl
-                st.session_state["_ip_cross_high"] = _ip_ch
-                _ip_cross_low  = _ip_cl
-                _ip_cross_high = _ip_ch
-
-        if _ip_cl and _ip_ch:
-            _ip_ikeys = {}
-            for _row in (near_raw or []):
-                _rs = int(float(_row.get("strike_price", 0)))
-                if _rs == _ip_cl:
-                    _ip_ikeys["ce_a"] = (_row.get("call_options") or {}).get("instrument_key")
-                    _ip_ikeys["pe_a"] = (_row.get("put_options")  or {}).get("instrument_key")
-                elif _rs == _ip_ch:
-                    _ip_ikeys["ce_b"] = (_row.get("call_options") or {}).get("instrument_key")
-                    _ip_ikeys["pe_b"] = (_row.get("put_options")  or {}).get("instrument_key")
-
-            _ip_v, _ip_l = fetch_ideal_premium(
-                _ip_ikeys.get("ce_a"), _ip_ikeys.get("pe_a"),
-                _ip_ikeys.get("ce_b"), _ip_ikeys.get("pe_b"),
-                _ip_cl, _ip_ch, token,
-            )
-            if _ip_v is not None:
-                # Lock value for the day
-                st.session_state["_ip_date"]  = _ip_today_key
-                st.session_state["_ip_val"]   = _ip_v
-                st.session_state["_ip_lows"]  = _ip_l
-                _ip_val  = _ip_v
-                _ip_lows = _ip_l
+        _ip_strike = _open_atm if _open_atm else atm   # locked at day-open ATM
+        with st.spinner(f"Computing Ideal Premium (ATM={_ip_strike}, exp={_auto_near_exp})…"):
+            _ip_v, _ip_ch, _ip_cl2, _ip_ph, _ip_pl, _ip_col, _ip_pol, _ip_dl = \
+                fetch_ideal_premium(_ip_strike, _auto_near_exp, token, near_raw)
+        if _ip_v is not None:
+            st.session_state["_ip_date_v2"] = _ip_today_key
+            st.session_state["_ip_val_v2"]  = _ip_v
+            st.session_state["_ip_ce_h"]    = _ip_ch
+            st.session_state["_ip_ce_l"]    = _ip_cl2
+            st.session_state["_ip_pe_h"]    = _ip_ph
+            st.session_state["_ip_pe_l"]    = _ip_pl
+            st.session_state["_ip_ce_oi_L"] = _ip_col
+            st.session_state["_ip_pe_oi_L"] = _ip_pol
+            st.session_state["_ip_src_v2"]  = _ip_dl
+            st.session_state["_ip_atm_v2"]  = _ip_strike
+            _ip_val, _ip_ce_h, _ip_ce_l     = _ip_v, _ip_ch, _ip_cl2
+            _ip_pe_h, _ip_pe_l               = _ip_ph, _ip_pl
+            _ip_ce_oi_L, _ip_pe_oi_L         = _ip_col, _ip_pol
+            _ip_src, _ip_atm                  = _ip_dl, _ip_strike
     except Exception:
         pass
 
@@ -3832,22 +3779,21 @@ with pb4:
             + (
                 f"<div style='border-left:1px solid var(--border);padding-left:12px;'>"
                 f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>IDEAL PREMIUM · locked"
-                + (f" · <span class='strike-pill-ce'>{_ip_cross_low}</span>→<span class='strike-pill'>{_ip_cross_high}</span>" if _ip_cross_low else "")
+                + (f" · ATM <span class='strike-pill-ce'>{_ip_atm}</span>" if _ip_atm else "")
                 + f"</div>"
                 f"<div style='font-family:var(--mono);font-size:20px;font-weight:700;color:var(--gold);'>"
                 + (f"₹{_ip_val:.2f}" if _ip_val is not None else "<span style='color:var(--muted);font-size:12px;'>pending</span>")
                 + f"</div>"
                 + (
                     f"<div style='font-size:8px;color:var(--muted);'>"
-                    f"{_ip_cross_low}CE:{_ip_lows.get(str(_ip_cross_low)+'_CE', 0):.0f} "
-                    f"{_ip_cross_low}PE:{_ip_lows.get(str(_ip_cross_low)+'_PE', 0):.0f} "
-                    f"{_ip_cross_high}CE:{_ip_lows.get(str(_ip_cross_high)+'_CE', 0):.0f} "
-                    f"{_ip_cross_high}PE:{_ip_lows.get(str(_ip_cross_high)+'_PE', 0):.0f}"
+                    f"CE mid:{(_ip_ce_h+_ip_ce_l)/2:.1f} OI:{_ip_ce_oi_L:.1f}L &nbsp;·&nbsp; "
+                    f"PE mid:{(_ip_pe_h+_ip_pe_l)/2:.1f} OI:{_ip_pe_oi_L:.1f}L"
                     f"</div>"
-                    if _ip_val is not None else ""
+                    if (_ip_val is not None and _ip_ce_h and _ip_pe_h) else ""
                 )
+                + (f"<div style='font-size:8px;color:var(--muted);'>{_ip_src}</div>" if _ip_src else "")
                 + f"</div>"
-                if (_ip_cross_low or _ip_val is not None) else ""
+                if _ip_val is not None else ""
             )
             + f"</div>"
             + (
