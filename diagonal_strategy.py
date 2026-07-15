@@ -4368,6 +4368,34 @@ st.session_state[_trend_state_key] = {
     "bear_cnt": _bear_cnt, "confirmed": _confirmed,
 }
 
+# ── GAMMA Trend label (spec §8) ──────────────────────────────────────────────
+# Combines EMA-gated trend + spike (institutional) direction
+if   _confirmed == "bull" and _strongMove and _spk_bull: _gamma_trend, _gt_col = "GAMMA UP",  "var(--bull)"
+elif _confirmed == "bull" and _strongMove:                _gamma_trend, _gt_col = "GAMMA UP",  "var(--bull)"
+elif _confirmed == "bull":                                _gamma_trend, _gt_col = "GAMMA UP",  "var(--bull)"
+elif _confirmed == "bear" and _strongMove and _spk_bear: _gamma_trend, _gt_col = "GAMMA DN",  "var(--bear)"
+elif _confirmed == "bear" and _strongMove:                _gamma_trend, _gt_col = "GAMMA DN",  "var(--bear)"
+elif _confirmed == "bear":                                _gamma_trend, _gt_col = "GAMMA DN",  "var(--bear)"
+elif _bull_cnt > 0:                                       _gamma_trend, _gt_col = "GAMMA UP▲", "var(--gold)"
+elif _bear_cnt > 0:                                       _gamma_trend, _gt_col = "GAMMA DN▼", "var(--gold)"
+else:                                                     _gamma_trend, _gt_col = "NEUTRAL",   "var(--muted)"
+
+# ── SmartProb — 6-condition confidence score (spec §15) ───────────────────────
+_sp_gamma_build = _gamma_score > 70                              # Near ATM, high gamma
+_sp_writer      = _spk_bull or _spk_bear                        # Spike score imbalance (institutional)
+_sp_iv_crush    = abs(_ce_avg) > 0.02 or abs(_pe_avg) > 0.02   # Meaningful erosion happening
+_sp_strong_move = _strongMove                                    # EMA momentum confirmed strong
+_sp_early_rev   = _bull_cnt == 1 or _bear_cnt == 1              # First bar of new direction
+_sp_comp_break  = abs(_dom) > _thr_dom and _strongMove          # DOM breakout + strong move
+_sp_pts         = sum([_sp_gamma_build, _sp_writer, _sp_iv_crush,
+                       _sp_strong_move, _sp_early_rev, _sp_comp_break])
+_smart_prob     = _sp_pts / 6 * 100
+_sp_col         = "var(--bull)" if _smart_prob >= 67 else ("var(--gold)" if _smart_prob >= 33 else "var(--muted)")
+
+# ATM/Open display — spec §1: show today's spot open + ATM from that open
+_spot_open_disp = _nifty_day_open if (_nifty_day_open and _nifty_day_open > 0) else _dom_spot
+_atm_open_disp  = _open_atm if _open_atm else _dom_atm
+
 # Render table (Pine-Script style)
 def _otm_cell(ltp, opn, eros, is_gamma=False):
     _c = "var(--bull)" if eros > 0.05 else ("var(--bear)" if eros < -0.05 else "var(--fg)")
@@ -4393,10 +4421,12 @@ st.markdown(
     f"<th style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);font-weight:700;'>4-OTM</th>"
     f"{_hdr}Signal</th></tr></thead><tbody>"
 
-    # CE row
+    # CE row — ATM/Open shows today's spot open + ATM from that open (spec §1)
     f"<tr>"
-    f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-    + (f"{_dom_spot:.2f}" if _dom_spot else "—")
+    f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);line-height:1.5;'>"
+    + (f"<span style='color:var(--text);font-weight:600;'>{_spot_open_disp:.2f}</span><br>"
+       f"<span style='font-size:9px;color:var(--gold);'>{int(_atm_open_disp)}</span>"
+       if _spot_open_disp else "—")
     + f"</td>"
     f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE</td>"
     f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
@@ -4404,15 +4434,17 @@ st.markdown(
     + _otm_cell(_otm_ce_ltps[1], _ce_opens[1], _ce_eros[1])
     + _otm_cell(_otm_ce_ltps[2], _ce_opens[2], _ce_eros[2])
     + _otm_cell(_otm_ce_ltps[3], _ce_opens[3], _ce_eros[3])
-    + f"<td rowspan='2' style='font-size:13px;font-weight:900;color:{_trend_col};"
+    + f"<td rowspan='2' style='font-size:12px;font-weight:900;color:{_gt_col};"
       f"padding:6px 8px;border:1px solid var(--border);text-align:center;vertical-align:middle;"
-      f"letter-spacing:.04em;'>"
-      f"{_coreTrend}</td>"
+      f"letter-spacing:.04em;white-space:nowrap;'>"
+      f"{_gamma_trend}"
+      f"<br><span style='font-size:8px;font-weight:400;color:var(--muted);'>{'STRONG' if _strongMove else ''}</span>"
+      f"</td>"
     f"</tr>"
 
     # PE row
     f"<tr>"
-    f"<td style='font-size:10px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
+    f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
     f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE</td>"
     f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
     + _otm_cell(_otm_pe_ltps[0], _pe_opens[0], _pe_eros[0])
@@ -4431,13 +4463,18 @@ st.markdown(
       f"<td style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>Edge: {abs(_score_diff):.1f}</td>"
       f"</tr>"
 
-    # Gamma Score row
+    # Gamma Score + SmartProb row
     + f"<tr>"
       f"<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Gamma Score</td>"
       f"<td style='font-size:11px;font-weight:700;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gamma_score:.1f}</td>"
-      f"<td colspan='2' style='font-size:9px;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gs_lbl}</td>"
-      f"<td colspan='3' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"CE avg Δe:{_ce_avg:.4f} &nbsp; PE avg Δe:{_pe_avg:.4f}</td>"
+      f"<td style='font-size:9px;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gs_lbl}</td>"
+      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+      f"CE Δe:{_ce_avg*100:.2f}% &nbsp;│&nbsp; PE Δe:{_pe_avg*100:.2f}%</td>"
+      f"<td colspan='2' style='padding:3px 8px;border:1px solid var(--border);'>"
+      f"<span style='font-size:8px;color:var(--muted);letter-spacing:.04em;'>SMART PROB</span><br>"
+      f"<span style='font-family:var(--mono);font-size:14px;font-weight:700;color:{_sp_col};'>{_smart_prob:.0f}%</span>"
+      f"<span style='font-size:8px;color:var(--muted);margin-left:4px;'>{_sp_pts}/6</span>"
+      f"</td>"
       f"</tr>"
 
     # DOM + MEDIAN row (big, prominent — Pine Script primary signals)
@@ -4470,6 +4507,24 @@ st.markdown(
       f"<td colspan='4' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
       f"CE avg Δe: {_ce_avg*100:.2f}% &nbsp;│&nbsp; PE avg Δe: {_pe_avg*100:.2f}%</td>"
       f"</tr>"
+
+    # SmartProb condition breakdown row
+    + f"<tr style='background:rgba(100,100,100,0.06);'>"
+      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>SmartProb conds</td>"
+      + "".join(
+          f"<td style='font-size:8px;padding:3px 5px;border:1px solid var(--border);"
+          f"color:{'var(--bull)' if ok else 'var(--muted)'};text-align:center;'>"
+          f"{'✓' if ok else '·'} {lbl}</td>"
+          for ok, lbl in [
+              (_sp_gamma_build, "γ Build"),
+              (_sp_writer,      "Writer"),
+              (_sp_iv_crush,    "IV Crush"),
+              (_sp_strong_move, "Strong"),
+              (_sp_early_rev,   "EarlyRev"),
+              (_sp_comp_break,  "CBreak"),
+          ]
+      )
+      + f"</tr>"
 
     + f"</tbody></table></div></div>",
     unsafe_allow_html=True,
