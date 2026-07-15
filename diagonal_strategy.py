@@ -4396,139 +4396,189 @@ _sp_col         = "var(--bull)" if _smart_prob >= 67 else ("var(--gold)" if _sma
 _spot_open_disp = _nifty_day_open if (_nifty_day_open and _nifty_day_open > 0) else _dom_spot
 _atm_open_disp  = _open_atm if _open_atm else _dom_atm
 
-# Render table (Pine-Script style)
-def _otm_cell(ltp, opn, eros, is_gamma=False):
+# ── Pre-build all HTML fragments into plain string variables (avoids any
+#    Python-version-specific parsing issues with mixed implicit/explicit
+#    concatenation and "".join() inside generators in a single st.markdown call)
+
+def _otm_cell(ltp, opn, eros):
     _c = "var(--bull)" if eros > 0.05 else ("var(--bear)" if eros < -0.05 else "var(--fg)")
-    _g = " 🔺G" if is_gamma else ""
-    return (f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;"
-            f"color:{_c};padding:3px 8px;border:1px solid var(--border);text-align:right;'>"
-            f"{ltp:.2f}{_g}<br>"
-            f"<span style='font-size:8px;color:var(--muted);'>"
-            f"o:{opn:.1f} Δe:{eros*100:.1f}%</span></td>")
+    return (
+        "<td style='font-family:var(--mono);font-size:11px;font-weight:700;"
+        "color:" + _c + ";padding:3px 8px;border:1px solid var(--border);text-align:right;'>"
+        + str(round(ltp, 2))
+        + "<br><span style='font-size:8px;color:var(--muted);'>o:"
+        + str(round(opn, 1))
+        + " \u0394e:" + str(round(eros * 100, 1)) + "%</span></td>"
+    )
 
-_hdr = ("<th style='font-size:9px;color:var(--muted);padding:3px 8px;"
-        "border:1px solid var(--border);font-weight:400;'>")
+_hdr_style = "font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);font-weight:400;"
 
-st.markdown(
-    f"<div class='card' style='padding:8px;margin-top:6px;'>"
-    f"<div class='lbl' style='margin-bottom:6px;'>OTM Erosion · Dominance Engine"
-    f"<span style='font-size:9px;color:var(--muted);margin-left:6px;'>gap={_gap} · nearest exp {_auto_near_exp}</span></div>"
-    f"<div style='overflow-x:auto;'>"
-    f"<table style='width:100%;border-collapse:collapse;font-size:11px;'>"
-    f"<thead><tr>"
-    f"{_hdr}ATM/Open</th>{_hdr}Type</th>{_hdr}Strike</th>"
-    f"{_hdr}1-OTM</th>{_hdr}2-OTM</th>{_hdr}3-OTM</th>"
-    f"<th style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);font-weight:700;'>4-OTM</th>"
-    f"{_hdr}Signal</th></tr></thead><tbody>"
+# ── ATM/Open cell (spec §1) ──────────────────────────────────────────────────
+if _spot_open_disp:
+    _atm_open_cell = (
+        "<td style='font-size:10px;color:var(--muted);padding:3px 8px;"
+        "border:1px solid var(--border);line-height:1.5;'>"
+        "<span style='color:var(--text);font-weight:600;'>" + str(round(_spot_open_disp, 2)) + "</span>"
+        "<br><span style='font-size:9px;color:var(--gold);'>" + str(int(_atm_open_disp)) + "</span>"
+        "</td>"
+    )
+else:
+    _atm_open_cell = (
+        "<td style='font-size:10px;color:var(--muted);padding:3px 8px;"
+        "border:1px solid var(--border);'>&mdash;</td>"
+    )
 
-    # CE row — ATM/Open shows today's spot open + ATM from that open (spec §1)
-    f"<tr>"
-    f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);line-height:1.5;'>"
-    + (f"<span style='color:var(--text);font-weight:600;'>{_spot_open_disp:.2f}</span><br>"
-       f"<span style='font-size:9px;color:var(--gold);'>{int(_atm_open_disp)}</span>"
-       if _spot_open_disp else "—")
-    + f"</td>"
-    f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE</td>"
-    f"<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
+# ── Signal cell (rowspan=2, spec §8 GAMMA trend) ─────────────────────────────
+_strong_lbl = "STRONG" if _strongMove else ""
+_signal_cell = (
+    "<td rowspan='2' style='font-size:12px;font-weight:900;color:" + _gt_col + ";"
+    "padding:6px 8px;border:1px solid var(--border);text-align:center;"
+    "vertical-align:middle;letter-spacing:.04em;white-space:nowrap;'>"
+    + _gamma_trend
+    + "<br><span style='font-size:8px;font-weight:400;color:var(--muted);'>" + _strong_lbl + "</span>"
+    "</td>"
+)
+
+# ── CE row ───────────────────────────────────────────────────────────────────
+_ce_row = (
+    "<tr>"
+    + _atm_open_cell
+    + "<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE</td>"
+    + "<td style='font-size:11px;font-weight:700;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>" + str(int(_dom_atm)) + "</td>"
     + _otm_cell(_otm_ce_ltps[0], _ce_opens[0], _ce_eros[0])
     + _otm_cell(_otm_ce_ltps[1], _ce_opens[1], _ce_eros[1])
     + _otm_cell(_otm_ce_ltps[2], _ce_opens[2], _ce_eros[2])
     + _otm_cell(_otm_ce_ltps[3], _ce_opens[3], _ce_eros[3])
-    + f"<td rowspan='2' style='font-size:12px;font-weight:900;color:{_gt_col};"
-      f"padding:6px 8px;border:1px solid var(--border);text-align:center;vertical-align:middle;"
-      f"letter-spacing:.04em;white-space:nowrap;'>"
-      f"{_gamma_trend}"
-      f"<br><span style='font-size:8px;font-weight:400;color:var(--muted);'>{'STRONG' if _strongMove else ''}</span>"
-      f"</td>"
-    f"</tr>"
+    + _signal_cell
+    + "</tr>"
+)
 
-    # PE row
-    f"<tr>"
-    f"<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
-    f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE</td>"
-    f"<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>{int(_dom_atm)}</td>"
+# ── PE row ───────────────────────────────────────────────────────────────────
+_pe_row = (
+    "<tr>"
+    + "<td style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>" + str(int(_dom_atm)) + "</td>"
+    + "<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE</td>"
+    + "<td style='font-size:11px;font-weight:700;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>" + str(int(_dom_atm)) + "</td>"
     + _otm_cell(_otm_pe_ltps[0], _pe_opens[0], _pe_eros[0])
     + _otm_cell(_otm_pe_ltps[1], _pe_opens[1], _pe_eros[1])
     + _otm_cell(_otm_pe_ltps[2], _pe_opens[2], _pe_eros[2])
     + _otm_cell(_otm_pe_ltps[3], _pe_opens[3], _pe_eros[3])
-    + f"</tr>"
-
-    # Spike Confluence row
-    + f"<tr style='background:rgba(0,0,150,0.15);'>"
-      f"<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Spike Confluence</td>"
-      f"<td colspan='3' style='font-size:11px;font-weight:700;color:{_conf_col};"
-      f"padding:3px 8px;border:1px solid var(--border);'>{_confluence}</td>"
-      f"<td style='font-size:9px;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE Score: {_ce_spike:.1f}</td>"
-      f"<td style='font-size:9px;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE Score: {_pe_spike:.1f}</td>"
-      f"<td style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>Edge: {abs(_score_diff):.1f}</td>"
-      f"</tr>"
-
-    # Gamma Score + SmartProb row
-    + f"<tr>"
-      f"<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Gamma Score</td>"
-      f"<td style='font-size:11px;font-weight:700;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gamma_score:.1f}</td>"
-      f"<td style='font-size:9px;color:{_gs_col};padding:3px 8px;border:1px solid var(--border);'>{_gs_lbl}</td>"
-      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"CE Δe:{_ce_avg*100:.2f}% &nbsp;│&nbsp; PE Δe:{_pe_avg*100:.2f}%</td>"
-      f"<td colspan='2' style='padding:3px 8px;border:1px solid var(--border);'>"
-      f"<span style='font-size:8px;color:var(--muted);letter-spacing:.04em;'>SMART PROB</span><br>"
-      f"<span style='font-family:var(--mono);font-size:14px;font-weight:700;color:{_sp_col};'>{_smart_prob:.0f}%</span>"
-      f"<span style='font-size:8px;color:var(--muted);margin-left:4px;'>{_sp_pts}/6</span>"
-      f"</td>"
-      f"</tr>"
-
-    # DOM + MEDIAN row (big, prominent — Pine Script primary signals)
-    # DOM/MOM/VOL displayed ×100 (percentage points) to match Pine Script
-    + f"<tr style='background:rgba(255,200,0,0.06);'>"
-      f"<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>DOM</td>"
-      f"<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
-      f"color:{_dom_col};padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
-      f"{_dom*100:.2f}"
-      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>%pt</span></td>"
-      f"<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>MEDIAN</td>"
-      f"<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
-      f"color:var(--gold);padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
-      f"{_med:.4f}"
-      f"<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>avg {len(_med_eros)} eros</span></td>"
-      f"<td colspan='2' style='font-size:26px;font-weight:900;font-family:var(--mono);"
-      f"color:{'#00e676' if _confirmed=='bull' else ('#ff4444' if _confirmed=='bear' else 'var(--muted)')}"
-      f";padding:4px 8px;border:1px solid var(--border);text-align:center;letter-spacing:.08em;'>"
-      f"{'bull' if _confirmed=='bull' else ('bear' if _confirmed=='bear' else 'wait')}"
-      f"</td>"
-      f"</tr>"
-
-    # MOM / VOL sub-row
-    + f"<tr>"
-      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>MOM / VOL</td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:{'var(--bull)' if _mD>0 else 'var(--bear)'};padding:3px 8px;border:1px solid var(--border);'>"
-      f"{_mD*100:.2f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>mD</span></td>"
-      f"<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"{_vol*100:.2f}<span style='font-size:8px;color:var(--muted);margin-left:4px;'>vol</span></td>"
-      f"<td colspan='4' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
-      f"CE avg Δe: {_ce_avg*100:.2f}% &nbsp;│&nbsp; PE avg Δe: {_pe_avg*100:.2f}%</td>"
-      f"</tr>"
-
-    # SmartProb condition breakdown row
-    + f"<tr style='background:rgba(100,100,100,0.06);'>"
-      f"<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>SmartProb conds</td>"
-      + "".join(
-          f"<td style='font-size:8px;padding:3px 5px;border:1px solid var(--border);"
-          f"color:{'var(--bull)' if ok else 'var(--muted)'};text-align:center;'>"
-          f"{'✓' if ok else '·'} {lbl}</td>"
-          for ok, lbl in [
-              (_sp_gamma_build, "γ Build"),
-              (_sp_writer,      "Writer"),
-              (_sp_iv_crush,    "IV Crush"),
-              (_sp_strong_move, "Strong"),
-              (_sp_early_rev,   "EarlyRev"),
-              (_sp_comp_break,  "CBreak"),
-          ]
-      )
-      + f"</tr>"
-
-    + f"</tbody></table></div></div>",
-    unsafe_allow_html=True,
+    + "</tr>"
 )
+
+# ── Spike Confluence row ─────────────────────────────────────────────────────
+_spike_row = (
+    "<tr style='background:rgba(0,0,150,0.15);'>"
+    "<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Spike Confluence</td>"
+    "<td colspan='3' style='font-size:11px;font-weight:700;color:" + _conf_col + ";padding:3px 8px;border:1px solid var(--border);'>" + _confluence + "</td>"
+    "<td style='font-size:9px;color:var(--ce);padding:3px 8px;border:1px solid var(--border);'>CE Score: " + str(round(_ce_spike, 1)) + "</td>"
+    "<td style='font-size:9px;color:var(--pe);padding:3px 8px;border:1px solid var(--border);'>PE Score: " + str(round(_pe_spike, 1)) + "</td>"
+    "<td style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);'>Edge: " + str(round(abs(_score_diff), 1)) + "</td>"
+    "</tr>"
+)
+
+# ── Gamma Score + SmartProb row ───────────────────────────────────────────────
+_gamma_sp_row = (
+    "<tr>"
+    "<td colspan='2' style='font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>Gamma Score</td>"
+    "<td style='font-size:11px;font-weight:700;color:" + _gs_col + ";padding:3px 8px;border:1px solid var(--border);'>" + str(round(_gamma_score, 1)) + "</td>"
+    "<td style='font-size:9px;color:" + _gs_col + ";padding:3px 8px;border:1px solid var(--border);'>" + _gs_lbl + "</td>"
+    "<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+    "CE &Delta;e:" + str(round(_ce_avg * 100, 2)) + "% &nbsp;&nbsp; PE &Delta;e:" + str(round(_pe_avg * 100, 2)) + "%</td>"
+    "<td colspan='2' style='padding:3px 8px;border:1px solid var(--border);'>"
+    "<span style='font-size:8px;color:var(--muted);letter-spacing:.04em;'>SMART PROB</span><br>"
+    "<span style='font-family:var(--mono);font-size:14px;font-weight:700;color:" + _sp_col + ";'>" + str(int(round(_smart_prob))) + "%</span>"
+    "<span style='font-size:8px;color:var(--muted);margin-left:4px;'>" + str(_sp_pts) + "/6</span>"
+    "</td>"
+    "</tr>"
+)
+
+# ── DOM + MEDIAN row ──────────────────────────────────────────────────────────
+_conf_color = "#00e676" if _confirmed == "bull" else ("#ff4444" if _confirmed == "bear" else "var(--muted)")
+_conf_word  = "bull" if _confirmed == "bull" else ("bear" if _confirmed == "bear" else "wait")
+_dom_med_row = (
+    "<tr style='background:rgba(255,200,0,0.06);'>"
+    "<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>DOM</td>"
+    "<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
+    "color:" + _dom_col + ";padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
+    + str(round(_dom * 100, 2))
+    + "<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>%pt</span></td>"
+    "<td style='font-size:9px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);'>MEDIAN</td>"
+    "<td colspan='2' style='font-family:var(--mono);font-size:18px;font-weight:900;"
+    "color:var(--gold);padding:4px 8px;border:1px solid var(--border);letter-spacing:.03em;'>"
+    + str(round(_med, 4))
+    + "<span style='font-size:9px;font-weight:400;color:var(--muted);margin-left:6px;'>avg " + str(len(_med_eros)) + " eros</span></td>"
+    "<td colspan='2' style='font-size:26px;font-weight:900;font-family:var(--mono);"
+    "color:" + _conf_color + ";padding:4px 8px;border:1px solid var(--border);"
+    "text-align:center;letter-spacing:.08em;'>" + _conf_word + "</td>"
+    "</tr>"
+)
+
+# ── MOM / VOL sub-row ─────────────────────────────────────────────────────────
+_mom_col = "var(--bull)" if _mD > 0 else "var(--bear)"
+_mom_vol_row = (
+    "<tr>"
+    "<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>MOM / VOL</td>"
+    "<td style='font-family:var(--mono);font-size:10px;color:" + _mom_col + ";padding:3px 8px;border:1px solid var(--border);'>"
+    + str(round(_mD * 100, 2)) + "<span style='font-size:8px;color:var(--muted);margin-left:4px;'>mD</span></td>"
+    "<td style='font-family:var(--mono);font-size:10px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+    + str(round(_vol * 100, 2)) + "<span style='font-size:8px;color:var(--muted);margin-left:4px;'>vol</span></td>"
+    "<td colspan='4' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>"
+    "CE avg &Delta;e: " + str(round(_ce_avg * 100, 2)) + "% &nbsp;&nbsp; PE avg &Delta;e: " + str(round(_pe_avg * 100, 2)) + "%</td>"
+    "</tr>"
+)
+
+# ── SmartProb condition breakdown row ─────────────────────────────────────────
+_sp_cond_cells = ""
+for _ok, _lbl in [
+    (_sp_gamma_build, "y Build"),
+    (_sp_writer,      "Writer"),
+    (_sp_iv_crush,    "IV Crush"),
+    (_sp_strong_move, "Strong"),
+    (_sp_early_rev,   "EarlyRev"),
+    (_sp_comp_break,  "CBreak"),
+]:
+    _ck = "var(--bull)" if _ok else "var(--muted)"
+    _mk = "OK" if _ok else "."
+    _sp_cond_cells += (
+        "<td style='font-size:8px;padding:3px 5px;border:1px solid var(--border);"
+        "color:" + _ck + ";text-align:center;'>" + _mk + " " + _lbl + "</td>"
+    )
+_sp_cond_row = (
+    "<tr style='background:rgba(100,100,100,0.06);'>"
+    "<td colspan='2' style='font-size:9px;color:var(--muted);padding:3px 8px;border:1px solid var(--border);'>SmartProb</td>"
+    + _sp_cond_cells
+    + "</tr>"
+)
+
+# ── Assemble and render ───────────────────────────────────────────────────────
+_dom_table_html = (
+    "<div class='card' style='padding:8px;margin-top:6px;'>"
+    "<div class='lbl' style='margin-bottom:6px;'>OTM Erosion \u00b7 Dominance Engine \u00b7 SmartProb"
+    "<span style='font-size:9px;color:var(--muted);margin-left:6px;'>gap=" + str(_gap) + " \u00b7 nearest exp " + str(_auto_near_exp) + "</span></div>"
+    "<div style='overflow-x:auto;'>"
+    "<table style='width:100%;border-collapse:collapse;font-size:11px;'>"
+    "<thead><tr>"
+    "<th style='" + _hdr_style + "'>ATM/Open</th>"
+    "<th style='" + _hdr_style + "'>Type</th>"
+    "<th style='" + _hdr_style + "'>Strike</th>"
+    "<th style='" + _hdr_style + "'>1-OTM</th>"
+    "<th style='" + _hdr_style + "'>2-OTM</th>"
+    "<th style='" + _hdr_style + "'>3-OTM</th>"
+    "<th style='font-size:9px;color:var(--gold);padding:3px 8px;border:1px solid var(--border);font-weight:700;'>4-OTM</th>"
+    "<th style='" + _hdr_style + "'>Signal</th>"
+    "</tr></thead><tbody>"
+    + _ce_row
+    + _pe_row
+    + _spike_row
+    + _gamma_sp_row
+    + _dom_med_row
+    + _mom_vol_row
+    + _sp_cond_row
+    + "</tbody></table></div></div>"
+)
+
+st.markdown(_dom_table_html, unsafe_allow_html=True)
 
 # Debug expander — shows exact strikes/LTPs/opens so user can verify DOM values
 with st.expander("🔍 DOM Debug — strikes & raw LTPs", expanded=False):
