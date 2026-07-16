@@ -616,25 +616,58 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_ideal_premium(expiry_str, strike_a, strike_b):
     """
     Ideal Premium (IP) — crossover-strike method:
       strike_a = last strike where CE LTP > PE LTP  (e.g. 23950)
       strike_b = first strike where PE LTP > CE LTP (e.g. 24000)
-    Fetch prev-day LOWs for all 4 legs, IP = avg of the 4 lows.
-    Returns (ip, lows_dict) or (None, {}).
+    Fetch prev-day LOWs for all 4 legs using ONE shared NSE session.
+    IP = avg of available lows (uses partial if >= 2 legs fetched).
+    Returns (ip, lows_dict, date_str) or (None, {}, "").
     """
-    lows = {}
-    for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
-                          (strike_b, "CE"), (strike_b, "PE")]:
-        h = fetch_nse_fo_hist(expiry_str, strike, otype)
-        if h and h.get("low"):
-            lows[f"{strike}_{otype}"] = h["low"]
-    if len(lows) == 4:
-        ip = sum(lows.values()) / 4
-        return ip, lows
-    return None, lows
+    try:
+        exp_dt     = datetime.strptime(expiry_str, "%Y-%m-%d")
+        expiry_nse = exp_dt.strftime("%d-%b-%Y")
+        prev       = _prev_biz_day()
+        date_str   = prev.strftime("%d-%m-%Y")
+
+        # One session — one cookie handshake for all 4 legs
+        sess = requests.Session()
+        sess.headers.update(_NSE_HEADERS)
+        sess.get(_NSE_HOME, timeout=8)
+        sess.get("https://www.nseindia.com/option-chain", timeout=8)
+
+        lows = {}
+        date_label = str(prev)
+        for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
+                              (strike_b, "CE"), (strike_b, "PE")]:
+            try:
+                r = sess.get(
+                    _NSE_FO_HIST,
+                    params={
+                        "from": date_str, "to": date_str,
+                        "instrumentType": "OPTIDX", "symbol": "NIFTY",
+                        "expiryDate": expiry_nse,
+                        "optionType": otype,
+                        "strikePrice": str(int(strike)),
+                    },
+                    timeout=12,
+                )
+                rows = r.json().get("data") or []
+                if rows:
+                    row = rows[-1]
+                    l = float(row.get("FH_TRADE_LOW_PRICE") or 0)
+                    if l > 0:
+                        lows[f"{int(strike)} {otype}"] = l
+            except Exception:
+                pass
+
+        if len(lows) >= 2:
+            ip = sum(lows.values()) / len(lows)
+            return round(ip, 2), lows, date_label
+        return None, lows, date_label
+    except Exception:
+        return None, {}, ""
 
 
 def fetch_upstox_fo_hist(tok, chain_data, atm_strike, option_type):
@@ -3683,12 +3716,10 @@ with pb3:
         + _diag_scan_html
         + f"</div>",
         unsafe_allow_html=True)
-# ── Ideal Premium crossover calculation ───────────────────────────────────────
+# ── Ideal Premium — crossover-strike method ───────────────────────────────────
 # Find last strike where CE LTP > PE LTP, and first where PE LTP > CE LTP
-_ip_cross_low  = None   # last  CE > PE  (e.g. 23950)
-_ip_cross_high = None   # first PE > CE  (e.g. 24000)
-_ip_val        = None
-_ip_lows       = {}
+_ip_cross_low  = None
+_ip_cross_high = None
 try:
     _ip_strikes = sorted(s for s in set(near_ce) | set(near_pe)
                          if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
@@ -3698,15 +3729,29 @@ try:
         _pe_l = near_pe.get(_s, 0)
         if _ce_l > _pe_l:
             _ip_cross_low   = int(_s)
-            _ip_found_cross = False      # reset — keep updating as long as CE>PE
+            _ip_found_cross = False
         elif _pe_l > _ce_l and _ip_cross_low is not None and not _ip_found_cross:
             _ip_cross_high  = int(_s)
             _ip_found_cross = True
             break
-    if _ip_cross_low and _ip_cross_high:
-        _ip_val, _ip_lows = fetch_ideal_premium(near_exp, _ip_cross_low, _ip_cross_high)
 except Exception:
     pass
+
+# Cache via session_state (keyed by day+expiry+crossover strikes) so:
+# - value persists across reruns once fetched
+# - retries every run when still None (unlike @st.cache_data which locks failures)
+_ip_cache_key  = f"ip_{_today_str}_{near_exp}_{_ip_cross_low}_{_ip_cross_high}"
+_ip_val        = st.session_state.get(_ip_cache_key)
+_ip_lows       = st.session_state.get(_ip_cache_key + "_lows", {})
+_ip_date_lbl   = st.session_state.get(_ip_cache_key + "_date", "")
+
+if _ip_val is None and _ip_cross_low and _ip_cross_high:
+    _ip_v, _ip_ls, _ip_dl = fetch_ideal_premium(near_exp, _ip_cross_low, _ip_cross_high)
+    if _ip_v is not None:
+        st.session_state[_ip_cache_key]           = _ip_v
+        st.session_state[_ip_cache_key + "_lows"] = _ip_ls
+        st.session_state[_ip_cache_key + "_date"] = _ip_dl
+        _ip_val, _ip_lows, _ip_date_lbl = _ip_v, _ip_ls, _ip_dl
 
 with pb4:
     if _spp is not None:
@@ -3743,20 +3788,22 @@ with pb4:
             f"<div class='val-big val-gold'>₹{_spp:,.2f}</div>"
             f"</div>"
             + (
-                f"<div style='border-left:1px solid var(--border);padding-left:12px;'>"
-                f"<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>IDEAL PREMIUM · crossover"
-                + (f" · <span class='strike-pill-ce'>{_ip_cross_low}</span>↔<span class='strike-pill-pe'>{_ip_cross_high}</span>" if _ip_cross_low and _ip_cross_high else "")
-                + f"</div>"
-                f"<div style='font-family:var(--mono);font-size:20px;font-weight:700;color:var(--gold);'>"
-                + (f"₹{_ip_val:.2f}" if _ip_val is not None else "<span style='color:var(--muted);font-size:12px;'>—pending—</span>")
-                + f"</div>"
+                "<div style='border-left:1px solid var(--border);padding-left:12px;'>"
+                "<div style='font-size:8px;color:var(--muted);letter-spacing:.06em;'>IDEAL PREMIUM · prevday lows avg"
+                + (f" · <span class='strike-pill-ce'>{_ip_cross_low}</span>↔<span class='strike-pill-pe'>{_ip_cross_high}</span>" if _ip_cross_low and _ip_cross_high else " · no crossover")
+                + ("" if not _ip_date_lbl else f" · {_ip_date_lbl}")
+                + "</div>"
+                "<div style='font-family:var(--mono);font-size:20px;font-weight:700;color:var(--gold);'>"
+                + (f"₹{_ip_val:.2f}" if _ip_val is not None else "<span style='color:var(--muted);font-size:12px;'>fetching…</span>")
+                + "</div>"
                 + (
-                    f"<div style='font-size:8px;color:var(--muted);'>"
-                    + " &nbsp;·&nbsp; ".join(f"{k.replace('_', ' ')}: {v:.2f}" for k, v in _ip_lows.items())
-                    + f"</div>"
-                    if _ip_lows else ""
+                    "<div style='font-size:8px;color:var(--muted);'>"
+                    + " &nbsp;·&nbsp; ".join(f"{k}:{v:.2f}" for k, v in _ip_lows.items())
+                    + "</div>"
+                    if _ip_lows else
+                    "<div style='font-size:8px;color:var(--muted);'>NSE fetch pending — will retry next refresh</div>"
                 )
-                + f"</div>"
+                + "</div>"
             )
             + f"</div>"
             + (
