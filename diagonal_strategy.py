@@ -616,31 +616,37 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         return None
 
 
-def fetch_ideal_premium(expiry_str, strike_a, strike_b):
+def fetch_ideal_premium(expiry_str, strike_a, strike_b, tok=None, chain_data=None):
     """
-    Ideal Premium (IP) — crossover-strike method:
-      strike_a = last strike where CE LTP > PE LTP  (e.g. 23950)
-      strike_b = first strike where PE LTP > CE LTP (e.g. 24000)
-    Fetch prev-day LOWs for all 4 legs using ONE shared NSE session.
-    IP = avg of available lows (uses partial if >= 2 legs fetched).
-    Returns (ip, lows_dict, date_str) or (None, {}, "").
+    Ideal Premium (IP) — crossover-strike method.
+    Fetches prev-day LOWs for 4 legs: strike_a CE/PE + strike_b CE/PE.
+    Primary: NSE FO historical (one shared session).
+    Fallback: Upstox daily candle (same source as SPP).
+    IP = avg of available lows (uses partial if >= 2 legs).
+    Returns (ip, lows_dict, date_label) or (None, {}, "").
     """
     try:
         exp_dt     = datetime.strptime(expiry_str, "%Y-%m-%d")
         expiry_nse = exp_dt.strftime("%d-%b-%Y")
         prev       = _prev_biz_day()
         date_str   = prev.strftime("%d-%m-%Y")
+        date_label = str(prev)
 
-        # One session — one cookie handshake for all 4 legs
+        # Prime one NSE session for all 4 legs
         sess = requests.Session()
         sess.headers.update(_NSE_HEADERS)
-        sess.get(_NSE_HOME, timeout=8)
-        sess.get("https://www.nseindia.com/option-chain", timeout=8)
+        try:
+            sess.get(_NSE_HOME, timeout=6)
+            sess.get("https://www.nseindia.com/option-chain", timeout=6)
+        except Exception:
+            pass
 
         lows = {}
-        date_label = str(prev)
+        src  = "NSE"
         for strike, otype in [(strike_a, "CE"), (strike_a, "PE"),
                               (strike_b, "CE"), (strike_b, "PE")]:
+            lv = None
+            # ── Try NSE ──────────────────────────────────────────────────────
             try:
                 r = sess.get(
                     _NSE_FO_HIST,
@@ -651,20 +657,30 @@ def fetch_ideal_premium(expiry_str, strike_a, strike_b):
                         "optionType": otype,
                         "strikePrice": str(int(strike)),
                     },
-                    timeout=12,
+                    timeout=10,
                 )
                 rows = r.json().get("data") or []
                 if rows:
-                    row = rows[-1]
-                    l = float(row.get("FH_TRADE_LOW_PRICE") or 0)
-                    if l > 0:
-                        lows[f"{int(strike)} {otype}"] = l
+                    lv = float(rows[-1].get("FH_TRADE_LOW_PRICE") or 0) or None
             except Exception:
                 pass
 
+            # ── Fallback: Upstox ─────────────────────────────────────────────
+            if not lv and tok and chain_data:
+                try:
+                    h = fetch_upstox_fo_hist(tok, chain_data, strike, otype)
+                    if h and h.get("low", 0) > 0:
+                        lv  = h["low"]
+                        src = "Upstox"
+                except Exception:
+                    pass
+
+            if lv and lv > 0:
+                lows[f"{int(strike)} {otype}"] = lv
+
         if len(lows) >= 2:
             ip = sum(lows.values()) / len(lows)
-            return round(ip, 2), lows, date_label
+            return round(ip, 2), lows, f"{date_label} ({src})"
         return None, lows, date_label
     except Exception:
         return None, {}, ""
@@ -3746,7 +3762,8 @@ _ip_lows       = st.session_state.get(_ip_cache_key + "_lows", {})
 _ip_date_lbl   = st.session_state.get(_ip_cache_key + "_date", "")
 
 if _ip_val is None and _ip_cross_low and _ip_cross_high:
-    _ip_v, _ip_ls, _ip_dl = fetch_ideal_premium(near_exp, _ip_cross_low, _ip_cross_high)
+    _ip_v, _ip_ls, _ip_dl = fetch_ideal_premium(
+        near_exp, _ip_cross_low, _ip_cross_high, tok=token, chain_data=near_raw)
     if _ip_v is not None:
         st.session_state[_ip_cache_key]           = _ip_v
         st.session_state[_ip_cache_key + "_lows"] = _ip_ls
