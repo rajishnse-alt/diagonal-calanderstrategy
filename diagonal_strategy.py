@@ -3748,7 +3748,7 @@ with pb4:
                 + (f" · <span class='strike-pill-ce'>{_ip_cross_low}</span>↔<span class='strike-pill-pe'>{_ip_cross_high}</span>" if _ip_cross_low and _ip_cross_high else "")
                 + f"</div>"
                 f"<div style='font-family:var(--mono);font-size:20px;font-weight:700;color:var(--gold);'>"
-                + (f"₹{_ip_val:.2f}" if _ip_val is not None else "<span style='color:var(--muted);font-size:12px;'>pending</span>")
+                + (f"₹{_ip_val:.2f}" if _ip_val is not None else "<span style='color:var(--muted);font-size:12px;'>—pending—</span>")
                 + f"</div>"
                 + (
                     f"<div style='font-size:8px;color:var(--muted);'>"
@@ -3757,7 +3757,6 @@ with pb4:
                     if _ip_lows else ""
                 )
                 + f"</div>"
-                if _ip_val is not None else ""
             )
             + f"</div>"
             + (
