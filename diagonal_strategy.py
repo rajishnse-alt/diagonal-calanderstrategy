@@ -1108,6 +1108,48 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
     return ce_h, ce_l, pe_h, pe_l
 
 
+def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
+    """
+    First 5-min candle HIGH for ATM CE and PE options.
+    date_str=None  → intraday endpoint  (market open)
+    date_str='YYYY-MM-DD' → historical endpoint (pre/post market, uses prev-biz-day)
+    Candles are newest-first; last element = first candle of the session.
+    Returns (ce_5m_h, pe_5m_h) — either may be None.
+    """
+    ce_inst = pe_inst = None
+    for row in chain_data:
+        if int(float(row.get("strike_price", 0))) == int(atm_strike):
+            ce_inst = (row.get("call_options") or {}).get("instrument_key")
+            pe_inst = (row.get("put_options")  or {}).get("instrument_key")
+            break
+    if not ce_inst or not pe_inst:
+        return None, None
+
+    def _first_5m_h(inst_key):
+        try:
+            enc = urllib.parse.quote(inst_key, safe="")
+            _h5 = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+            if date_str:
+                r = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{date_str}/{date_str}",
+                    headers=_h5, timeout=10,
+                )
+            else:
+                r = requests.get(
+                    f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5",
+                    headers=_h5, timeout=10,
+                )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if candles:
+                first_c = candles[-1]           # newest-first → last = first candle
+                return float(first_c[2]) if len(first_c) > 2 else None
+        except Exception:
+            pass
+        return None
+
+    return _first_5m_h(ce_inst), _first_5m_h(pe_inst)
+
+
 def fetch_otm_day_opens(tok, chain_data, ce_strikes, pe_strikes):
     """
     Fetch today's day-open price for 4 OTM CE and 4 OTM PE strikes.
@@ -4066,7 +4108,31 @@ with pb4:
 
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
-# Fallback chain for day high:
+# SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
+# Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{atm}"
+_atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce")
+_atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe")
+
+if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
+    # Market open → intraday endpoint; market closed → prev-biz-day historical
+    _5m_d_arg = None if _mkt_open else _5m_date_used.strftime("%Y-%m-%d")
+    _c5h, _p5h = fetch_atm_5min_high(token, near_raw, atm, date_str=_5m_d_arg)
+    if _c5h:
+        _atm_ce_5m_h = _c5h
+        # Only lock into session cache once the candle is past 9:20 (candle fully closed)
+        _now_ist_5m = datetime.now(IST)
+        if (not _mkt_open) or (_now_ist_5m.hour > 9 or
+                (_now_ist_5m.hour == 9 and _now_ist_5m.minute >= 20)):
+            st.session_state[_5m_opt_key + "_ce"] = _c5h
+    if _p5h:
+        _atm_pe_5m_h = _p5h
+        _now_ist_5m = datetime.now(IST)
+        if (not _mkt_open) or (_now_ist_5m.hour > 9 or
+                (_now_ist_5m.hour == 9 and _now_ist_5m.minute >= 20)):
+            st.session_state[_5m_opt_key + "_pe"] = _p5h
+
+# Fallback chain for _atm_ce_day_high / _atm_pe_day_high (ATM card H/L display):
 #   1. chain OHLC high  (real, flagged by _atm_ce_ohlc_real)
 #   2. market-quote / candle day high  (_atm_ce_candle_h)
 #   3. prev-day SPP H/L (_spp_ce_h / _spp_pe_h) — pre/post market
@@ -4081,9 +4147,12 @@ if not _atm_pe_ohlc_real and _atm_pe_candle_h:
 elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
-# Always recompute here so even a mid-day data gap gets recovered
+
+# SPCL: use first 5-min candle high; fall back to full-day high if 5-min not yet available
+_spcl_ce_h = _atm_ce_5m_h or _atm_ce_day_high
+_spcl_pe_h = _atm_pe_5m_h or _atm_pe_day_high
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
-    _calc_spcl(_atm_ce_day_high, _atm_pe_day_high)
+    _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
 # Strikes in near expiry whose LTP falls within the SPCL proj Low→High range
 def _strikes_in_range(price_map, lo, hi):
@@ -4236,7 +4305,7 @@ if True:  # always render — individual cells show "—" if data missing
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--ce);font-weight:700;letter-spacing:.06em;'>CeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>"
-            f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_ce_day_high:.1f} → </span>"
+            f"<span style='color:var(--muted);font-size:10px;'>{'5m' if _atm_ce_5m_h else 'H'}:{_spcl_ce_h:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_ce_spcl)}</span></span>"
             f"</div>"
             + (
@@ -4253,7 +4322,7 @@ if True:  # always render — individual cells show "—" if data missing
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--pe);font-weight:700;letter-spacing:.06em;'>PeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>"
-            f"<span style='color:var(--muted);font-size:10px;'>H:{_atm_pe_day_high:.1f} → </span>"
+            f"<span style='color:var(--muted);font-size:10px;'>{'5m' if _atm_pe_5m_h else 'H'}:{_spcl_pe_h:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_pe_spcl)}</span></span>"
             f"</div>"
             + (
