@@ -4110,9 +4110,15 @@ with pb4:
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
-# Use OPEN ATM (ATM at 9:15 open price) — not current ATM — for the first 5-min
-# candle fetch.  Current ATM may have drifted far from where the first candle was.
-_5m_spcl_atm  = _open_atm if _open_atm else atm
+# ATM for SPCL 5-min: derive from NIFTY first-5-min-candle HIGH (already fetched),
+# which gives the correct "anchor" strike (e.g. NIFTY 5m-high 24194.90 → ATM 24200).
+# _open_atm uses the raw market-open tick (24129 → ATM 24150) which is one step off.
+# Fall back chain: 5m-high ATM → open ATM → current ATM.
+_5m_spcl_atm  = (
+    int(round(_nifty_5m_high / STEP) * STEP)
+    if _nifty_5m_high and _nifty_5m_high > 0
+    else (_open_atm if _open_atm else atm)
+)
 _5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
 _atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce")
 _atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe")
