@@ -3021,6 +3021,69 @@ if _fut_data:
         )
 # ── End futures build-up ──────────────────────────────────────────────────────
 
+# ── First 5-min candle HIGH → Critical Resistance (+0.2611%) ─────────────────
+_5m_key = f"nifty_5m_high_{_today_str}"
+_nifty_5m_high = st.session_state.get(_5m_key)
+
+if _nifty_5m_high is None and token:
+    try:
+        _enc_key = urllib.parse.quote(INSTRUMENT_KEY, safe="")
+        _r5 = requests.get(
+            f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/5",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+        if _candles5:
+            # candles are newest-first; last element = first candle of the day
+            _first_c = _candles5[-1]   # [ts, open, high, low, close, vol, oi]
+            _5m_h = float(_first_c[2]) if len(_first_c) > 2 else 0
+            if _5m_h > 0:
+                _nifty_5m_high = _5m_h
+                # Only lock after 9:20 AM IST (first candle complete)
+                _now_ist = datetime.now(IST)
+                if _now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20):
+                    st.session_state[_5m_key] = _nifty_5m_high
+    except Exception:
+        pass
+
+# Critical Resistance = first 5-min HIGH + 0.2611%
+_crit_res = round(_nifty_5m_high * 1.002611, 2) if _nifty_5m_high else None
+_crit_res_col = "var(--bear)" if (spot and _crit_res and spot < _crit_res) else "var(--bull)"
+_crit_res_tag = "⚠ RESISTANCE ABOVE" if (spot and _crit_res and spot < _crit_res) else ("✓ ABOVE RES" if (spot and _crit_res) else "")
+
+# Build the 5-min resistance HTML snippet
+if _nifty_5m_high and _crit_res:
+    _5m_html = (
+        "<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+        "<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>"
+        "5-MIN CANDLE · CRITICAL RESISTANCE</div>"
+        "<div style='display:flex;align-items:baseline;gap:10px;'>"
+        "<div>"
+        "<div style='font-size:8px;color:var(--muted);'>5m High</div>"
+        "<div style='font-family:var(--mono);font-size:14px;font-weight:700;color:var(--text);'>"
+        + f"{_nifty_5m_high:,.2f}</div>"
+        + "</div>"
+        "<div style='font-size:18px;color:var(--muted);'>→</div>"
+        "<div>"
+        "<div style='font-size:8px;color:var(--muted);'>+0.2611% Critical Res</div>"
+        "<div style='font-family:var(--mono);font-size:16px;font-weight:900;color:" + _crit_res_col + ";'>"
+        + f"{_crit_res:,.2f}</div>"
+        + "</div>"
+        "<div style='font-size:9px;font-weight:700;color:" + _crit_res_col + ";align-self:center;'>"
+        + _crit_res_tag + "</div>"
+        "</div>"
+        "</div>"
+    )
+else:
+    _5m_html = (
+        "<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+        "<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>"
+        "5-MIN CANDLE · CRITICAL RESISTANCE</div>"
+        "<span style='font-size:9px;color:var(--muted);font-style:italic;'>fetching first 5-min candle…</span>"
+        "</div>"
+    )
+
 # Row 1 — Spot + ATM
 r1c1, r1c2 = st.columns(2)
 with r1c1:
@@ -3036,6 +3099,8 @@ with r1c1:
         f"<span style='color:var(--gold);'>◆ pivot</span></div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:4px;'>{_sq_pills}</div>"
         f"</div>"
+        # 5-min critical resistance
+        + _5m_html
         # Futures build-up (always show section; show error hint if no data)
         + f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
         + f"<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>FUTURES BUILD-UP</div>"
