@@ -3022,27 +3022,44 @@ if _fut_data:
 # ── End futures build-up ──────────────────────────────────────────────────────
 
 # ── First 5-min candle HIGH → Critical Resistance (+0.2611%) ─────────────────
-_5m_key = f"nifty_5m_high_{datetime.now(IST).date().isoformat()}"
+_now_ist       = datetime.now(IST)
+_mkt_open      = ((_now_ist.weekday() < 5)                          # Mon–Fri
+                  and (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 15))
+                  and (_now_ist.hour < 15 or (_now_ist.hour == 15 and _now_ist.minute <= 30)))
+_5m_date_used  = _now_ist.date() if _mkt_open else _prev_biz_day()
+_5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
+_5m_src_label  = "today" if _mkt_open else f"prev day ({_5m_date_used})"
 
 if _nifty_5m_high is None and token:
     try:
         _enc_key = urllib.parse.quote(INSTRUMENT_KEY, safe="")
-        _r5 = requests.get(
-            f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/5",
-            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
-            timeout=10,
-        )
-        _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+        _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+
+        if _mkt_open:
+            # ── Intraday endpoint: today's candles ───────────────────────────
+            _r5 = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/5",
+                headers=_hdr5, timeout=10,
+            )
+            _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+        else:
+            # ── Historical endpoint: previous trading day ────────────────────
+            _d_str = _5m_date_used.strftime("%Y-%m-%d")
+            _r5 = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{_enc_key}/5minute/{_d_str}/{_d_str}",
+                headers=_hdr5, timeout=10,
+            )
+            _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+
         if _candles5:
-            # candles are newest-first; last element = first candle of the day
-            _first_c = _candles5[-1]   # [ts, open, high, low, close, vol, oi]
+            # candles newest-first; last element = first 5-min candle of the day
+            _first_c = _candles5[-1]
             _5m_h = float(_first_c[2]) if len(_first_c) > 2 else 0
             if _5m_h > 0:
                 _nifty_5m_high = _5m_h
-                # Only lock after 9:20 AM IST (first candle complete)
-                _now_ist = datetime.now(IST)
-                if _now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20):
+                # Lock once first candle is complete (market: after 9:20; prev-day: always)
+                if (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20)):
                     st.session_state[_5m_key] = _nifty_5m_high
     except Exception:
         pass
@@ -3057,7 +3074,8 @@ if _nifty_5m_high and _crit_res:
     _5m_html = (
         "<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
         "<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>"
-        "5-MIN CANDLE · CRITICAL RESISTANCE</div>"
+        "5-MIN CANDLE · CRITICAL RESISTANCE"
+        "<span style='font-weight:400;margin-left:5px;'>(" + _5m_src_label + ")</span></div>"
         "<div style='display:flex;align-items:baseline;gap:10px;'>"
         "<div>"
         "<div style='font-size:8px;color:var(--muted);'>5m High</div>"
