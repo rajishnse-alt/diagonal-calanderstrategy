@@ -3022,7 +3022,7 @@ if _fut_data:
 # ── End futures build-up ──────────────────────────────────────────────────────
 
 # ── First 5-min candle HIGH → Critical Resistance (+0.2611%) ─────────────────
-_5m_key = f"nifty_5m_high_{_today_str}"
+_5m_key = f"nifty_5m_high_{datetime.now(IST).date().isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
 
 if _nifty_5m_high is None and token:
