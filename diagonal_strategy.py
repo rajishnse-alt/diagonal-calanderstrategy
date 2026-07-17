@@ -4110,14 +4110,17 @@ with pb4:
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
-_5m_opt_key   = f"atm_5m_h_{_today_str}_{atm}"
+# Use OPEN ATM (ATM at 9:15 open price) — not current ATM — for the first 5-min
+# candle fetch.  Current ATM may have drifted far from where the first candle was.
+_5m_spcl_atm  = _open_atm if _open_atm else atm
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
 _atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce")
 _atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe")
 
 if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
     # Market open → intraday endpoint; market closed → prev-biz-day historical
     _5m_d_arg = None if _mkt_open else _5m_date_used.strftime("%Y-%m-%d")
-    _c5h, _p5h = fetch_atm_5min_high(token, near_raw, atm, date_str=_5m_d_arg)
+    _c5h, _p5h = fetch_atm_5min_high(token, near_raw, _5m_spcl_atm, date_str=_5m_d_arg)
     if _c5h:
         _atm_ce_5m_h = _c5h
         # Only lock into session cache once the candle is past 9:20 (candle fully closed)
