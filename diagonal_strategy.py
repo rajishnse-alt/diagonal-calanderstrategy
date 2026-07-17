@@ -237,6 +237,7 @@ GITHUB_REPO     = "diagonal-calanderstrategy"
 GITHUB_BRANCH   = "main"
 PCR_CSV_PATH    = "pcr_data/pcr_log.csv"
 SPP_CACHE_FILE  = "pcr_data/spp_cache.json"   # persisted SPP history (survives restarts)
+IP_CACHE_FILE   = "pcr_data/ip_cache.json"    # persisted Ideal Premium history
 PCR_RETENTION   = 35   # days to keep
 PCR_LOG_INTERVAL= 180  # seconds — overridden by user slider at runtime
 PCR_COLUMNS     = [
@@ -320,6 +321,80 @@ def _spp_save_disk(store: dict):
     try:
         os.makedirs(os.path.dirname(SPP_CACHE_FILE), exist_ok=True)
         with open(SPP_CACHE_FILE, "w") as f:
+            json.dump(store, f, indent=2)
+    except Exception:
+        pass
+
+
+# ── IP GitHub + disk cache helpers ────────────────────────────────────────────
+def _ip_gh_get(gh_tok):
+    """Fetch ip_cache.json from GitHub. Returns (dict, sha) or ({}, None)."""
+    if not gh_tok:
+        return {}, None
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+            f"/contents/{IP_CACHE_FILE}",
+            headers=_gh_hdr(gh_tok),
+            params={"ref": GITHUB_BRANCH},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            d = r.json()
+            data = json.loads(base64.b64decode(d["content"]).decode("utf-8"))
+            cutoff = (datetime.now(IST) - timedelta(days=35)).date().isoformat()
+            pruned = {k: v for k, v in data.items() if k[:10] >= cutoff}
+            return pruned, d["sha"]
+        if r.status_code == 404:
+            return {}, None
+    except Exception:
+        pass
+    return {}, None
+
+
+def _ip_gh_put(gh_tok, store: dict, sha):
+    """Write ip_cache.json to GitHub. sha=None creates the file."""
+    if not gh_tok:
+        return False
+    try:
+        content = json.dumps(store, indent=2)
+        payload = {
+            "message": f"IP cache update {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}",
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+            f"/contents/{IP_CACHE_FILE}",
+            json=payload,
+            headers=_gh_hdr(gh_tok),
+            timeout=30,
+        )
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
+def _ip_load_disk():
+    """Fallback: load IP cache from local disk."""
+    try:
+        if os.path.exists(IP_CACHE_FILE):
+            with open(IP_CACHE_FILE, "r") as f:
+                data = json.load(f)
+            cutoff = (datetime.now(IST) - timedelta(days=35)).date().isoformat()
+            return {k: v for k, v in data.items() if k[:10] >= cutoff}
+    except Exception:
+        pass
+    return {}
+
+
+def _ip_save_disk(store: dict):
+    """Fallback: save IP cache to local disk."""
+    try:
+        os.makedirs(os.path.dirname(IP_CACHE_FILE), exist_ok=True)
+        with open(IP_CACHE_FILE, "w") as f:
             json.dump(store, f, indent=2)
     except Exception:
         pass
@@ -3361,6 +3436,18 @@ if "spp_cache_loaded" not in st.session_state:
     st.session_state["spp_gh_sha"] = _gh_spp_sha   # sha needed for updates
     st.session_state["spp_cache_loaded"] = True
 
+# ② Bootstrap IP persistent cache from GitHub (or disk fallback) on first load
+if "ip_cache_loaded" not in st.session_state:
+    _ip_gh_store, _ip_gh_sha_init = _ip_gh_get(_gh_tok_early)
+    if _ip_gh_store:
+        st.session_state["ip_cache"] = _ip_gh_store
+    else:
+        st.session_state["ip_cache"] = _ip_load_disk()
+    st.session_state["ip_gh_sha"]     = _ip_gh_sha_init
+    st.session_state["ip_cache_loaded"] = True
+
+_ip_store = st.session_state["ip_cache"]   # live reference
+
 _spp_store  = st.session_state["spp_cache"]          # live reference
 # SPP always uses the auto-detected nearest expiry (not the trading selection)
 _spp_key    = f"{_today_str}|{_inst_choice}|{_auto_near_exp}"
@@ -3836,21 +3923,34 @@ try:
 except Exception:
     pass
 
-# Cache via session_state (keyed by day+expiry+crossover strikes) so:
-# - value persists across reruns once fetched
-# - retries every run when still None (unlike @st.cache_data which locks failures)
-_ip_cache_key  = f"ip_{_today_str}_{near_exp}_{_ip_cross_low}_{_ip_cross_high}"
-_ip_val        = st.session_state.get(_ip_cache_key)
-_ip_lows       = st.session_state.get(_ip_cache_key + "_lows", {})
-_ip_date_lbl   = st.session_state.get(_ip_cache_key + "_date", "")
+# Persistent IP cache — keyed by "date|expiry|cross_low|cross_high"
+# Backed by GitHub JSON + local disk fallback (same pattern as SPP).
+# session_state retries on failure; once written it won't re-fetch the same day.
+_ip_store_key = f"{_today_str}|{near_exp}|{_ip_cross_low}|{_ip_cross_high}"
+_ip_cached    = _ip_store.get(_ip_store_key, {})
+_ip_val       = _ip_cached.get("ip")
+_ip_lows      = _ip_cached.get("lows", {})
+_ip_date_lbl  = _ip_cached.get("date_lbl", "")
 
 if _ip_val is None and _ip_cross_low and _ip_cross_high:
     _ip_v, _ip_ls, _ip_dl = fetch_ideal_premium(
         near_exp, _ip_cross_low, _ip_cross_high, tok=token, chain_data=near_raw)
     if _ip_v is not None:
-        st.session_state[_ip_cache_key]           = _ip_v
-        st.session_state[_ip_cache_key + "_lows"] = _ip_ls
-        st.session_state[_ip_cache_key + "_date"] = _ip_dl
+        _ip_entry = {
+            "ip":       _ip_v,
+            "lows":     _ip_ls,
+            "date_lbl": _ip_dl,
+            "ts":       datetime.now(IST).isoformat(),
+        }
+        _ip_store[_ip_store_key] = _ip_entry
+        # Persist: GitHub first, disk fallback
+        _ip_cur_sha = st.session_state.get("ip_gh_sha")
+        _ip_ok = _ip_gh_put(_gh_tok_early, _ip_store, _ip_cur_sha)
+        if _ip_ok:
+            _, _ip_new_sha = _ip_gh_get(_gh_tok_early)
+            st.session_state["ip_gh_sha"] = _ip_new_sha
+        else:
+            _ip_save_disk(_ip_store)
         _ip_val, _ip_lows, _ip_date_lbl = _ip_v, _ip_ls, _ip_dl
 
 with pb4:
