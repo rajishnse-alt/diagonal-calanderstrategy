@@ -3923,10 +3923,13 @@ try:
 except Exception:
     pass
 
-# Persistent IP cache — keyed by "date|expiry|cross_low|cross_high"
-# Backed by GitHub JSON + local disk fallback (same pattern as SPP).
-# session_state retries on failure; once written it won't re-fetch the same day.
-_ip_store_key = f"{_today_str}|{near_exp}|{_ip_cross_low}|{_ip_cross_high}"
+# Persistent IP cache — keyed by PREVIOUS-BUSINESS-DAY date (the date whose lows we use).
+# This means Friday's IP (from Thursday's lows) is stored under "Thu|expiry|strikes".
+# On Monday, prev_biz_day = Friday, so key = "Fri|..." → fetches Friday's lows → new IP.
+# Restarts on the same calendar day always hit the same prev_biz_day → no re-fetch.
+# GitHub JSON stores accumulating history; survives cloud restarts and weekends.
+_ip_prevday   = _prev_biz_day()
+_ip_store_key = f"{_ip_prevday.isoformat()}|{near_exp}|{_ip_cross_low}|{_ip_cross_high}"
 _ip_cached    = _ip_store.get(_ip_store_key, {})
 _ip_val       = _ip_cached.get("ip")
 _ip_lows      = _ip_cached.get("lows", {})
@@ -3952,6 +3955,18 @@ if _ip_val is None and _ip_cross_low and _ip_cross_high:
         else:
             _ip_save_disk(_ip_store)
         _ip_val, _ip_lows, _ip_date_lbl = _ip_v, _ip_ls, _ip_dl
+
+# Carry-forward: if today's IP isn't fetched yet, show the most recently cached IP
+# (e.g., Monday morning shows Friday's IP while Monday's lows are still being fetched)
+if _ip_val is None and _ip_store:
+    try:
+        _ip_recent_key, _ip_recent_e = max(_ip_store.items(), key=lambda x: x[0])
+        if _ip_recent_e.get("ip"):
+            _ip_val      = _ip_recent_e["ip"]
+            _ip_lows     = _ip_recent_e.get("lows", {})
+            _ip_date_lbl = _ip_recent_e.get("date_lbl", "") + " ↺"
+    except Exception:
+        pass
 
 with pb4:
     if _spp is not None:
