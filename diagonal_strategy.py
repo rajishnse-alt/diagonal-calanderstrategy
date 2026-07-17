@@ -2921,6 +2921,12 @@ _rd_proj_loss  = _rd_loss_per_unit * _rd_lots
 _rd_proj_pct   = (_rd_proj_loss / _rd_capital * 100) if _rd_capital else 0
 
 # ─────────────────────────────────────────────
+# MAIN TABS
+# ─────────────────────────────────────────────
+_t1, _t2, _t3, _t4 = st.tabs(["📊 Market", "📐 Strategy", "💰 Trade", "📈 Analytics"])
+_t1.__enter__()
+
+# ─────────────────────────────────────────────
 # MARKET SNAPSHOT
 # ─────────────────────────────────────────────
 st.markdown("<div class='sec-hdr'>📊 Market Snapshot</div>", unsafe_allow_html=True)
@@ -3572,11 +3578,11 @@ with pb2:
     _sqrt_base     = min(_sqrt_ce, _sqrt_pe) if min(_sqrt_ce, _sqrt_pe) > 0 else 1
     _sqrt_diff_pct = abs(_sqrt_pe - _sqrt_ce) / _sqrt_base * 100
 
-    # Direction
+    # Direction: PE LTP > CE LTP → BULLISH (market writers selling puts = upside bias)
     if _sqrt_pe > _sqrt_ce:
-        _sqrt_sig = "BEARISH"
-    elif _sqrt_ce > _sqrt_pe:
         _sqrt_sig = "BULLISH"
+    elif _sqrt_ce > _sqrt_pe:
+        _sqrt_sig = "BEARISH"
     else:
         _sqrt_sig = "NEUTRAL"
 
@@ -3587,13 +3593,13 @@ with pb2:
                       else "var(--bull)" if _sqrt_sig == "BULLISH"
                       else "var(--muted)")
 
-    _sqrt_arrow = "▼" if _sqrt_sig == "BEARISH" else ("▲" if _sqrt_sig == "BULLISH" else "→")
-    _sqrt_col   = "var(--bear)" if _sqrt_sig == "BEARISH" else ("var(--bull)" if _sqrt_sig == "BULLISH" else "var(--muted)")
+    _sqrt_arrow = "▲" if _sqrt_sig == "BULLISH" else ("▼" if _sqrt_sig == "BEARISH" else "→")
+    _sqrt_col   = "var(--bull)" if _sqrt_sig == "BULLISH" else ("var(--bear)" if _sqrt_sig == "BEARISH" else "var(--muted)")
     _sqrt_expr  = (
         f"√PE {_sqrt_pe:.2f} &gt; √CE {_sqrt_ce:.2f} · Δ{_sqrt_diff_pct:.1f}% vs VIX/day {_vix_daily_exp:.1f}%"
-        if _sqrt_sig == "BEARISH"
-        else f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f} · Δ{_sqrt_diff_pct:.1f}% vs VIX/day {_vix_daily_exp:.1f}%"
         if _sqrt_sig == "BULLISH"
+        else f"√CE {_sqrt_ce:.2f} &gt; √PE {_sqrt_pe:.2f} · Δ{_sqrt_diff_pct:.1f}% vs VIX/day {_vix_daily_exp:.1f}%"
+        if _sqrt_sig == "BEARISH"
         else f"√PE {_sqrt_pe:.2f} = √CE {_sqrt_ce:.2f}"
     )
 
@@ -4712,6 +4718,9 @@ with st.expander("🔍 DOM Debug — strikes & raw LTPs", expanded=False):
     st.caption(f"CE avg eros={_ce_avg*100:.2f}%  PE avg eros={_pe_avg*100:.2f}%  DOM={_dom*100:.2f}  MOM={_mD*100:.2f}  VOL={_vol*100:.2f}  med(eros)={_med:.4f}")
 # ─────────────────────────────────────────────────────────────────────────────
 
+_t1.__exit__(None, None, None)
+_t2.__enter__()
+
 # ── Ratio Diagonal CE card ────────────────────────────────────────────────────
 if _rd_atm_ce_ltp > 0:
     st.markdown("<div class='sec-hdr'>📐 Ratio Diagonal CE &nbsp;·&nbsp; Sell 1 ATM : Buy 2 OTM Far</div>",
@@ -5150,6 +5159,9 @@ with col_lpe:
         f"</span></div>",
         unsafe_allow_html=True,
     )
+
+_t2.__exit__(None, None, None)
+_t3.__enter__()
 
 # ─────────────────────────────────────────────
 # TRADE SCHEDULER
@@ -5653,6 +5665,9 @@ if _vix_ok and _eff_vix >= 15.0:
             unsafe_allow_html=True,
         )
 
+_t3.__exit__(None, None, None)
+_t4.__enter__()
+
 # ─────────────────────────────────────────────
 # PCR HISTORY
 # ─────────────────────────────────────────────
@@ -5830,6 +5845,8 @@ else:
             st.markdown(_hist5_chart, unsafe_allow_html=True)
         else:
             st.caption("No historical data available yet.")
+
+_t4.__exit__(None, None, None)
 
 # ─────────────────────────────────────────────
 # SIDEBAR
