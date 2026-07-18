@@ -657,6 +657,12 @@ _NSE_HEADERS = {
 #     interval. Valid: 1minute|30minute|60minute|1day|1week|1month.
 #     "5minute" silently returns {} → empty → anchor always "—".
 #     ALL v2 calls now use "1minute"; v3 intraday uses "minutes/1".   [2026-07-18]
+#   ★ ALGORITHM FIX in fetch_nifty_extreme_close: was using running
+#     session high/low watermarks (conf_high/conf_low). Pine Script
+#     compares each candle vs the PRIOR CANDLE, not session running max.
+#       Confirmed HIGH: c.high > p.high AND c.close > p.close
+#       Confirmed LOW:  c.low  < p.low  AND c.close < p.close
+#     Anchor = close of the LAST candle satisfying either.             [2026-07-18]
 _NSE_HOLIDAYS_2025 = {
     datetime(2025,  1, 26).date(),  # Republic Day
     datetime(2025,  2, 26).date(),  # Mahashivratri
@@ -1244,8 +1250,13 @@ def fetch_nifty_extreme_close(tok, date_str=None):
                    "5minute" is NOT a valid Upstox v2 API interval.
                    Valid v2 intervals: 1minute|30minute|60minute|1day|1week|1month
                    Using "5minute" → server returns {} → empty candles → "—".
-                   FIXED: all v2 calls now use "1minute". v3 intraday uses
-                   "minutes/1". The algorithm runs on 1-min candles identically.
+                   FIXED: all v2 calls now use "1minute"; v3 uses "minutes/1".
+      [2026-07-18] ALGORITHM FIX — old code used running session high/low
+                   watermarks (conf_high/conf_low). Pine Script compares each
+                   candle vs the PRIOR CANDLE only (not session running max/min).
+                   Confirmed HIGH: high > prior high AND close > prior close
+                   Confirmed LOW:  low  < prior low  AND close < prior close
+                   Anchor = close of LAST candle satisfying either condition.
     """
     try:
         _nifty_key = "NSE_INDEX|Nifty 50"
@@ -1316,21 +1327,39 @@ def fetch_nifty_extreme_close(tok, date_str=None):
         # Upstox returns newest-first; reverse to oldest-first
         candles = list(reversed(candles))
         # candle format: [ts, open, high, low, close, volume, oi]
-        conf_high    = float(candles[0][2])   # seed: first candle high
-        conf_low     = float(candles[0][3])   # seed: first candle low
-        anchor_close = float(candles[0][4])   # default anchor: first candle close
-        direction    = "UP"                   # direction of last confirmed extreme
+        #
+        # ── Confirmed Extreme Close algorithm (matches Pine Script tooltip) ──
+        # FIX (2026-07-18): Old code used running session high/low watermarks
+        # (conf_high, conf_low) — WRONG. Pine Script compares each candle
+        # against the PRIOR CANDLE, not against the session running max/min.
+        #
+        # Pine Script tooltip (exact):
+        #   "anchor = close of the last candle to make a CONFIRMED new high
+        #    (close > prior close) or CONFIRMED new low
+        #    (low < prior low AND close < prior close).
+        #    Unconfirmed pokes are ignored."
+        #
+        # Conditions (each vs PRIOR CANDLE, not session watermark):
+        #   Confirmed HIGH: high > prior candle's high  AND  close > prior candle's close
+        #   Confirmed LOW:  low  < prior candle's low   AND  close < prior candle's close
+        #
+        # "Unconfirmed poke" = candle makes new high/low but close fails to confirm.
+        # Those do NOT update the anchor.
+        #
+        # Anchor = close of the LAST candle satisfying either condition.
+        anchor_close = float(candles[0][4])   # default: first candle close
+        direction    = "UP"
         for i in range(1, len(candles)):
             c = candles[i]
             p = candles[i - 1]
             c_high  = float(c[2]);  c_low  = float(c[3]);  c_close = float(c[4])
-            p_low   = float(p[3]);  p_close = float(p[4])
-            if c_high > conf_high and c_close > p_close:
-                conf_high    = c_high
+            p_high  = float(p[2]);  p_low  = float(p[3]);  p_close = float(p[4])
+            # Confirmed HIGH: higher high AND higher close than prior candle
+            if c_high > p_high and c_close > p_close:
                 anchor_close = c_close
                 direction    = "UP"
-            if c_low < conf_low and c_low < p_low and c_close < p_close:
-                conf_low     = c_low
+            # Confirmed LOW: lower low AND lower close than prior candle
+            if c_low < p_low and c_close < p_close:
                 anchor_close = c_close
                 direction    = "DN"
         return anchor_close, direction
