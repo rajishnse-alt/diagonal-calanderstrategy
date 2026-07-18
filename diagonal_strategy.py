@@ -663,6 +663,8 @@ _NSE_HEADERS = {
 #       Confirmed HIGH: c.high > p.high AND c.close > p.close
 #       Confirmed LOW:  c.low  < p.low  AND c.close < p.close
 #     Anchor = close of the LAST candle satisfying either.             [2026-07-18]
+#   • fetch_atm_5min_high: same "5minute" v2 bug — fixed to 1minute.
+#     v3 intraday minutes/5 kept for live path (works for options).    [2026-07-18]
 _NSE_HOLIDAYS_2025 = {
     datetime(2025,  1, 26).date(),  # Republic Day
     datetime(2025,  2, 26).date(),  # Mahashivratri
@@ -1179,9 +1181,15 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
 def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
     """
     First 5-min candle HIGH for ATM CE and PE options.
-    date_str=None  → intraday endpoint  (market open)
-    date_str='YYYY-MM-DD' → historical endpoint (pre/post market, uses prev-biz-day)
-    Candles are newest-first; last element = first candle of the session.
+    date_str=None        → v3 intraday with minutes/5 (market open; v3 supports options ✓)
+    date_str='YYYY-MM-DD'→ v2 historical with 1minute (market closed/after-close/weekend)
+
+    FIX (2026-07-18): v2 historical "5minute" is NOT a valid interval → returns {} silently.
+    Valid v2 intervals: 1minute|30minute|60minute|1day|1week|1month.
+    When market closed: fetch 1-minute candles and take max HIGH of last 5
+    (= first 5 minutes: 9:15–9:19, candles are newest-first so last 5 = earliest).
+    Note: v3 intraday "minutes/5" works for options (not NSE_INDEX), keep for live path.
+
     Returns (ce_5m_h, pe_5m_h) — either may be None.
     """
     ce_inst = pe_inst = None
@@ -1198,19 +1206,27 @@ def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
             enc = urllib.parse.quote(inst_key, safe="")
             _h5 = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
             if date_str:
+                # Market closed / after-close / weekend → v2 with 1-minute candles
+                # "5minute" is invalid on v2 → silently returns {} → use 1minute instead
                 r = requests.get(
-                    f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{date_str}/{date_str}",
+                    f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{date_str}/{date_str}",
                     headers=_h5, timeout=10,
                 )
+                candles = (r.json().get("data") or {}).get("candles") or []
+                if candles:
+                    # newest-first; last 5 = first 5 minutes of session (9:15–9:19)
+                    first_5 = candles[-5:] if len(candles) >= 5 else candles
+                    return max((float(c[2]) for c in first_5 if len(c) > 2), default=None)
             else:
+                # Market open → v3 intraday minutes/5 (works for options, not NSE_INDEX)
                 r = requests.get(
                     f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5",
                     headers=_h5, timeout=10,
                 )
-            candles = (r.json().get("data") or {}).get("candles") or []
-            if candles:
-                first_c = candles[-1]           # newest-first → last = first candle
-                return float(first_c[2]) if len(first_c) > 2 else None
+                candles = (r.json().get("data") or {}).get("candles") or []
+                if candles:
+                    first_c = candles[-1]   # newest-first → last = first 5-min candle
+                    return float(first_c[2]) if len(first_c) > 2 else None
         except Exception:
             pass
         return None
@@ -1221,11 +1237,11 @@ def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
 def fetch_nifty_extreme_close(tok, date_str=None):
     """
     Pine Script 'Confirmed Extreme Close' anchor for NIFTY:
-    Scan intraday 5-min candles (oldest → newest) and track the close of the
-    last candle that made a CONFIRMED new high or confirmed new low.
-      Confirmed HIGH: high > prior confirmed high  AND  close > prior candle close
-      Confirmed LOW : low  < prior confirmed low   AND  low  < prior candle low
-                      AND  close < prior candle close
+    Scan 1-min candles (oldest → newest) and find the close of the LAST candle
+    that made a CONFIRMED new high or confirmed new low vs its prior candle.
+      Confirmed HIGH: high > prior candle's high  AND  close > prior candle's close
+      Confirmed LOW:  low  < prior candle's low   AND  close < prior candle's close
+    Unconfirmed pokes (e.g. high poke with lower close) are ignored.
     Returns (anchor_close, direction) or (None, None) if unavailable.
     date_str=None  → auto-detect: market open → today's intraday;
                      market closed/holiday/weekend → prev biz day historical.
