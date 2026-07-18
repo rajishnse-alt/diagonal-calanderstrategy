@@ -640,10 +640,66 @@ _NSE_HEADERS = {
 }
 
 
+# ── NSE Exchange Holidays ────────────────────────────────────────────────────
+# FIX (2026-07-18): _prev_biz_day() previously only skipped weekends, NOT NSE
+# holidays. On a holiday weekday, _mkt_open was True and v3 intraday returned
+# empty → anchor showed "—". Now both _prev_biz_day() and _mkt_open check this
+# list. UPDATE THIS LIST each year from NSE circular (or Upstox holiday API).
+# VERIFIED CORRECTIONS:
+#   • bare None → (None, None) in fetch_nifty_extreme_close     [2026-07-17]
+#   • hardcoded NSE_INDEX key in both fetch functions            [2026-07-17]
+#   • v3 intraday → v2 fallback in _nifty_5m_high               [2026-07-17]
+#   • v3 intraday → v2 fallback in fetch_nifty_extreme_close    [2026-07-17]
+#   • holiday list + _mkt_open holiday check + prev_biz_day fix  [2026-07-18]
+_NSE_HOLIDAYS_2025 = {
+    datetime(2025,  1, 26).date(),  # Republic Day
+    datetime(2025,  2, 26).date(),  # Mahashivratri
+    datetime(2025,  3, 14).date(),  # Holi
+    datetime(2025,  3, 31).date(),  # Id-Ul-Fitr (Ramzan Eid)
+    datetime(2025,  4, 10).date(),  # Shri Ram Navami
+    datetime(2025,  4, 14).date(),  # Dr. Baba Saheb Ambedkar Jayanti
+    datetime(2025,  4, 18).date(),  # Good Friday
+    datetime(2025,  5,  1).date(),  # Maharashtra Day
+    datetime(2025,  8, 15).date(),  # Independence Day
+    datetime(2025,  8, 27).date(),  # Ganesh Chaturthi
+    datetime(2025, 10,  2).date(),  # Mahatma Gandhi Jayanti / Dussehra
+    datetime(2025, 10, 20).date(),  # Diwali-Laxmi Puja
+    datetime(2025, 10, 21).date(),  # Diwali-Balipratipada
+    datetime(2025, 10, 22).date(),  # Diwali-Balipratipada (extra)
+    datetime(2025, 11,  5).date(),  # Prakash Gurpurb Sri Guru Nanak Dev Ji
+    datetime(2025, 12, 25).date(),  # Christmas
+}
+_NSE_HOLIDAYS_2026 = {
+    datetime(2026,  1, 26).date(),  # Republic Day
+    datetime(2026,  3, 20).date(),  # Holi
+    datetime(2026,  3, 30).date(),  # Id-Ul-Fitr (Eid)
+    datetime(2026,  4,  3).date(),  # Good Friday
+    datetime(2026,  4, 14).date(),  # Dr. Baba Saheb Ambedkar Jayanti / Ram Navami
+    datetime(2026,  5,  1).date(),  # Maharashtra Day
+    datetime(2026,  8, 15).date(),  # Independence Day
+    datetime(2026,  8, 25).date(),  # Ganesh Chaturthi
+    datetime(2026, 10,  2).date(),  # Mahatma Gandhi Jayanti
+    datetime(2026, 11,  9).date(),  # Diwali-Laxmi Puja
+    datetime(2026, 11, 10).date(),  # Diwali-Balipratipada
+    datetime(2026, 11, 25).date(),  # Prakash Gurpurb Sri Guru Nanak Dev Ji
+    datetime(2026, 12, 25).date(),  # Christmas
+}
+# Combine all years; extend when a new NSE circular is released
+_NSE_HOLIDAYS: set = _NSE_HOLIDAYS_2025 | _NSE_HOLIDAYS_2026
+
+
+def _is_nse_holiday(d=None):
+    """Return True if date d (default: today IST) is an NSE trading holiday."""
+    if d is None:
+        d = datetime.now(IST).date()
+    return d in _NSE_HOLIDAYS
+
+
 def _prev_biz_day():
+    """Last NSE trading day before today (skips weekends AND NSE holidays)."""
     today = datetime.now(IST).date()
     prev  = today - timedelta(days=1)
-    while prev.weekday() >= 5:
+    while prev.weekday() >= 5 or prev in _NSE_HOLIDAYS:
         prev -= timedelta(days=1)
     return prev
 
@@ -1153,31 +1209,91 @@ def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
 def fetch_nifty_extreme_close(tok, date_str=None):
     """
     Pine Script 'Confirmed Extreme Close' anchor for NIFTY:
-    Scan intraday 1-min candles (oldest → newest) and track the close of the
+    Scan intraday 5-min candles (oldest → newest) and track the close of the
     last candle that made a CONFIRMED new high or confirmed new low.
       Confirmed HIGH: high > prior confirmed high  AND  close > prior candle close
       Confirmed LOW : low  < prior confirmed low   AND  low  < prior candle low
                       AND  close < prior candle close
-    Returns the anchor close price, or None if unavailable.
-    date_str=None → intraday; date_str='YYYY-MM-DD' → historical.
+    Returns (anchor_close, direction) or (None, None) if unavailable.
+    date_str=None  → auto-detect: market open → today's intraday;
+                     market closed/holiday/weekend → prev biz day historical.
+    date_str='YYYY-MM-DD' → force that specific date (historical v2 endpoint).
     Always uses NIFTY 50 index key regardless of user's selected instrument.
+
+    KNOWN FIXES (do not revert):
+      [2026-07-17] Bare None → (None, None) on empty candles (TypeError fix)
+      [2026-07-17] Hardcoded "NSE_INDEX|Nifty 50" key — INSTRUMENT_KEY global
+                   is overridden at line ~2442 to user's selected instrument;
+                   NIFTY fetches MUST hardcode the key, never use INSTRUMENT_KEY
+      [2026-07-17] v2 fallback when v3 intraday returns empty for NSE_INDEX
+      [2026-07-18] Holiday → auto-redirect to prev biz day (was showing "—")
+      [2026-07-18] MOST IMPORTANT: after-close on trading day (after 15:30) →
+                   use today's date with v2 historical (session is complete).
+                   Old code used _prev_biz_day() → showed YESTERDAY's anchor
+                   every evening after market close. THREE states, not two:
+                     LIVE → v3 intraday
+                     AFTER CLOSE (today is trading day, >15:30) → v2 today
+                     WEEKEND / HOLIDAY / PRE-MARKET → v2 prev biz day
     """
     try:
         _nifty_key = "NSE_INDEX|Nifty 50"
         enc = urllib.parse.quote(_nifty_key, safe="")
         hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
-        # Use 5-min candles to match Pine Script's "Anchor Timeframe: 5 minutes" setting
+
+        # ── Determine which date/endpoint to use ─────────────────────────────
+        # Same three-state logic as the module-level _5m_date_used block:
+        #   LIVE     → v3 intraday (date_str=None path)
+        #   AFTER CLOSE on trading day → v2 historical with TODAY's date
+        #   Weekend / holiday / pre-market → v2 historical with prev biz day
+        # IMPORTANT: NEVER try v3 intraday when market is not live —
+        # it returns empty for NSE_INDEX regardless, causing anchor = "—".
+        _now    = datetime.now(IST)
+        _today  = _now.date()
+        _is_trading_today = _today.weekday() < 5 and not _is_nse_holiday(_today)
+        _market_live = (
+            _is_trading_today
+            and (_now.hour > 9 or (_now.hour == 9 and _now.minute >= 15))
+            and (_now.hour < 15 or (_now.hour == 15 and _now.minute <= 30))
+        )
+        _after_close = (
+            _is_trading_today
+            and not _market_live
+            and (_now.hour > 15 or (_now.hour == 15 and _now.minute > 30))
+        )
+
         if date_str:
+            # Caller explicitly forced a date — always use v2 historical
+            _fetch_date = date_str
+        elif _market_live:
+            _fetch_date = None                                    # → v3 intraday below
+        elif _after_close:
+            _fetch_date = _today.strftime("%Y-%m-%d")             # today's completed session
+        else:
+            _fetch_date = _prev_biz_day().strftime("%Y-%m-%d")   # weekend/holiday/pre-mkt
+
+        # ── Fetch candles ─────────────────────────────────────────────────────
+        if _fetch_date:
+            # v2 historical endpoint — works for NSE_INDEX on any closed day
             r = requests.get(
-                f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{date_str}/{date_str}",
+                f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{_fetch_date}/{_fetch_date}",
                 headers=hdr, timeout=15,
             )
+            candles = (r.json().get("data") or {}).get("candles") or []
         else:
+            # Market is live — try v3 intraday first
             r = requests.get(
                 f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5",
                 headers=hdr, timeout=15,
             )
-        candles = (r.json().get("data") or {}).get("candles") or []
+            candles = (r.json().get("data") or {}).get("candles") or []
+            # Fallback: v3 intraday may still reject NSE_INDEX — try v2 with today
+            if not candles:
+                _today_str = _today.strftime("%Y-%m-%d")
+                r2 = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{_today_str}/{_today_str}",
+                    headers=hdr, timeout=15,
+                )
+                candles = (r2.json().get("data") or {}).get("candles") or []
         if not candles:
             return None, None
         # Upstox returns newest-first; reverse to oldest-first
@@ -3194,14 +3310,58 @@ if _fut_data:
 # ── End futures build-up ──────────────────────────────────────────────────────
 
 # ── First 5-min candle HIGH → Critical Resistance (+0.2611%) ─────────────────
-_now_ist       = datetime.now(IST)
-_mkt_open      = ((_now_ist.weekday() < 5)                          # Mon–Fri
-                  and (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 15))
-                  and (_now_ist.hour < 15 or (_now_ist.hour == 15 and _now_ist.minute <= 30)))
-_5m_date_used  = _now_ist.date() if _mkt_open else _prev_biz_day()
+# DATE SELECTION LOGIC — three distinct states (do not collapse them):
+#
+#   1. Market LIVE (9:15–15:30, weekday, non-holiday)
+#      → _mkt_open=True  → v3 intraday endpoint, date = today
+#
+#   2. Market CLOSED for the day BUT today WAS a trading day (after 15:30)
+#      MOST IMPORTANT FIX (2026-07-18): _mkt_open=False BUT we still want
+#      TODAY's data — today's session is complete and v2 historical has it.
+#      Old code used _prev_biz_day() here → showed YESTERDAY's anchor/5m-high
+#      after every market close. Wrong. Now: _after_close=True → date = today.
+#
+#   3. Weekend OR NSE holiday OR pre-market (before 9:15 on a trading day)
+#      → _mkt_open=False, _after_close=False → date = _prev_biz_day()
+#
+# FIX (2026-07-18): Added _is_nse_holiday() to _mkt_open so holidays are not
+# treated as live market days (v3 intraday returns empty on holidays).
+#
+# VERIFIED CORRECTIONS (do not revert):
+#   • bare None → (None,None) in fetch_nifty_extreme_close        [2026-07-17]
+#   • hardcoded "NSE_INDEX|Nifty 50" — INSTRUMENT_KEY is overridden
+#     at line ~2442 to user's selected instrument; any NIFTY-specific
+#     fetch MUST hardcode the key, never use INSTRUMENT_KEY global  [2026-07-17]
+#   • v3 intraday → v2 fallback in _nifty_5m_high                 [2026-07-17]
+#   • v3 intraday → v2 fallback in fetch_nifty_extreme_close       [2026-07-17]
+#   • NSE holiday list + _mkt_open holiday check + _prev_biz_day
+#     now skips holidays (not just weekends)                        [2026-07-18]
+#   • After-close on trading day: use today's date, NOT prev_biz_day [2026-07-18]
+_now_ist          = datetime.now(IST)
+_today_ist        = _now_ist.date()
+_today_is_trading = (_today_ist.weekday() < 5 and not _is_nse_holiday(_today_ist))
+_mkt_open         = (
+    _today_is_trading
+    and (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 15))
+    and (_now_ist.hour < 15 or (_now_ist.hour == 15 and _now_ist.minute <= 30))
+)
+# After 15:30 on a trading day → session complete → use today's date
+_after_close      = (
+    _today_is_trading
+    and not _mkt_open
+    and (_now_ist.hour > 15 or (_now_ist.hour == 15 and _now_ist.minute > 30))
+)
+_5m_date_used  = (
+    _today_ist      if (_mkt_open or _after_close)   # today (live or just closed)
+    else _prev_biz_day()                              # weekend / holiday / pre-market
+)
 _5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
-_5m_src_label  = "today" if _mkt_open else f"prev day ({_5m_date_used})"
+_5m_src_label  = (
+    "today (live)"        if _mkt_open    else
+    "today (after close)" if _after_close else
+    f"prev day ({_5m_date_used})"
+)
 
 if _nifty_5m_high is None and token:
     try:
@@ -3209,14 +3369,25 @@ if _nifty_5m_high is None and token:
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
 
         if _mkt_open:
-            # ── Intraday endpoint: today's candles ───────────────────────────
+            # ── Market LIVE: try v3 intraday, fall back to v2 with today ────
+            # v3 intraday does NOT support NSE_INDEX — always need v2 fallback
             _r5 = requests.get(
                 f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/5",
                 headers=_hdr5, timeout=10,
             )
             _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+            if not _candles5:
+                _today_d = _today_ist.strftime("%Y-%m-%d")
+                _r5b = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{_enc_key}/5minute/{_today_d}/{_today_d}",
+                    headers=_hdr5, timeout=10,
+                )
+                _candles5 = (_r5b.json().get("data") or {}).get("candles") or []
         else:
-            # ── Historical endpoint: previous trading day ────────────────────
+            # ── Market NOT live: v2 historical with _5m_date_used ────────────
+            # _5m_date_used = today   if _after_close (session complete today)
+            #               = prev biz day  if weekend / holiday / pre-market
+            # This is already set correctly above — just fetch it.
             _d_str = _5m_date_used.strftime("%Y-%m-%d")
             _r5 = requests.get(
                 f"https://api.upstox.com/v2/historical-candle/{_enc_key}/5minute/{_d_str}/{_d_str}",
