@@ -1164,14 +1164,15 @@ def fetch_nifty_extreme_close(tok, date_str=None):
     try:
         enc = urllib.parse.quote(INSTRUMENT_KEY, safe="")
         hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+        # Use 5-min candles to match Pine Script's "Anchor Timeframe: 5 minutes" setting
         if date_str:
             r = requests.get(
-                f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{date_str}/{date_str}",
+                f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{date_str}/{date_str}",
                 headers=hdr, timeout=15,
             )
         else:
             r = requests.get(
-                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5",
                 headers=hdr, timeout=15,
             )
         candles = (r.json().get("data") or {}).get("candles") or []
@@ -4205,8 +4206,12 @@ _5m_spcl_atm  = (
 )
 # Key WITHOUT anchor label — same ATM strike always reuses the same cached 5-min fetch
 _5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
-_atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce")
-_atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe")
+# After market closes, use cached value to avoid repeated API calls.
+# During market hours: always fetch fresh (avoids stale-key bugs & ensures 9:20 candle is latest).
+_now_ist_5m   = datetime.now(IST)
+_mkt_closed   = not _mkt_open
+_atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce") if _mkt_closed else None
+_atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe") if _mkt_closed else None
 
 if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
     # Market open → intraday endpoint; market closed → prev-biz-day historical
@@ -4214,16 +4219,12 @@ if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
     _c5h, _p5h = fetch_atm_5min_high(token, near_raw, _5m_spcl_atm, date_str=_5m_d_arg)
     if _c5h:
         _atm_ce_5m_h = _c5h
-        # Only lock into session cache once the candle is past 9:20 (candle fully closed)
-        _now_ist_5m = datetime.now(IST)
-        if (not _mkt_open) or (_now_ist_5m.hour > 9 or
-                (_now_ist_5m.hour == 9 and _now_ist_5m.minute >= 20)):
+        # Cache permanently once market is closed; during hours keep fetching fresh
+        if _mkt_closed:
             st.session_state[_5m_opt_key + "_ce"] = _c5h
     if _p5h:
         _atm_pe_5m_h = _p5h
-        _now_ist_5m = datetime.now(IST)
-        if (not _mkt_open) or (_now_ist_5m.hour > 9 or
-                (_now_ist_5m.hour == 9 and _now_ist_5m.minute >= 20)):
+        if _mkt_closed:
             st.session_state[_5m_opt_key + "_pe"] = _p5h
 
 # Fallback chain for _atm_ce_day_high / _atm_pe_day_high (ATM card H/L display):
