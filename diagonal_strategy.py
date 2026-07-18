@@ -645,12 +645,18 @@ _NSE_HEADERS = {
 # holidays. On a holiday weekday, _mkt_open was True and v3 intraday returned
 # empty → anchor showed "—". Now both _prev_biz_day() and _mkt_open check this
 # list. UPDATE THIS LIST each year from NSE circular (or Upstox holiday API).
-# VERIFIED CORRECTIONS:
-#   • bare None → (None, None) in fetch_nifty_extreme_close     [2026-07-17]
-#   • hardcoded NSE_INDEX key in both fetch functions            [2026-07-17]
-#   • v3 intraday → v2 fallback in _nifty_5m_high               [2026-07-17]
-#   • v3 intraday → v2 fallback in fetch_nifty_extreme_close    [2026-07-17]
-#   • holiday list + _mkt_open holiday check + prev_biz_day fix  [2026-07-18]
+# VERIFIED CORRECTIONS (do not revert without understanding why each was needed):
+#   • bare None → (None, None) in fetch_nifty_extreme_close           [2026-07-17]
+#   • hardcoded "NSE_INDEX|Nifty 50" — INSTRUMENT_KEY global is
+#     overridden at line ~2442 to user instrument; hardcode everywhere [2026-07-17]
+#   • v3 intraday → v2 fallback (v3 rejects NSE_INDEX instruments)   [2026-07-17]
+#   • holiday list + _mkt_open holiday check; _prev_biz_day now
+#     skips NSE holidays not just weekends                             [2026-07-18]
+#   • after-close on trading day: use today's date not prev_biz_day   [2026-07-18]
+#   ★ ROOT CAUSE OF ALL "—" ANCHORS: "5minute" is NOT a valid v2
+#     interval. Valid: 1minute|30minute|60minute|1day|1week|1month.
+#     "5minute" silently returns {} → empty → anchor always "—".
+#     ALL v2 calls now use "1minute"; v3 intraday uses "minutes/1".   [2026-07-18]
 _NSE_HOLIDAYS_2025 = {
     datetime(2025,  1, 26).date(),  # Republic Day
     datetime(2025,  2, 26).date(),  # Mahashivratri
@@ -1227,13 +1233,19 @@ def fetch_nifty_extreme_close(tok, date_str=None):
                    NIFTY fetches MUST hardcode the key, never use INSTRUMENT_KEY
       [2026-07-17] v2 fallback when v3 intraday returns empty for NSE_INDEX
       [2026-07-18] Holiday → auto-redirect to prev biz day (was showing "—")
-      [2026-07-18] MOST IMPORTANT: after-close on trading day (after 15:30) →
-                   use today's date with v2 historical (session is complete).
-                   Old code used _prev_biz_day() → showed YESTERDAY's anchor
-                   every evening after market close. THREE states, not two:
-                     LIVE → v3 intraday
+      [2026-07-18] After-close on trading day (after 15:30) → use today's date
+                   with v2 historical (session is complete). Old code used
+                   _prev_biz_day() → showed YESTERDAY's anchor after close.
+                   THREE states, not two:
+                     LIVE → v3 intraday/minutes/1
                      AFTER CLOSE (today is trading day, >15:30) → v2 today
                      WEEKEND / HOLIDAY / PRE-MARKET → v2 prev biz day
+      [2026-07-18] MOST IMPORTANT — ROOT CAUSE OF ALL "—" ANCHORS:
+                   "5minute" is NOT a valid Upstox v2 API interval.
+                   Valid v2 intervals: 1minute|30minute|60minute|1day|1week|1month
+                   Using "5minute" → server returns {} → empty candles → "—".
+                   FIXED: all v2 calls now use "1minute". v3 intraday uses
+                   "minutes/1". The algorithm runs on 1-min candles identically.
     """
     try:
         _nifty_key = "NSE_INDEX|Nifty 50"
@@ -1272,25 +1284,30 @@ def fetch_nifty_extreme_close(tok, date_str=None):
             _fetch_date = _prev_biz_day().strftime("%Y-%m-%d")   # weekend/holiday/pre-mkt
 
         # ── Fetch candles ─────────────────────────────────────────────────────
+        # FIX (2026-07-18): CRITICAL — "5minute" is NOT a valid Upstox v2 interval.
+        # Valid v2 intervals: 1minute | 30minute | 60minute | 1day | 1week | 1month.
+        # Using "5minute" silently returns {} → empty → anchor always "—".
+        # FIX: use "1minute" for v2 calls; v3 intraday uses "minutes/1".
+        # The extreme-close algorithm works identically on 1-min candles.
         if _fetch_date:
-            # v2 historical endpoint — works for NSE_INDEX on any closed day
+            # v2 historical with 1-minute candles — works for NSE_INDEX any closed day
             r = requests.get(
-                f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{_fetch_date}/{_fetch_date}",
+                f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{_fetch_date}/{_fetch_date}",
                 headers=hdr, timeout=15,
             )
             candles = (r.json().get("data") or {}).get("candles") or []
         else:
-            # Market is live — try v3 intraday first
+            # Market is live — try v3 intraday 1-minute first
             r = requests.get(
-                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5",
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
                 headers=hdr, timeout=15,
             )
             candles = (r.json().get("data") or {}).get("candles") or []
-            # Fallback: v3 intraday may still reject NSE_INDEX — try v2 with today
+            # Fallback: v3 intraday may still reject NSE_INDEX — try v2 1-minute today
             if not candles:
                 _today_str = _today.strftime("%Y-%m-%d")
                 r2 = requests.get(
-                    f"https://api.upstox.com/v2/historical-candle/{enc}/5minute/{_today_str}/{_today_str}",
+                    f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{_today_str}/{_today_str}",
                     headers=hdr, timeout=15,
                 )
                 candles = (r2.json().get("data") or {}).get("candles") or []
@@ -3365,43 +3382,46 @@ _5m_src_label  = (
 
 if _nifty_5m_high is None and token:
     try:
-        _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, not user-selected instrument
+        _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        # FIX (2026-07-18): CRITICAL — Upstox v2 API valid intervals are ONLY:
+        #   1minute | 30minute | 60minute | 1day | 1week | 1month
+        # "5minute" is NOT a valid v2 interval → silently returns {} → empty candles.
+        # v3 uses "minutes/5" in the path but does NOT support NSE_INDEX instruments.
+        # SOLUTION: always use v2 with "1minute" interval, then aggregate the first
+        # 5 one-minute candles (9:15–9:19) to reconstruct the first 5-min HIGH.
+        # Candles are returned newest-first; last 5 elements = first 5 minutes of day.
+
+        def _get_1m_candles(date_str_arg):
+            """Fetch 1-min candles for NSE_INDEX on given date via v2."""
+            _r = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{_enc_key}/1minute/{date_str_arg}/{date_str_arg}",
+                headers=_hdr5, timeout=10,
+            )
+            return (_r.json().get("data") or {}).get("candles") or []
 
         if _mkt_open:
-            # ── Market LIVE: try v3 intraday, fall back to v2 with today ────
-            # v3 intraday does NOT support NSE_INDEX — always need v2 fallback
+            # Market live: try v3 intraday/1minute first, fall back to v2 1minute today
             _r5 = requests.get(
-                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/5",
+                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/1",
                 headers=_hdr5, timeout=10,
             )
             _candles5 = (_r5.json().get("data") or {}).get("candles") or []
             if not _candles5:
-                _today_d = _today_ist.strftime("%Y-%m-%d")
-                _r5b = requests.get(
-                    f"https://api.upstox.com/v2/historical-candle/{_enc_key}/5minute/{_today_d}/{_today_d}",
-                    headers=_hdr5, timeout=10,
-                )
-                _candles5 = (_r5b.json().get("data") or {}).get("candles") or []
+                _candles5 = _get_1m_candles(_today_ist.strftime("%Y-%m-%d"))
         else:
-            # ── Market NOT live: v2 historical with _5m_date_used ────────────
-            # _5m_date_used = today   if _after_close (session complete today)
-            #               = prev biz day  if weekend / holiday / pre-market
-            # This is already set correctly above — just fetch it.
-            _d_str = _5m_date_used.strftime("%Y-%m-%d")
-            _r5 = requests.get(
-                f"https://api.upstox.com/v2/historical-candle/{_enc_key}/5minute/{_d_str}/{_d_str}",
-                headers=_hdr5, timeout=10,
-            )
-            _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+            # Market not live: v2 1-minute for _5m_date_used
+            # (_5m_date_used = today if after-close, prev biz day if weekend/holiday/pre-mkt)
+            _candles5 = _get_1m_candles(_5m_date_used.strftime("%Y-%m-%d"))
 
         if _candles5:
-            # candles newest-first; last element = first 5-min candle of the day
-            _first_c = _candles5[-1]
-            _5m_h = float(_first_c[2]) if len(_first_c) > 2 else 0
+            # candles newest-first; last 5 elements = first 5 minutes of trading (9:15–9:19)
+            # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
+            _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
+            _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
             if _5m_h > 0:
                 _nifty_5m_high = _5m_h
-                # Lock once first candle is complete (market: after 9:20; prev-day: always)
+                # Lock once first 5-min period is complete (market: after 9:20; prev-day: always)
                 if (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20)):
                     st.session_state[_5m_key] = _nifty_5m_high
     except Exception:
