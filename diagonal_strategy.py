@@ -1245,6 +1245,50 @@ def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
     return _first_5m_h(ce_inst), _first_5m_h(pe_inst)
 
 
+def fetch_atm_day_high(tok, chain_data, atm_strike, date_str):
+    """
+    Full-day HIGH for ATM CE and PE options via v2 1-minute historical candles.
+    Used as fallback when near_ce_high / near_pe_high are None (weekend/holiday —
+    Upstox option chain API omits ohlc.high on non-trading days).
+
+    Returns max(HIGH) across ALL 1-min candles for that date = true daily HIGH.
+    This matches TradingView CE/PE daily chart HIGH value.
+
+    FIX (2026-07-18): On weekends parse_chain() returns near_ce_high[atm]=None
+    because ohlc is absent in the chain response. Without this fallback SPCL uses
+    LTP (~142.95) instead of the correct daily high (165.45). This function fetches
+    1-min candles for CE/PE at anchor ATM on the prev biz day and returns max HIGH.
+
+    date_str: 'YYYY-MM-DD' — must be a trading day (caller ensures this via _5m_date_used)
+    Returns (ce_day_high, pe_day_high) — either may be None on API error.
+    """
+    ce_inst = pe_inst = None
+    for row in chain_data:
+        if int(float(row.get("strike_price", 0))) == int(atm_strike):
+            ce_inst = (row.get("call_options") or {}).get("instrument_key")
+            pe_inst = (row.get("put_options")  or {}).get("instrument_key")
+            break
+    if not ce_inst or not pe_inst:
+        return None, None
+
+    def _day_high(inst_key):
+        try:
+            enc = urllib.parse.quote(inst_key, safe="")
+            _h  = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+            r   = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{date_str}/{date_str}",
+                headers=_h, timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if candles:
+                return max((float(c[2]) for c in candles if len(c) > 2), default=None)
+        except Exception:
+            pass
+        return None
+
+    return _day_high(ce_inst), _day_high(pe_inst)
+
+
 def fetch_nifty_extreme_close(tok, date_str=None):
     """
     Pine Script f_spotAnchors() — Confirmed Extreme Close anchor for NIFTY.
@@ -4534,11 +4578,23 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
 #      old code used the wrong strike's high entirely.
 # CORRECT: look up daily high directly from near_ce_high/near_pe_high at _5m_spcl_atm.
 #   near_ce_high / near_pe_high are {strike: day_high} dicts for ALL strikes in chain.
-#   Fallback to LTP at _5m_spcl_atm if chain OHLC is absent (pre-market, no data yet).
-_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
-              or near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm))
-_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
-              or near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm))
+# FIX (2026-07-18): On weekends/holidays Upstox chain API omits ohlc.high → near_ce_high
+#   returns None for all strikes. Fallback: call fetch_atm_day_high() to fetch 1-min
+#   historical candles for the prev biz day and return max(HIGH) = true daily high.
+#   This fixes SPCL showing 142.95 (LTP) instead of 165.45 (daily high) on weekends.
+_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm))
+_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm))
+# Weekend/holiday fallback: chain OHLC absent → fetch from 1-min historical candles
+if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
+    _spcl_d   = _5m_date_used.strftime("%Y-%m-%d")
+    _fb_ce_h, _fb_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
+    _spcl_ce_h = _spcl_ce_h or _fb_ce_h
+    _spcl_pe_h = _spcl_pe_h or _fb_pe_h
+# Final fallback to LTP (pre-market or API error — no historical data available)
+if not _spcl_ce_h:
+    _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
+if not _spcl_pe_h:
+    _spcl_pe_h = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
