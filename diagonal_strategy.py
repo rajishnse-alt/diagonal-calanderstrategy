@@ -1160,9 +1160,11 @@ def fetch_nifty_extreme_close(tok, date_str=None):
                       AND  close < prior candle close
     Returns the anchor close price, or None if unavailable.
     date_str=None → intraday; date_str='YYYY-MM-DD' → historical.
+    Always uses NIFTY 50 index key regardless of user's selected instrument.
     """
     try:
-        enc = urllib.parse.quote(INSTRUMENT_KEY, safe="")
+        _nifty_key = "NSE_INDEX|Nifty 50"
+        enc = urllib.parse.quote(_nifty_key, safe="")
         hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
         # Use 5-min candles to match Pine Script's "Anchor Timeframe: 5 minutes" setting
         if date_str:
@@ -3203,7 +3205,7 @@ _5m_src_label  = "today" if _mkt_open else f"prev day ({_5m_date_used})"
 
 if _nifty_5m_high is None and token:
     try:
-        _enc_key = urllib.parse.quote(INSTRUMENT_KEY, safe="")
+        _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, not user-selected instrument
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
 
         if _mkt_open:
