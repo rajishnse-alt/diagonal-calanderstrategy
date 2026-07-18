@@ -666,6 +666,13 @@ _NSE_HEADERS = {
 #     cHigh/cLow are RUNNING SESSION WATERMARKS updated on each confirm.
 #   • fetch_atm_5min_high: same "5minute" v2 bug — fixed to 1minute.
 #     v3 intraday minutes/5 kept for live path (works for options).    [2026-07-18]
+#   ★ SPCL INPUT — two bugs fixed:
+#     1. Was using first 5-min HIGH (_atm_ce_5m_h) → Pine uses DAILY HIGH.
+#     2. _atm_ce_day_high is computed for `atm` (spot ATM), but SPCL needs
+#        the high for `_5m_spcl_atm` (ANCHOR ATM). These differ when anchor
+#        ATM ≠ spot ATM (e.g. anchor→24300, spot→24350).
+#     FIX: look up near_ce_high[_5m_spcl_atm] / near_pe_high[_5m_spcl_atm]
+#     directly — these dicts hold daily high for every chain strike.   [2026-07-18]
 _NSE_HOLIDAYS_2025 = {
     datetime(2025,  1, 26).date(),  # Republic Day
     datetime(2025,  2, 26).date(),  # Mahashivratri
@@ -4493,9 +4500,19 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 
-# SPCL: use first 5-min candle high; fall back to full-day high if 5-min not yet available
-_spcl_ce_h = _atm_ce_5m_h or _atm_ce_day_high
-_spcl_pe_h = _atm_pe_5m_h or _atm_pe_day_high
+# SPCL input: Pine Script uses the DAILY HIGH of CE/PE at the ANCHOR ATM (_5m_spcl_atm).
+# FIX (2026-07-18): two prior bugs —
+#   1. Was using first 5-min HIGH (_atm_ce_5m_h) → wrong, Pine uses daily/running HIGH.
+#   2. _atm_ce_day_high is for `atm` (spot-derived), not `_5m_spcl_atm` (anchor-derived).
+#      When anchor ATM ≠ spot ATM (e.g. anchor=24308→24300, spot=24343→24350), the
+#      old code used the wrong strike's high entirely.
+# CORRECT: look up daily high directly from near_ce_high/near_pe_high at _5m_spcl_atm.
+#   near_ce_high / near_pe_high are {strike: day_high} dicts for ALL strikes in chain.
+#   Fallback to LTP at _5m_spcl_atm if chain OHLC is absent (pre-market, no data yet).
+_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
+              or near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm))
+_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
+              or near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm))
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
