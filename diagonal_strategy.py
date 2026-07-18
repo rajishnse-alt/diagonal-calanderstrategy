@@ -1150,6 +1150,55 @@ def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
     return _first_5m_h(ce_inst), _first_5m_h(pe_inst)
 
 
+def fetch_nifty_extreme_close(tok, date_str=None):
+    """
+    Pine Script 'Confirmed Extreme Close' anchor for NIFTY:
+    Scan intraday 1-min candles (oldest → newest) and track the close of the
+    last candle that made a CONFIRMED new high or confirmed new low.
+      Confirmed HIGH: high > prior confirmed high  AND  close > prior candle close
+      Confirmed LOW : low  < prior confirmed low   AND  low  < prior candle low
+                      AND  close < prior candle close
+    Returns the anchor close price, or None if unavailable.
+    date_str=None → intraday; date_str='YYYY-MM-DD' → historical.
+    """
+    try:
+        enc = urllib.parse.quote(INSTRUMENT_KEY, safe="")
+        hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+        if date_str:
+            r = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{date_str}/{date_str}",
+                headers=hdr, timeout=15,
+            )
+        else:
+            r = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1",
+                headers=hdr, timeout=15,
+            )
+        candles = (r.json().get("data") or {}).get("candles") or []
+        if not candles:
+            return None
+        # Upstox returns newest-first; reverse to oldest-first
+        candles = list(reversed(candles))
+        # candle format: [ts, open, high, low, close, volume, oi]
+        conf_high    = float(candles[0][2])   # seed: first candle high
+        conf_low     = float(candles[0][3])   # seed: first candle low
+        anchor_close = float(candles[0][4])   # default anchor: first candle close
+        for i in range(1, len(candles)):
+            c = candles[i]
+            p = candles[i - 1]
+            c_high  = float(c[2]);  c_low  = float(c[3]);  c_close = float(c[4])
+            p_low   = float(p[3]);  p_close = float(p[4])
+            if c_high > conf_high and c_close > p_close:
+                conf_high    = c_high
+                anchor_close = c_close
+            if c_low < conf_low and c_low < p_low and c_close < p_close:
+                conf_low     = c_low
+                anchor_close = c_close
+        return anchor_close
+    except Exception:
+        return None
+
+
 def fetch_otm_day_opens(tok, chain_data, ce_strikes, pe_strikes):
     """
     Fetch today's day-open price for 4 OTM CE and 4 OTM PE strikes.
@@ -4110,16 +4159,37 @@ with pb4:
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
-# ATM for SPCL 5-min: derive from NIFTY first-5-min-candle HIGH (already fetched),
-# which gives the correct "anchor" strike (e.g. NIFTY 5m-high 24194.90 → ATM 24200).
-# _open_atm uses the raw market-open tick (24129 → ATM 24150) which is one step off.
-# Fall back chain: 5m-high ATM → open ATM → current ATM.
+# Anchor mode (sidebar dropdown):
+#   "First 5m High"  → _nifty_5m_high (first 5-min candle high of NIFTY index)
+#   "Extreme Close"  → confirmed extreme close (last candle making a new confirmed
+#                       high/low in 1-min NIFTY candles; mirrors Pine Script anchorMode)
+_anchor_mode = st.session_state.get("spcl_anchor_radio", "First 5m High")
+
+if _anchor_mode == "Extreme Close":
+    # Fetch confirmed extreme close from 1-min NIFTY candles (NOT cached intraday)
+    _ec_cache_key = f"nifty_ec_{_5m_date_used.isoformat()}"
+    if _mkt_open:
+        # Always recompute during market hours (anchor moves as candles form)
+        _nifty_extreme_close = fetch_nifty_extreme_close(token) if token else None
+    else:
+        _nifty_extreme_close = st.session_state.get(_ec_cache_key)
+        if _nifty_extreme_close is None and token:
+            _d_ec = _5m_date_used.strftime("%Y-%m-%d")
+            _nifty_extreme_close = fetch_nifty_extreme_close(token, date_str=_d_ec)
+            if _nifty_extreme_close:
+                st.session_state[_ec_cache_key] = _nifty_extreme_close
+    _spcl_anchor_val = _nifty_extreme_close
+    _spcl_anchor_lbl = "ExCl"
+else:
+    _spcl_anchor_val = _nifty_5m_high
+    _spcl_anchor_lbl = "5mH"
+
 _5m_spcl_atm  = (
-    int(round(_nifty_5m_high / STEP) * STEP)
-    if _nifty_5m_high and _nifty_5m_high > 0
+    int(round(_spcl_anchor_val / STEP) * STEP)
+    if _spcl_anchor_val and _spcl_anchor_val > 0
     else (_open_atm if _open_atm else atm)
 )
-_5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{_spcl_anchor_lbl}_{_5m_spcl_atm}"
 _atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce")
 _atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe")
 
@@ -4314,7 +4384,7 @@ if True:  # always render — individual cells show "—" if data missing
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--ce);font-weight:700;letter-spacing:.06em;'>CeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--ce);'>"
-            f"<span style='color:var(--muted);font-size:10px;'>{'5m' if _atm_ce_5m_h else 'H'}:{_spcl_ce_h:.1f} → </span>"
+            f"<span style='color:var(--muted);font-size:10px;'>{_spcl_anchor_lbl if _atm_ce_5m_h else 'H'}:{_spcl_ce_h:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_ce_spcl)}</span></span>"
             f"</div>"
             + (
@@ -4331,7 +4401,7 @@ if True:  # always render — individual cells show "—" if data missing
             f"<div style='display:flex;justify-content:space-between;align-items:baseline;'>"
             f"<span style='font-size:10px;color:var(--pe);font-weight:700;letter-spacing:.06em;'>PeSPCL</span>"
             f"<span style='font-family:var(--mono);font-size:12px;color:var(--pe);'>"
-            f"<span style='color:var(--muted);font-size:10px;'>{'5m' if _atm_pe_5m_h else 'H'}:{_spcl_pe_h:.1f} → </span>"
+            f"<span style='color:var(--muted);font-size:10px;'>{_spcl_anchor_lbl if _atm_pe_5m_h else 'H'}:{_spcl_pe_h:.1f} → </span>"
             f"<span style='font-weight:700;'>{_fmt_s(_pe_spcl)}</span></span>"
             f"</div>"
             + (
@@ -6054,6 +6124,16 @@ with st.sidebar:
         st.metric("VIX (avg)", f"{_eff_vix:.2f}",
                   f"open {_open_vix:.2f} · cur {_curr_vix:.2f}")
         st.metric("1σ move", f"±{_exp_1s:,.0f} pts", f"{_steps_1s} steps OTM")
+    st.divider()
+    st.radio(
+        "SPCL Anchor",
+        ["First 5m High", "Extreme Close"],
+        index=0,
+        horizontal=True,
+        key="spcl_anchor_radio",
+        help="First 5m High: NIFTY first 5-min candle high → ATM strike.\n"
+             "Extreme Close: last 1-min candle making a confirmed new high/low (mirrors Pine Script anchorMode).",
+    )
     st.divider()
     refresh_secs = st.slider("🔄 Auto-refresh (sec)", min_value=15, max_value=120, value=30, step=5)
     st.caption(f"Updated {now.strftime('%H:%M:%S IST')}")
