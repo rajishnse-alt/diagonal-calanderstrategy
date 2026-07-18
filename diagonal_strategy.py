@@ -1177,7 +1177,7 @@ def fetch_nifty_extreme_close(tok, date_str=None):
             )
         candles = (r.json().get("data") or {}).get("candles") or []
         if not candles:
-            return None
+            return None, None
         # Upstox returns newest-first; reverse to oldest-first
         candles = list(reversed(candles))
         # candle format: [ts, open, high, low, close, volume, oi]
