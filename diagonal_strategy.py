@@ -1183,6 +1183,7 @@ def fetch_nifty_extreme_close(tok, date_str=None):
         conf_high    = float(candles[0][2])   # seed: first candle high
         conf_low     = float(candles[0][3])   # seed: first candle low
         anchor_close = float(candles[0][4])   # default anchor: first candle close
+        direction    = "UP"                   # direction of last confirmed extreme
         for i in range(1, len(candles)):
             c = candles[i]
             p = candles[i - 1]
@@ -1191,12 +1192,14 @@ def fetch_nifty_extreme_close(tok, date_str=None):
             if c_high > conf_high and c_close > p_close:
                 conf_high    = c_high
                 anchor_close = c_close
+                direction    = "UP"
             if c_low < conf_low and c_low < p_low and c_close < p_close:
                 conf_low     = c_low
                 anchor_close = c_close
-        return anchor_close
+                direction    = "DN"
+        return anchor_close, direction
     except Exception:
-        return None
+        return None, None
 
 
 def fetch_otm_day_opens(tok, chain_data, ce_strikes, pe_strikes):
@@ -4168,31 +4171,40 @@ _anchor_mode = st.selectbox(
          "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
 )
 
+_ec_direction = "UP"   # direction of confirmed extreme (UP/DN); only used for Extreme Close
 if _anchor_mode == "Extreme Close":
     # Fetch confirmed extreme close from 1-min NIFTY candles (NOT cached intraday)
     _ec_cache_key = f"nifty_ec_{_5m_date_used.isoformat()}"
+    _ec_dir_key   = _ec_cache_key + "_dir"
     if _mkt_open:
         # Always recompute during market hours (anchor moves as candles form)
-        _nifty_extreme_close = fetch_nifty_extreme_close(token) if token else None
+        _nifty_extreme_close, _ec_direction = (
+            fetch_nifty_extreme_close(token) if token else (None, "UP")
+        )
     else:
         _nifty_extreme_close = st.session_state.get(_ec_cache_key)
+        _ec_direction        = st.session_state.get(_ec_dir_key, "UP")
         if _nifty_extreme_close is None and token:
             _d_ec = _5m_date_used.strftime("%Y-%m-%d")
-            _nifty_extreme_close = fetch_nifty_extreme_close(token, date_str=_d_ec)
+            _nifty_extreme_close, _ec_direction = fetch_nifty_extreme_close(token, date_str=_d_ec)
             if _nifty_extreme_close:
                 st.session_state[_ec_cache_key] = _nifty_extreme_close
+                st.session_state[_ec_dir_key]   = _ec_direction
     _spcl_anchor_val = _nifty_extreme_close
-    _spcl_anchor_lbl = "ExCl"
+    _spcl_anchor_lbl = f"▲ UP" if _ec_direction == "UP" else "▼ DN"
+    _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 else:
     _spcl_anchor_val = _nifty_5m_high
-    _spcl_anchor_lbl = "5mH"
+    _spcl_anchor_lbl = "1st 5m"
+    _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 
 _5m_spcl_atm  = (
     int(round(_spcl_anchor_val / STEP) * STEP)
     if _spcl_anchor_val and _spcl_anchor_val > 0
     else (_open_atm if _open_atm else atm)
 )
-_5m_opt_key   = f"atm_5m_h_{_today_str}_{_spcl_anchor_lbl}_{_5m_spcl_atm}"
+# Key WITHOUT anchor label — same ATM strike always reuses the same cached 5-min fetch
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
 _atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce")
 _atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe")
 
@@ -4542,21 +4554,21 @@ st.markdown(
     + _tr("ATM Strike", f"{atm}", "var(--gold)")
     # Row 2 — Spot
     + _tr("Spot", f"{spot:,.2f}" if spot else "—", "color:rgb(255,165,0)")
-    # Row 3 — Anchor (SPP ATM locked)
-    + _tr("Anchor (SPP ATM)", f"{_spp_atm}" if _spp is not None else "—", "var(--muted)")
+    # Row 3 — SPCL Anchor (NIFTY 5m-high or confirmed extreme close)
+    + _tr("Anchor", _spcl_anchor_tag, "var(--muted)")
     # Row 4 — CE LTP
-    + _tr(f"{_tk_atm_str} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
-    # Row 5 — CE VWAP (sanity-filtered; "—" if prev-day contamination detected)
-    + _tr(f"{_tk_atm_str} CE VWAP", _tk_f(_tk_ce_vwap) if _tk_ce_vwap else "—", "var(--ce)")
+    + _tr(f"{_5m_spcl_atm} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
+    # Row 5 — CE 5min (first 5-min candle HIGH of the anchor ATM CE option)
+    + _tr(f"{_5m_spcl_atm} CE 5min", _tk_f(_atm_ce_5m_h) if _atm_ce_5m_h else "—", "var(--ce)")
     # Row 6 — CE H/L (intraday; ᵖ = prev-day fallback)
-    + _tr(f"{_tk_atm_str} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
+    + _tr(f"{_5m_spcl_atm} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
     # Row 7 — PE LTP
-    + _tr(f"{_tk_atm_str} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
-    # Row 8 — PE VWAP (sanity-filtered)
-    + _tr(f"{_tk_atm_str} PE VWAP", _tk_f(_tk_pe_vwap) if _tk_pe_vwap else "—", "var(--pe)")
+    + _tr(f"{_5m_spcl_atm} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
+    # Row 8 — PE 5min (first 5-min candle HIGH of the anchor ATM PE option)
+    + _tr(f"{_5m_spcl_atm} PE 5min", _tk_f(_atm_pe_5m_h) if _atm_pe_5m_h else "—", "var(--pe)")
     # Row 9 — PE H/L (intraday; ᵖ = prev-day fallback)
-    + _tr(f"{_tk_atm_str} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
+    + _tr(f"{_5m_spcl_atm} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
     # Row 10 — TSI (SPCL VAL) with trend signal
     + _tr("TSI", _tk_tsi_val, _tk_tsi_col)
