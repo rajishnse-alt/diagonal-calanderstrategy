@@ -6099,6 +6099,15 @@ else:
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 📐 NIFTY Diagonal")
+    st.selectbox(
+        "SPCL ATM Anchor",
+        ["First 5m High", "Extreme Close"],
+        index=0,
+        key="spcl_anchor_radio",
+        help="First 5m High: first 5-min candle high of NIFTY → ATM strike.\n"
+             "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
+    )
+    st.divider()
     _theme_label = "☀️ Light mode" if not _light_mode else "🌙 Dark mode"
     if st.toggle(_theme_label, value=_light_mode, key="theme_toggle"):
         if not st.session_state.get("light_mode", False):
@@ -6124,16 +6133,6 @@ with st.sidebar:
         st.metric("VIX (avg)", f"{_eff_vix:.2f}",
                   f"open {_open_vix:.2f} · cur {_curr_vix:.2f}")
         st.metric("1σ move", f"±{_exp_1s:,.0f} pts", f"{_steps_1s} steps OTM")
-    st.divider()
-    st.radio(
-        "SPCL Anchor",
-        ["First 5m High", "Extreme Close"],
-        index=0,
-        horizontal=True,
-        key="spcl_anchor_radio",
-        help="First 5m High: NIFTY first 5-min candle high → ATM strike.\n"
-             "Extreme Close: last 1-min candle making a confirmed new high/low (mirrors Pine Script anchorMode).",
-    )
     st.divider()
     refresh_secs = st.slider("🔄 Auto-refresh (sec)", min_value=15, max_value=120, value=30, step=5)
     st.caption(f"Updated {now.strftime('%H:%M:%S IST')}")
