@@ -664,6 +664,9 @@ _NSE_HEADERS = {
 #     Structure: if/elif (UP wins if both fire simultaneously)
 #     DO NOT change to prior-candle comparison — that was a wrong fix.
 #     cHigh/cLow are RUNNING SESSION WATERMARKS updated on each confirm.
+#   ★ CANDLE TIMEFRAME: Pine Script uses anchorTF (default 5 min) via
+#     request.security(). Running on raw 1-min candles gives wrong anchor.
+#     FIX: aggregate 1-min → 5-min BEFORE running the algorithm.      [2026-07-18]
 #   • fetch_atm_5min_high: same "5minute" v2 bug — fixed to 1minute.
 #     v3 intraday minutes/5 kept for live path (works for options).    [2026-07-18]
 #   ★ SPCL INPUT — two bugs fixed:
@@ -1352,7 +1355,35 @@ def fetch_nifty_extreme_close(tok, date_str=None):
         # Upstox returns newest-first; reverse to oldest-first
         candles = list(reversed(candles))
         # candle format: [ts, open, high, low, close, volume, oi]
-        #
+
+        # ── Aggregate 1-min → 5-min candles to match Pine Script anchorTF ──────
+        # FIX (2026-07-18): Pine Script runs f_spotAnchors() on the ANCHOR
+        # TIMEFRAME (default 5 minutes). Running the algorithm on raw 1-minute
+        # candles gives a different (wrong) anchor because each 1-min candle can
+        # trigger an UP/DN shift that a 5-min candle wouldn't (its close is the
+        # aggregate of 5 minutes, not just 1).
+        # Solution: aggregate 1-min → 5-min candles first, THEN run the algorithm.
+        # Each 5-min candle: O=first 1m open, H=max 1m highs, L=min 1m lows,
+        #                    C=last 1m close (oldest-first input).
+        def _to_5min(c1m):
+            out = []
+            for i in range(0, len(c1m), 5):
+                w = c1m[i:i + 5]
+                if not w:
+                    continue
+                out.append([
+                    w[0][0],                                      # ts (start of window)
+                    float(w[0][1]),                               # open
+                    max(float(x[2]) for x in w),                 # high
+                    min(float(x[3]) for x in w),                 # low
+                    float(w[-1][4]),                              # close (last 1m close)
+                ])
+            return out
+
+        candles = _to_5min(candles)
+        if not candles:
+            return None, None
+
         # ── Confirmed Extreme Close — exact Pine Script f_spotAnchors() logic ──
         #
         # Pine Script source (verified 2026-07-18):
@@ -1363,15 +1394,10 @@ def fetch_nifty_extreme_close(tok, date_str=None):
         #
         # KEY DETAILS (do not change without re-reading Pine source):
         #   • cHigh / cLow are RUNNING SESSION WATERMARKS, not prior-candle values.
-        #     UP checks high > cHigh (new session high), not high > prior candle high.
         #   • DN has THREE conditions: session new low + local lower low + lower close.
-        #   • It's if/elif — if UP and DN both true simultaneously, UP wins.
+        #   • if/elif — UP wins if both fire simultaneously.
         #   • Anchor seeded to first candle's CLOSE on session reset.
-        #
-        # CORRECTION HISTORY:
-        #   [orig]      correct running-watermark logic
-        #   [2026-07-18 wrong fix] changed to prior-candle comparison — REVERTED
-        #   [2026-07-18 final]    restored running watermarks + added elif + p_low
+        #   • Algorithm runs on 5-MIN candles (aggregated above), not 1-min.
         #
         c0           = candles[0]
         cHigh        = float(c0[2])   # running session confirmed high
