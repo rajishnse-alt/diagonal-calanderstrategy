@@ -4159,11 +4159,14 @@ with pb4:
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
 # SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
-# Anchor mode (sidebar dropdown):
-#   "First 5m High"  → _nifty_5m_high (first 5-min candle high of NIFTY index)
-#   "Extreme Close"  → confirmed extreme close (last candle making a new confirmed
-#                       high/low in 1-min NIFTY candles; mirrors Pine Script anchorMode)
-_anchor_mode = st.session_state.get("spcl_anchor_radio", "First 5m High")
+_anchor_mode = st.selectbox(
+    "SPCL ATM Anchor",
+    ["First 5m High", "Extreme Close"],
+    index=0,
+    key="spcl_anchor_radio",
+    help="First 5m High: NIFTY first 5-min candle high → ATM strike.\n"
+         "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
+)
 
 if _anchor_mode == "Extreme Close":
     # Fetch confirmed extreme close from 1-min NIFTY candles (NOT cached intraday)
@@ -6099,15 +6102,6 @@ else:
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 📐 NIFTY Diagonal")
-    st.selectbox(
-        "SPCL ATM Anchor",
-        ["First 5m High", "Extreme Close"],
-        index=0,
-        key="spcl_anchor_radio",
-        help="First 5m High: first 5-min candle high of NIFTY → ATM strike.\n"
-             "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
-    )
-    st.divider()
     _theme_label = "☀️ Light mode" if not _light_mode else "🌙 Dark mode"
     if st.toggle(_theme_label, value=_light_mode, key="theme_toggle"):
         if not st.session_state.get("light_mode", False):
