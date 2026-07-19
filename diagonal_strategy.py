@@ -4751,6 +4751,28 @@ if True:  # always render — individual cells show "—" if data missing
         f" <span style='color:var(--muted);font-size:9px;'>≈{_pe_spcl_strike} ₹{_pe_spcl_strike_ltp:.1f}</span>"
         if _pe_spcl_strike else ""
     )
+    # Best strike = in-range strike with LTP nearest to the projection HIGH
+    def _best_strike(range_strikes, proj_high):
+        """Strike in range closest to proj_high (highest LTP in range)."""
+        if not range_strikes or not proj_high:
+            return None, None
+        best = max(range_strikes, key=lambda x: x[1])
+        return best[0], best[1]
+
+    _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high)
+    _best_ce_s, _best_ce_ltp = _best_strike(_ce_range_strikes, _proj_ce_high)
+
+    _pe_h_strike = (
+        f"<br><span style='color:var(--muted);font-size:9px;'>"
+        f"↑{_best_pe_s} ₹{_best_pe_ltp:.1f}</span>"
+        if _best_pe_s else ""
+    )
+    _ce_h_strike = (
+        f"<br><span style='color:var(--muted);font-size:9px;'>"
+        f"↑{_best_ce_s} ₹{_best_ce_ltp:.1f}</span>"
+        if _best_ce_s else ""
+    )
+
     st.markdown(
         f"<div class='card' style='padding:0;overflow:hidden;'>"
         f"<div style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
@@ -4769,7 +4791,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}</td>"
+        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_pe_h_strike}</td>"
         f"</tr>"
         # PeSPCL row
         f"<tr>"
@@ -4780,7 +4802,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_ce_h_strike}</td>"
         f"</tr>"
         f"</tbody></table></div>",
         unsafe_allow_html=True)
