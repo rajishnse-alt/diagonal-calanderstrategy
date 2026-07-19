@@ -4640,8 +4640,16 @@ _pe_range_strikes = _strikes_in_range(near_pe, _proj_pe_low, _proj_pe_high)
 
 # Pivot points for each in-range strike (from that strike's own prev-day OHLC)
 def _get_strike_pivots(strike, option_type):
-    """Cached per strike per pivot date (prev biz day)."""
-    _pivot_d = _5m_date_used.strftime("%Y-%m-%d")
+    """Cached per strike per pivot date (last COMPLETED session).
+    Pivot = prev completed session OHLC:
+      market live      → _prev_biz_day() (yesterday — today's candle is partial)
+      after close      → _5m_date_used (= today, session just finished)
+      weekend/holiday  → _5m_date_used (= last biz day, e.g. Friday)
+    """
+    _pivot_d = (
+        _prev_biz_day().strftime("%Y-%m-%d") if _mkt_open
+        else _5m_date_used.strftime("%Y-%m-%d")
+    )
     _key = f"{_pivot_d}_{_inst_choice}_{strike}_{option_type}_piv"
     _c   = st.session_state.get(_key)
     if _c:
