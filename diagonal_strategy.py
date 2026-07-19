@@ -1050,17 +1050,18 @@ def _calc_traditional_pivots(ph, pl, pc):
                 prev_h=ph, prev_l=pl, prev_c=pc)
 
 
-def fetch_strike_pivots(tok, chain_data, strike, option_type):
+def fetch_strike_pivots(tok, chain_data, strike, option_type, pivot_date_str=None):
     """
     Traditional pivot points from the prev-day OHLC of a specific option strike.
     Matches TradingView's ta.pivot_point_levels("Traditional") on Daily anchor.
 
-    FIX (2026-07-21): old code used str(c[0])[:10] < today_s to find prev-day candle.
-    When Upstox returns integer epoch timestamps, this string comparison is unreliable.
-    Now mirrors fetch_spot_pivots: take candles[1] (newest-first → candles[0]=today,
-    candles[1]=prev day). On weekends candles[0]=last trading day = what we need, so
-    fallback to candles[0] when len<2. Also widened to_date/from_date to 14 days to
-    ensure enough history for new listings near expiry.
+    pivot_date_str: 'YYYY-MM-DD' of the exact date whose OHLC to use (= prev biz day).
+    When supplied, requests only that single day → unambiguous candle, no skip logic.
+    Caller (_get_strike_pivots) passes _5m_date_used.strftime("%Y-%m-%d").
+
+    FIX (2026-07-21): candles[1] approach was wrong — v2 daily candles may be oldest-first,
+    making candles[1] = 13 days ago instead of yesterday. Explicit date request eliminates
+    all ordering and today-vs-yesterday ambiguity.
     """
     try:
         side_key = "call_options" if option_type == "CE" else "put_options"
@@ -1071,26 +1072,44 @@ def fetch_strike_pivots(tok, chain_data, strike, option_type):
                 break
         if not inst_key:
             return None
-        today     = datetime.now(IST).date()
-        from_date = (today - timedelta(days=14)).strftime("%Y-%m-%d")
-        to_date   = today.strftime("%Y-%m-%d")
-        enc       = urllib.parse.quote(inst_key, safe="")
-        r = requests.get(
-            f"https://api.upstox.com/v2/historical-candle/{enc}/day/{to_date}/{from_date}",
-            headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
-            timeout=10,
-        )
-        candles = (r.json().get("data") or {}).get("candles") or []
-        if not candles:
-            return None
-        # Upstox returns newest-first: candles[0]=today (partial on trading day),
-        # candles[1]=previous completed day.
-        # On non-trading days (weekend/holiday) candles[0] IS the prev trading day.
-        today_is_trading = (today.weekday() < 5 and not _is_nse_holiday(today))
-        if today_is_trading and len(candles) >= 2:
-            c = candles[1]   # skip today's in-progress candle
+        enc = urllib.parse.quote(inst_key, safe="")
+        hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+
+        if pivot_date_str:
+            # Exact-date request: only one day's candle returned → take it directly
+            r = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/day"
+                f"/{pivot_date_str}/{pivot_date_str}",
+                headers=hdr, timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if not candles:
+                return None
+            c = candles[0]
         else:
-            c = candles[0]   # weekend/holiday: first = last completed session
+            # Fallback: 14-day range, sort newest-first, skip today's partial candle
+            today     = datetime.now(IST).date()
+            from_date = (today - timedelta(days=14)).strftime("%Y-%m-%d")
+            to_date   = today.strftime("%Y-%m-%d")
+            r = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{enc}/day"
+                f"/{to_date}/{from_date}",
+                headers=hdr, timeout=10,
+            )
+            candles = (r.json().get("data") or {}).get("candles") or []
+            if not candles:
+                return None
+            today_s = today.isoformat()
+            # Sort by timestamp string descending (works for both ISO and epoch strings)
+            candles_sorted = sorted(candles, key=lambda x: str(x[0]), reverse=True)
+            # Skip today's in-progress candle on trading days
+            if today.weekday() < 5 and not _is_nse_holiday(today):
+                candles_sorted = [x for x in candles_sorted
+                                  if str(x[0])[:10] != today_s]
+            if not candles_sorted:
+                return None
+            c = candles_sorted[0]
+
         # Upstox daily candle: [ts, open, high, low, close, volume, oi]
         ph, pl, pc = float(c[2]), float(c[3]), float(c[4])
         if ph <= 0 or pl <= 0:
@@ -4621,12 +4640,14 @@ _pe_range_strikes = _strikes_in_range(near_pe, _proj_pe_low, _proj_pe_high)
 
 # Pivot points for each in-range strike (from that strike's own prev-day OHLC)
 def _get_strike_pivots(strike, option_type):
-    """Cached per strike per day."""
-    _key = f"{now.date().isoformat()}_{_inst_choice}_{strike}_{option_type}_piv"
+    """Cached per strike per pivot date (prev biz day)."""
+    _pivot_d = _5m_date_used.strftime("%Y-%m-%d")
+    _key = f"{_pivot_d}_{_inst_choice}_{strike}_{option_type}_piv"
     _c   = st.session_state.get(_key)
     if _c:
         return _c
-    piv = fetch_strike_pivots(token, near_raw, strike, option_type) if token else None
+    piv = fetch_strike_pivots(token, near_raw, strike, option_type,
+                              pivot_date_str=_pivot_d) if token else None
     if piv:
         st.session_state[_key] = piv
     return piv
