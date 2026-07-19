@@ -4772,38 +4772,23 @@ if True:  # always render — individual cells show "—" if data missing
             parts.append(f"<div style='margin-bottom:8px;'>{html}</div>")
         return "".join(parts)
 
-    def _nearest_strike(price_map, target):
-        """Return (strike, ltp) whose LTP is closest to target."""
-        if not target or not price_map:
-            return None, None
-        best = min(price_map.items(), key=lambda kv: abs(kv[1] - target) if kv[1] else float("inf"))
-        return int(best[0]), best[1]
-
-    _ce_spcl_strike, _ce_spcl_strike_ltp = _nearest_strike(near_ce, _ce_spcl)
-    _pe_spcl_strike, _pe_spcl_strike_ltp = _nearest_strike(near_pe, _pe_spcl)
-
-    # ── Compact 4-column SPCL table (matches screenshot format) ──
-    _ce_near = (
-        f" <span style='color:var(--muted);font-size:9px;'>≈{_ce_spcl_strike} ₹{_ce_spcl_strike_ltp:.1f}</span>"
-        if _ce_spcl_strike else ""
-    )
-    _pe_near = (
-        f" <span style='color:var(--muted);font-size:9px;'>≈{_pe_spcl_strike} ₹{_pe_spcl_strike_ltp:.1f}</span>"
-        if _pe_spcl_strike else ""
-    )
-    # Best strike = strike with LTP nearest to proj_high.
-    # Primary: pick from in-range strikes (LTP between L and H), highest LTP wins.
-    # Fallback: if range is empty, search entire chain for strike nearest to proj_high.
+    # Best strike = near-expiry option chain strike with LTP nearest to proj_high.
+    # Primary: highest-LTP strike whose LTP falls within [proj_low, proj_high].
+    # Fallback: if no in-range strike, pick the chain strike with LTP closest to proj_high.
+    # Skips strikes with LTP=0 (stale/weekend data) so annotation is always meaningful.
     def _best_strike(range_strikes, proj_high, full_map):
         if not proj_high:
             return None, None
         if range_strikes:
             best = max(range_strikes, key=lambda x: x[1])
             return best[0], best[1]
-        # Fallback: nearest to proj_high across all strikes
+        # Fallback: nearest to proj_high — only strikes with positive LTP
         if not full_map:
             return None, None
-        best_s = min(full_map.items(), key=lambda kv: abs((kv[1] or 0) - proj_high))
+        valid = {k: v for k, v in full_map.items() if v and v > 0}
+        if not valid:
+            return None, None
+        best_s = min(valid.items(), key=lambda kv: abs(kv[1] - proj_high))
         return int(best_s[0]), best_s[1]
 
     _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high, near_pe)
@@ -4832,7 +4817,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"border-bottom:1px solid var(--border);white-space:nowrap;'>CeSPCL {_tk_ret}</td>"
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}{_ce_near}</td>"
+        f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -4845,7 +4830,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
         f"PeSPCL {_tk_ret}</td>"
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
-        f"padding:4px 8px;'>{_fmt_s(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}{_pe_near}</td>"
+        f"padding:4px 8px;'>{_fmt_s(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
