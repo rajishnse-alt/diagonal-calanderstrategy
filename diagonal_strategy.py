@@ -4751,16 +4751,23 @@ if True:  # always render — individual cells show "—" if data missing
         f" <span style='color:var(--muted);font-size:9px;'>≈{_pe_spcl_strike} ₹{_pe_spcl_strike_ltp:.1f}</span>"
         if _pe_spcl_strike else ""
     )
-    # Best strike = in-range strike with LTP nearest to the projection HIGH
-    def _best_strike(range_strikes, proj_high):
-        """Strike in range closest to proj_high (highest LTP in range)."""
-        if not range_strikes or not proj_high:
+    # Best strike = strike with LTP nearest to proj_high.
+    # Primary: pick from in-range strikes (LTP between L and H), highest LTP wins.
+    # Fallback: if range is empty, search entire chain for strike nearest to proj_high.
+    def _best_strike(range_strikes, proj_high, full_map):
+        if not proj_high:
             return None, None
-        best = max(range_strikes, key=lambda x: x[1])
-        return best[0], best[1]
+        if range_strikes:
+            best = max(range_strikes, key=lambda x: x[1])
+            return best[0], best[1]
+        # Fallback: nearest to proj_high across all strikes
+        if not full_map:
+            return None, None
+        best_s = min(full_map.items(), key=lambda kv: abs((kv[1] or 0) - proj_high))
+        return int(best_s[0]), best_s[1]
 
-    _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high)
-    _best_ce_s, _best_ce_ltp = _best_strike(_ce_range_strikes, _proj_ce_high)
+    _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high, near_pe)
+    _best_ce_s, _best_ce_ltp = _best_strike(_ce_range_strikes, _proj_ce_high, near_ce)
 
     _pe_h_strike = (
         f"<br><span style='color:var(--muted);font-size:9px;'>"
