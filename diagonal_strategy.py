@@ -4815,20 +4815,38 @@ if True:  # always render — individual cells show "—" if data missing
         unsafe_allow_html=True)
 
     # ── Strike pills: PE and CE in-range strikes with pivot levels ──
+    # If no strikes fall in the projected range, fall back to the best strike
+    # (nearest to proj high) so the panel never shows "—".
+    _ce_display_strikes = _ce_range_strikes or (
+        [(int(_best_ce_s), _best_ce_ltp)] if _best_ce_s else []
+    )
+    _pe_display_strikes = _pe_range_strikes or (
+        [(int(_best_pe_s), _best_pe_ltp)] if _best_pe_s else []
+    )
+    # Ensure pivots are fetched for fallback strikes too
+    for _fs, _ft, _fp in [
+        (_best_ce_s, "CE", _ce_strike_pivots),
+        (_best_pe_s, "PE", _pe_strike_pivots),
+    ]:
+        if _fs and int(_fs) not in _fp:
+            _piv = _get_strike_pivots(int(_fs), _ft)
+            if _piv:
+                _fp[int(_fs)] = _piv
+
     _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if (_proj_ce_high and _atm_ce_day_high) else 0
     _sp1, _sp2 = st.columns(2)
     with _sp1:
         st.markdown(
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>PE Projections &nbsp;·&nbsp; {_spcl_low_tag} / {_spcl_high_tag}</div>"
-            f"<div>{_strike_pills_with_piv(_pe_range_strikes, 'PE', 'var(--pe)')}</div>"
+            f"<div>{_strike_pills_with_piv(_pe_display_strikes, 'PE', 'var(--pe)')}</div>"
             f"</div>",
             unsafe_allow_html=True)
     with _sp2:
         st.markdown(
             f"<div class='card'>"
             f"<div class='lbl' style='margin-bottom:6px;'>CE Projections &nbsp;·&nbsp; {_spcl_low_tag} / {_spcl_high_tag}</div>"
-            f"<div>{_strike_pills_with_piv(_ce_range_strikes, 'CE', 'var(--ce)')}</div>"
+            f"<div>{_strike_pills_with_piv(_ce_display_strikes, 'CE', 'var(--ce)')}</div>"
             f"</div>",
             unsafe_allow_html=True)
 
