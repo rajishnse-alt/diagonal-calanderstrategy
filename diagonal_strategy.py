@@ -4814,7 +4814,7 @@ if True:  # always render — individual cells show "—" if data missing
         # CeSPCL row
         f"<tr>"
         f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;"
-        f"border-bottom:1px solid var(--border);white-space:nowrap;'>CeSPCL {_tk_ret}</td>"
+        f"border-bottom:1px solid var(--border);white-space:nowrap;'>CeSPCL {_5m_spcl_atm} {_tk_ret}</td>"
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}</td>"
@@ -4828,7 +4828,7 @@ if True:  # always render — individual cells show "—" if data missing
         # PeSPCL row
         f"<tr>"
         f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
-        f"PeSPCL {_tk_ret}</td>"
+        f"PeSPCL {_5m_spcl_atm} {_tk_ret}</td>"
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;'>{_fmt_s(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
