@@ -1054,6 +1054,13 @@ def fetch_strike_pivots(tok, chain_data, strike, option_type):
     """
     Traditional pivot points from the prev-day OHLC of a specific option strike.
     Matches TradingView's ta.pivot_point_levels("Traditional") on Daily anchor.
+
+    FIX (2026-07-21): old code used str(c[0])[:10] < today_s to find prev-day candle.
+    When Upstox returns integer epoch timestamps, this string comparison is unreliable.
+    Now mirrors fetch_spot_pivots: take candles[1] (newest-first → candles[0]=today,
+    candles[1]=prev day). On weekends candles[0]=last trading day = what we need, so
+    fallback to candles[0] when len<2. Also widened to_date/from_date to 14 days to
+    ensure enough history for new listings near expiry.
     """
     try:
         side_key = "call_options" if option_type == "CE" else "put_options"
@@ -1065,7 +1072,7 @@ def fetch_strike_pivots(tok, chain_data, strike, option_type):
         if not inst_key:
             return None
         today     = datetime.now(IST).date()
-        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+        from_date = (today - timedelta(days=14)).strftime("%Y-%m-%d")
         to_date   = today.strftime("%Y-%m-%d")
         enc       = urllib.parse.quote(inst_key, safe="")
         r = requests.get(
@@ -1074,12 +1081,16 @@ def fetch_strike_pivots(tok, chain_data, strike, option_type):
             timeout=10,
         )
         candles = (r.json().get("data") or {}).get("candles") or []
-        today_s = today.isoformat()
-        prev = sorted([c for c in candles if str(c[0])[:10] < today_s],
-                      key=lambda c: c[0], reverse=True)
-        if not prev:
+        if not candles:
             return None
-        c = prev[0]
+        # Upstox returns newest-first: candles[0]=today (partial on trading day),
+        # candles[1]=previous completed day.
+        # On non-trading days (weekend/holiday) candles[0] IS the prev trading day.
+        today_is_trading = (today.weekday() < 5 and not _is_nse_holiday(today))
+        if today_is_trading and len(candles) >= 2:
+            c = candles[1]   # skip today's in-progress candle
+        else:
+            c = candles[0]   # weekend/holiday: first = last completed session
         # Upstox daily candle: [ts, open, high, low, close, volume, oi]
         ph, pl, pc = float(c[2]), float(c[3]), float(c[4])
         if ph <= 0 or pl <= 0:
