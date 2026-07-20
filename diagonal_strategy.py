@@ -4772,6 +4772,8 @@ def _get_strike_pivots(strike, option_type):
       market live      → _prev_biz_day() (yesterday — today's candle is partial)
       after close      → _5m_date_used (= today, session just finished)
       weekend/holiday  → _5m_date_used (= last biz day, e.g. Friday)
+    Fallback: v2 daily candle for today may not be ready right after close →
+              automatically retries with _prev_biz_day().
     """
     _pivot_d = (
         _prev_biz_day().strftime("%Y-%m-%d") if _mkt_open
@@ -4783,6 +4785,17 @@ def _get_strike_pivots(strike, option_type):
         return _c
     piv = fetch_strike_pivots(token, near_raw, strike, option_type,
                               pivot_date_str=_pivot_d) if token else None
+    # v2 daily candle for today may not be settled yet after close → try prev biz day
+    if piv is None and not _mkt_open:
+        _pb_d  = _prev_biz_day().strftime("%Y-%m-%d")
+        if _pb_d != _pivot_d:
+            _pb_key = f"{_pb_d}_{_inst_choice}_{strike}_{option_type}_piv"
+            piv = st.session_state.get(_pb_key)
+            if not piv:
+                piv = fetch_strike_pivots(token, near_raw, strike, option_type,
+                                          pivot_date_str=_pb_d) if token else None
+                if piv:
+                    st.session_state[_pb_key] = piv
     if piv:
         st.session_state[_key] = piv
     return piv
@@ -4846,6 +4859,11 @@ if True:  # always render — individual cells show "—" if data missing
             for s, ltp in items
         )
 
+    # Pre-fetched day H/L for projection strikes via market-quote API
+    # (populated below after display_strikes are finalized; used in _strike_pills_with_piv)
+    _proj_ce_day_hl = {}  # {strike_int: (high, low)}
+    _proj_pe_day_hl = {}
+
     def _strike_pills_with_piv(items, option_type, color):
         """Strike + LTP + all pivot levels (P bold, R1-R5 blue, S1-S5 pink)."""
         if not items:
@@ -4863,8 +4881,15 @@ if True:  # always render — individual cells show "—" if data missing
             )
             # Rev-strategy calc: strike day LOW × 5.18
             # PE card → Rev CE H;  CE card → Rev PE H
-            _day_low = (near_pe_low.get(float(s)) or near_pe_low.get(s)) if option_type == "PE" \
-                  else (near_ce_low.get(float(s)) or near_ce_low.get(s))
+            # Primary: market-quote pre-fetched H/L (reliable after close)
+            # Fallback: chain OHLC (may be 0/stale after close)
+            _proj_hl_dict = _proj_pe_day_hl if option_type == "PE" else _proj_ce_day_hl
+            _proj_hl_entry = _proj_hl_dict.get(int(s))
+            _day_low_mq = _proj_hl_entry[1] if _proj_hl_entry else None
+            if option_type == "PE":
+                _day_low = _day_low_mq or near_pe_low.get(float(s)) or near_pe_low.get(s)
+            else:
+                _day_low = _day_low_mq or near_ce_low.get(float(s)) or near_ce_low.get(s)
             if _day_low and _day_low > 0:
                 _rev_lbl = "Rev CE H" if option_type == "PE" else "Rev PE H"
                 html += (
@@ -5019,6 +5044,62 @@ if True:  # always render — individual cells show "—" if data missing
             _piv = _get_strike_pivots(int(_fs), _ft)
             if _piv:
                 _fp[int(_fs)] = _piv
+
+    # Batch-fetch day H/L for all projection strikes via market-quote API.
+    # Chain OHLC (near_pe_low/near_ce_low) is unreliable/stale after close for OTM strikes.
+    def _fetch_proj_hl(display_strikes, option_type, out_dict):
+        if not display_strikes or not token or not near_raw:
+            return
+        to_fetch = {}   # strike_int → instrument_key
+        _opts_field = "call_options" if option_type == "CE" else "put_options"
+        for _s, _ in display_strikes:
+            _s_int = int(_s)
+            if _s_int in out_dict:
+                continue
+            _slot_k = f"proj_hl_{_today_str}_{_s_int}_{option_type}_{_spcl_slot}"
+            _cached = st.session_state.get(_slot_k)
+            if _cached:
+                out_dict[_s_int] = _cached
+                continue
+            for _row in near_raw:
+                if int(float(_row.get("strike_price", 0))) == _s_int:
+                    _inst = (_row.get(_opts_field) or {}).get("instrument_key")
+                    if _inst:
+                        to_fetch[_s_int] = _inst
+                    break
+        if not to_fetch:
+            return
+        try:
+            _inst_str = ",".join(to_fetch.values())
+            _r = requests.get(
+                "https://api.upstox.com/v2/market-quote/quotes",
+                params={"instrument_key": _inst_str},
+                headers=hdr(token), timeout=10,
+            )
+            _d = _r.json()
+            if _d.get("status") == "success":
+                _qdata = _d.get("data") or {}
+                for _s_int, _inst in to_fetch.items():
+                    _k = _inst.replace("|", ":")
+                    _q = _qdata.get(_k) or _qdata.get(_inst)
+                    if _q is None:
+                        _sfx = _inst.split("|")[-1]
+                        for _dk, _dv in _qdata.items():
+                            if _dk.endswith(_sfx):
+                                _q = _dv
+                                break
+                    _o = (_q or {}).get("ohlc") or {}
+                    _h = float(_o.get("high") or 0) or None
+                    _l = float(_o.get("low")  or 0) or None
+                    if _h or _l:
+                        out_dict[_s_int] = (_h, _l)
+                        _slot_k = f"proj_hl_{_today_str}_{_s_int}_{option_type}_{_spcl_slot}"
+                        st.session_state[_slot_k] = (_h, _l)
+        except Exception:
+            pass
+
+    _fetch_proj_hl(_pe_display_strikes, "PE", _proj_pe_day_hl)
+    _fetch_proj_hl(_ce_display_strikes, "CE", _proj_ce_day_hl)
 
     _pct_ce_h1 = (_proj_ce_high / _atm_ce_day_high * 100) if (_proj_ce_high and _atm_ce_day_high) else 0
     _sp1, _sp2 = st.columns(2)
