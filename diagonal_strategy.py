@@ -4611,20 +4611,23 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 
-# SPCL input: use the FIRST 5-MIN CANDLE CLOSE of CE/PE at the anchor ATM (_5m_spcl_atm).
-# _atm_ce_5m_c / _atm_pe_5m_c are fetched above via fetch_atm_5min_close().
-# Fallback chain when close is unavailable (pre-market / API error):
-#   1. first 5-min close (primary — already in _atm_ce_5m_c)
-#   2. day open from chain (near_ce_open) — closest available pre-9:20 proxy
-#   3. LTP — last resort
-_spcl_ce_h = _atm_ce_5m_c
-_spcl_pe_h = _atm_pe_5m_c
+# SPCL input: DAY HIGH of CE/PE at the anchor ATM (_5m_spcl_atm).
+# Anchor ATM is derived from NIFTY first 5-min CLOSE (see above).
+# SPCL formula uses the running day high of the option at that strike.
+# Weekend/holiday fallback: chain OHLC absent → fetch from 1-min historical candles.
+_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm))
+_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm))
+_spcl_ce_l = (near_ce_low.get(float(_5m_spcl_atm))  or near_ce_low.get(_5m_spcl_atm))
+_spcl_pe_l = (near_pe_low.get(float(_5m_spcl_atm))  or near_pe_low.get(_5m_spcl_atm))
+if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
+    _spcl_d   = _5m_date_used.strftime("%Y-%m-%d")
+    _fb_ce_h, _fb_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
+    _spcl_ce_h = _spcl_ce_h or _fb_ce_h
+    _spcl_pe_h = _spcl_pe_h or _fb_pe_h
 if not _spcl_ce_h:
-    _spcl_ce_h = (near_ce_open.get(float(_5m_spcl_atm)) or near_ce_open.get(_5m_spcl_atm)
-                  or near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm))
+    _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
 if not _spcl_pe_h:
-    _spcl_pe_h = (near_pe_open.get(float(_5m_spcl_atm)) or near_pe_open.get(_5m_spcl_atm)
-                  or near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm))
+    _spcl_pe_h = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
@@ -4839,7 +4842,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}</td>"
+        f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_spcl_ce_l)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -4854,7 +4857,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_fmt_s(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}</td>"
+        f"{_fmt_s(_spcl_pe_h)} | {_fmt_s(_spcl_pe_l)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
