@@ -5045,8 +5045,9 @@ if True:  # always render — individual cells show "—" if data missing
             if _piv:
                 _fp[int(_fs)] = _piv
 
-    # Batch-fetch day H/L for all projection strikes via market-quote API.
-    # Chain OHLC (near_pe_low/near_ce_low) is unreliable/stale after close for OTM strikes.
+    # Fetch day H/L for all projection strikes.
+    # Strategy 1: market-quote/quotes (OHLC) — fast, may return 0 for OTM after close
+    # Strategy 2: v3 intraday 1-min candles — reliable even after close (same as fetch_atm_day_hl)
     def _fetch_proj_hl(display_strikes, option_type, out_dict):
         if not display_strikes or not token or not near_raw:
             return
@@ -5069,6 +5070,7 @@ if True:  # always render — individual cells show "—" if data missing
                     break
         if not to_fetch:
             return
+        # ── Strategy 1: batch market-quote OHLC ──────────────────────────────
         try:
             _inst_str = ",".join(to_fetch.values())
             _r = requests.get(
@@ -5097,6 +5099,31 @@ if True:  # always render — individual cells show "—" if data missing
                         st.session_state[_slot_k] = (_h, _l)
         except Exception:
             pass
+        # ── Strategy 2: v3 intraday 1-min candles for any still-missing strikes ──
+        # Reliable after close (max H / min L across all 1-min candles of the day)
+        for _s_int, _inst in to_fetch.items():
+            if _s_int in out_dict:
+                continue
+            try:
+                _enc2 = urllib.parse.quote(_inst, safe="")
+                _r2 = requests.get(
+                    f"https://api.upstox.com/v3/historical-candle/intraday/{_enc2}/minutes/1",
+                    headers=hdr(token), timeout=10,
+                )
+                _d2 = _r2.json()
+                if _d2.get("status") == "success":
+                    _cans = (_d2.get("data") or {}).get("candles") or []
+                    if _cans:
+                        _highs2 = [float(c[2]) for c in _cans if len(c) > 2 and c[2]]
+                        _lows2  = [float(c[3]) for c in _cans if len(c) > 3 and c[3]]
+                        _h2 = max(_highs2) if _highs2 else None
+                        _l2 = min(_lows2)  if _lows2  else None
+                        if _h2 or _l2:
+                            out_dict[_s_int] = (_h2, _l2)
+                            _slot_k2 = f"proj_hl_{_today_str}_{_s_int}_{option_type}_{_spcl_slot}"
+                            st.session_state[_slot_k2] = (_h2, _l2)
+            except Exception:
+                pass
 
     _fetch_proj_hl(_pe_display_strikes, "PE", _proj_pe_day_hl)
     _fetch_proj_hl(_ce_display_strikes, "CE", _proj_ce_day_hl)
