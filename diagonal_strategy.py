@@ -4535,7 +4535,7 @@ _anchor_mode = st.selectbox(
     "SPCL ATM Anchor",
     ["First 5m Close", "Extreme Close"],
     index=0,
-    key="spcl_anchor_radio",
+    key="spcl_anchor_v2",
     help="First 5m Close: NIFTY first 5-min candle close → ATM strike.\n"
          "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
 )
