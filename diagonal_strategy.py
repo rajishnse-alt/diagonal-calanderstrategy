@@ -4872,17 +4872,9 @@ if True:  # always render — individual cells show "—" if data missing
         parts = []
         for s, ltp in items:
             piv = piv_map.get(s)
-            # Strike + LTP header
-            html = (
-                f"<div style='margin-bottom:4px;'>"
-                f"<span style='color:{color};font-weight:700;font-size:12px;'>{s}</span>"
-                f"<span style='color:var(--muted);font-size:10px;'> LTP ₹{ltp:.2f}</span>"
-                f"</div>"
-            )
             # Rev-strategy calc: strike day LOW × 5.18
-            # PE card → Rev CE H;  CE card → Rev PE H
-            # Primary: market-quote pre-fetched H/L (reliable after close)
-            # Fallback: chain OHLC (may be 0/stale after close)
+            # PE card → Rev CE H (bold green);  CE card → Rev PE H (bold red)
+            # Primary: market-quote pre-fetched H/L; fallback: chain OHLC
             _proj_hl_dict = _proj_pe_day_hl if option_type == "PE" else _proj_ce_day_hl
             _proj_hl_entry = _proj_hl_dict.get(int(s))
             _day_low_mq = _proj_hl_entry[1] if _proj_hl_entry else None
@@ -4890,15 +4882,24 @@ if True:  # always render — individual cells show "—" if data missing
                 _day_low = _day_low_mq or near_pe_low.get(float(s)) or near_pe_low.get(s)
             else:
                 _day_low = _day_low_mq or near_ce_low.get(float(s)) or near_ce_low.get(s)
+            _rev_inline = ""
             if _day_low and _day_low > 0:
-                _rev_lbl = "Rev CE H" if option_type == "PE" else "Rev PE H"
-                html += (
-                    f"<div style='margin-bottom:3px;'>"
-                    f"<span style='color:var(--muted);font-size:9px;'>"
-                    f"{_rev_lbl} ₹{_day_low * 5.18:.2f}"
-                    f"<span style='font-size:8px;opacity:.55;'> (low {_day_low:.2f}×5.18)</span>"
-                    f"</span></div>"
+                _rev_lbl   = "Rev CE H" if option_type == "PE" else "Rev PE H"
+                _rev_color = "var(--ce)" if option_type == "PE" else "var(--pe)"
+                _rev_inline = (
+                    f"<span style='color:{_rev_color};font-weight:700;font-size:9px;"
+                    f"margin-left:6px;'>  {_rev_lbl} ₹{_day_low * 5.18:.2f}</span>"
+                    f"<span style='color:var(--muted);font-size:8px;opacity:.55;'>"
+                    f" ({_day_low:.2f}×5.18)</span>"
                 )
+            # Strike + LTP header (Rev inline)
+            html = (
+                f"<div style='margin-bottom:4px;'>"
+                f"<span style='color:{color};font-weight:700;font-size:12px;'>{s}</span>"
+                f"<span style='color:var(--muted);font-size:10px;'> LTP ₹{ltp:.2f}</span>"
+                f"{_rev_inline}"
+                f"</div>"
+            )
             if piv:
                 # All pivot levels in order: R5→R1→P→S1→S5
                 pivot_rows = [
