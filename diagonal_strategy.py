@@ -3538,6 +3538,8 @@ _5m_date_used  = (
 )
 _5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
+_5m_close_key  = f"nifty_5m_close_{_5m_date_used.isoformat()}"
+_nifty_5m_close = st.session_state.get(_5m_close_key)
 _5m_src_label  = (
     "today (live)"        if _mkt_open    else
     "today (after close)" if _after_close else
@@ -3583,11 +3585,17 @@ if _nifty_5m_high is None and token:
             # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
             _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
             _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
+            # Close of first 5-min candle = close of 9:19 candle = _first_5[0] (newest-first), col 4
+            _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
+            _lock = (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20))
             if _5m_h > 0:
                 _nifty_5m_high = _5m_h
-                # Lock once first 5-min period is complete (market: after 9:20; prev-day: always)
-                if (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20)):
+                if _lock:
                     st.session_state[_5m_key] = _nifty_5m_high
+            if _5m_c > 0:
+                _nifty_5m_close = _5m_c
+                if _lock:
+                    st.session_state[_5m_close_key] = _nifty_5m_close
     except Exception:
         pass
 
@@ -4522,10 +4530,10 @@ with pb4:
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
 _anchor_mode = st.selectbox(
     "SPCL ATM Anchor",
-    ["First 5m High", "Extreme Close"],
+    ["First 5m Close", "Extreme Close"],
     index=0,
     key="spcl_anchor_radio",
-    help="First 5m High: NIFTY first 5-min candle high → ATM strike.\n"
+    help="First 5m Close: NIFTY first 5-min candle close → ATM strike (matches Pine Script).\n"
          "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
 )
 
@@ -4552,8 +4560,8 @@ if _anchor_mode == "Extreme Close":
     _spcl_anchor_lbl = f"▲ UP" if _ec_direction == "UP" else "▼ DN"
     _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 else:
-    _spcl_anchor_val = _nifty_5m_high
-    _spcl_anchor_lbl = "1st 5m"
+    _spcl_anchor_val = _nifty_5m_close
+    _spcl_anchor_lbl = "1st 5m C"
     _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 
 _5m_spcl_atm  = (
@@ -4600,26 +4608,16 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 
-# SPCL input: Pine Script uses the DAILY HIGH of CE/PE at the ANCHOR ATM (_5m_spcl_atm).
-# FIX (2026-07-18): two prior bugs —
-#   1. Was using first 5-min HIGH (_atm_ce_5m_h) → wrong, Pine uses daily/running HIGH.
-#   2. _atm_ce_day_high is for `atm` (spot-derived), not `_5m_spcl_atm` (anchor-derived).
-#      When anchor ATM ≠ spot ATM (e.g. anchor=24308→24300, spot=24343→24350), the
-#      old code used the wrong strike's high entirely.
-# CORRECT: look up daily high directly from near_ce_high/near_pe_high at _5m_spcl_atm.
-#   near_ce_high / near_pe_high are {strike: day_high} dicts for ALL strikes in chain.
-# FIX (2026-07-18): On weekends/holidays Upstox chain API omits ohlc.high → near_ce_high
-#   returns None for all strikes. Fallback: call fetch_atm_day_high() to fetch 1-min
-#   historical candles for the prev biz day and return max(HIGH) = true daily high.
-#   This fixes SPCL showing 142.95 (LTP) instead of 165.45 (daily high) on weekends.
-_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm))
-_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm))
-# Weekend/holiday fallback: chain OHLC absent → fetch from 1-min historical candles
-if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
-    _spcl_d   = _5m_date_used.strftime("%Y-%m-%d")
-    _fb_ce_h, _fb_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
-    _spcl_ce_h = _spcl_ce_h or _fb_ce_h
-    _spcl_pe_h = _spcl_pe_h or _fb_pe_h
+# SPCL input: first 5-min candle HIGH of CE/PE at anchor ATM (_5m_spcl_atm).
+# Strategy locks all inputs at the first 5-min candle (same as anchor ATM derivation).
+# _atm_ce_5m_h / _atm_pe_5m_h already fetched above (v3 intraday live; v2 1-min after close).
+_spcl_ce_h = _atm_ce_5m_h
+_spcl_pe_h = _atm_pe_5m_h
+# Fallback to chain day OHLC if 5-min HIGH unavailable (pre-market / API error)
+if not _spcl_ce_h:
+    _spcl_ce_h = near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
+if not _spcl_pe_h:
+    _spcl_pe_h = near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
 # Final fallback to LTP (pre-market or API error — no historical data available)
 if not _spcl_ce_h:
     _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
@@ -4905,10 +4903,10 @@ _tk_pe_ltp  = near_pe.get(float(atm), 0)
 #   1. Chain OHLC (market_data.ohlc.high/low) — live during session
 #   2. market-quote / candle API (_atm_ce_candle_h/l) — live during session
 #   3. Prev-day H/L from SPP calc (_spp_ce_h/l) — fallback pre/post market, marked ᵖ
-_tk_ce_h_raw = near_ce_high.get(float(atm)) or _atm_ce_candle_h
-_tk_pe_h_raw = near_pe_high.get(float(atm)) or _atm_pe_candle_h
-_tk_ce_l_raw = near_ce_low.get(float(atm))  or _atm_ce_candle_l
-_tk_pe_l_raw = near_pe_low.get(float(atm))  or _atm_pe_candle_l
+_tk_ce_h_raw = near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(float(atm)) or _atm_ce_candle_h
+_tk_pe_h_raw = near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(float(atm)) or _atm_pe_candle_h
+_tk_ce_l_raw = near_ce_low.get(float(_5m_spcl_atm))  or near_ce_low.get(float(atm))  or _atm_ce_candle_l
+_tk_pe_l_raw = near_pe_low.get(float(_5m_spcl_atm))  or near_pe_low.get(float(atm))  or _atm_pe_candle_l
 
 _tk_hl_prev = False   # flag: showing prev-day data
 if not _tk_ce_h_raw and not _tk_pe_h_raw:
