@@ -4861,6 +4861,19 @@ if True:  # always render — individual cells show "—" if data missing
                 f"<span style='color:var(--muted);font-size:10px;'> LTP ₹{ltp:.2f}</span>"
                 f"</div>"
             )
+            # Rev-strategy calc: strike day LOW × 5.18
+            # PE card → Rev CE H;  CE card → Rev PE H
+            _day_low = (near_pe_low.get(float(s)) or near_pe_low.get(s)) if option_type == "PE" \
+                  else (near_ce_low.get(float(s)) or near_ce_low.get(s))
+            if _day_low and _day_low > 0:
+                _rev_lbl = "Rev CE H" if option_type == "PE" else "Rev PE H"
+                html += (
+                    f"<div style='margin-bottom:3px;'>"
+                    f"<span style='color:var(--muted);font-size:9px;'>"
+                    f"{_rev_lbl} ₹{_day_low * 5.18:.2f}"
+                    f"<span style='font-size:8px;opacity:.55;'> (low {_day_low:.2f}×5.18)</span>"
+                    f"</span></div>"
+                )
             if piv:
                 # All pivot levels in order: R5→R1→P→S1→S5
                 pivot_rows = [
