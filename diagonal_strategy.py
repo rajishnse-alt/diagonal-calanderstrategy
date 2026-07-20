@@ -3546,7 +3546,7 @@ _5m_src_label  = (
     f"prev day ({_5m_date_used})"
 )
 
-if _nifty_5m_high is None and token:
+if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
     try:
         _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
@@ -4608,16 +4608,16 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 
-# SPCL input: first 5-min candle HIGH of CE/PE at anchor ATM (_5m_spcl_atm).
-# Strategy locks all inputs at the first 5-min candle (same as anchor ATM derivation).
-# _atm_ce_5m_h / _atm_pe_5m_h already fetched above (v3 intraday live; v2 1-min after close).
-_spcl_ce_h = _atm_ce_5m_h
-_spcl_pe_h = _atm_pe_5m_h
-# Fallback to chain day OHLC if 5-min HIGH unavailable (pre-market / API error)
-if not _spcl_ce_h:
-    _spcl_ce_h = near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
-if not _spcl_pe_h:
-    _spcl_pe_h = near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
+# SPCL input: DAY HIGH of CE/PE at anchor ATM (_5m_spcl_atm) — matches Pine Script.
+# Pine CeSPCL = ce_high × (1-13.06%) where ce_high = full-day HIGH of ATM CE option.
+_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm))
+_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm))
+# Weekend/holiday fallback: chain OHLC absent → fetch from 1-min historical candles
+if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
+    _spcl_d   = _5m_date_used.strftime("%Y-%m-%d")
+    _fb_ce_h, _fb_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
+    _spcl_ce_h = _spcl_ce_h or _fb_ce_h
+    _spcl_pe_h = _spcl_pe_h or _fb_pe_h
 # Final fallback to LTP (pre-market or API error — no historical data available)
 if not _spcl_ce_h:
     _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
