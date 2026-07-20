@@ -3645,25 +3645,26 @@ if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
     except Exception:
         pass
 
-# Guaranteed close fetch — runs even if high was already cached but close is missing.
-# Separate try so a high-fetch failure doesn't also block the close.
+# Guaranteed close fetch — separate try so high-fetch failures don't block this.
+# Try v3 intraday first (has today's data live AND after-close); fall back to v2 historical.
 if _nifty_5m_close is None and token:
     try:
         _enc_nf = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")
         _hdr_nf = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
         _d_nf   = _5m_date_used.strftime("%Y-%m-%d")
-        if _mkt_open:
-            _r_nf = requests.get(
-                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_nf}/minutes/1",
-                headers=_hdr_nf, timeout=10,
-            )
-            _cn = (_r_nf.json().get("data") or {}).get("candles") or []
-        else:
-            _r_nf = requests.get(
+        # v3 intraday works for both live and after-close (retains today's session data)
+        _r_nf = requests.get(
+            f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_nf}/minutes/1",
+            headers=_hdr_nf, timeout=10,
+        )
+        _cn = (_r_nf.json().get("data") or {}).get("candles") or []
+        # Fallback to v2 historical if v3 intraday returns empty
+        if not _cn:
+            _r_nf2 = requests.get(
                 f"https://api.upstox.com/v2/historical-candle/{_enc_nf}/1minute/{_d_nf}/{_d_nf}",
                 headers=_hdr_nf, timeout=10,
             )
-            _cn = (_r_nf.json().get("data") or {}).get("candles") or []
+            _cn = (_r_nf2.json().get("data") or {}).get("candles") or []
         if _cn:
             _f5n = _cn[-5:] if len(_cn) >= 5 else _cn
             _cv  = float(_f5n[0][4]) if _f5n and len(_f5n[0]) > 4 else 0
