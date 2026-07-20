@@ -4732,8 +4732,19 @@ if True:  # always render — individual cells show "—" if data missing
                 f"<div style='margin-bottom:4px;'>"
                 f"<span style='color:{color};font-weight:700;font-size:12px;'>{s}</span>"
                 f"<span style='color:var(--muted);font-size:10px;'> LTP ₹{ltp:.2f}</span>"
-                f"</div>"
             )
+            if option_type == "PE":
+                # Reverse CE LTP high = day's lowest LTP of this PE strike × 5.18
+                _pe_day_low = near_pe_low.get(float(s)) or near_pe_low.get(s)
+                if _pe_day_low and _pe_day_low > 0:
+                    _rev_ce_h = _pe_day_low * 5.18
+                    html += (
+                        f"<span style='color:var(--muted);font-size:9px;'>"
+                        f" &nbsp;·&nbsp; Rev CE H ₹{_rev_ce_h:.2f}"
+                        f" <span style='font-size:8px;opacity:.6;'>(low {_pe_day_low:.2f}×5.18)</span>"
+                        f"</span>"
+                    )
+            html += f"</div>"
             if piv:
                 # All pivot levels in order: R5→R1→P→S1→S5
                 pivot_rows = [
