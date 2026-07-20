@@ -1275,6 +1275,52 @@ def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
     return _first_5m_h(ce_inst), _first_5m_h(pe_inst)
 
 
+def fetch_atm_5min_close(tok, chain_data, atm_strike, date_str=None):
+    """
+    First 5-min candle CLOSE for ATM CE and PE options.
+    Mirrors fetch_atm_5min_high but returns col 4 (close) not col 2 (high).
+    Pine Script shows this as "CE 5min" / "PE 5min" in the indicator table.
+    Returns (ce_5m_c, pe_5m_c) — either may be None.
+    """
+    ce_inst = pe_inst = None
+    for row in chain_data:
+        if int(float(row.get("strike_price", 0))) == int(atm_strike):
+            ce_inst = (row.get("call_options") or {}).get("instrument_key")
+            pe_inst = (row.get("put_options")  or {}).get("instrument_key")
+            break
+    if not ce_inst or not pe_inst:
+        return None, None
+
+    def _first_5m_c(inst_key):
+        try:
+            enc = urllib.parse.quote(inst_key, safe="")
+            _h5 = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
+            if date_str:
+                r = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{date_str}/{date_str}",
+                    headers=_h5, timeout=10,
+                )
+                candles = (r.json().get("data") or {}).get("candles") or []
+                if candles:
+                    first_5 = candles[-5:] if len(candles) >= 5 else candles
+                    # newest-first: first_5[0] = 9:19 candle (close of first 5-min window)
+                    return float(first_5[0][4]) if len(first_5[0]) > 4 else None
+            else:
+                r = requests.get(
+                    f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5",
+                    headers=_h5, timeout=10,
+                )
+                candles = (r.json().get("data") or {}).get("candles") or []
+                if candles:
+                    first_c = candles[-1]  # newest-first → last = first 5-min candle
+                    return float(first_c[4]) if len(first_c) > 4 else None
+        except Exception:
+            pass
+        return None
+
+    return _first_5m_c(ce_inst), _first_5m_c(pe_inst)
+
+
 def fetch_atm_day_high(tok, chain_data, atm_strike, date_str):
     """
     Full-day HIGH for ATM CE and PE options via v2 1-minute historical candles.
@@ -3599,6 +3645,34 @@ if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
     except Exception:
         pass
 
+# Guaranteed close fetch — runs even if high was already cached but close is missing.
+# Separate try so a high-fetch failure doesn't also block the close.
+if _nifty_5m_close is None and token:
+    try:
+        _enc_nf = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")
+        _hdr_nf = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        _d_nf   = _5m_date_used.strftime("%Y-%m-%d")
+        if _mkt_open:
+            _r_nf = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_nf}/minutes/1",
+                headers=_hdr_nf, timeout=10,
+            )
+            _cn = (_r_nf.json().get("data") or {}).get("candles") or []
+        else:
+            _r_nf = requests.get(
+                f"https://api.upstox.com/v2/historical-candle/{_enc_nf}/1minute/{_d_nf}/{_d_nf}",
+                headers=_hdr_nf, timeout=10,
+            )
+            _cn = (_r_nf.json().get("data") or {}).get("candles") or []
+        if _cn:
+            _f5n = _cn[-5:] if len(_cn) >= 5 else _cn
+            _cv  = float(_f5n[0][4]) if _f5n and len(_f5n[0]) > 4 else 0
+            if _cv > 0:
+                _nifty_5m_close = _cv
+                st.session_state[_5m_close_key] = _cv
+    except Exception:
+        pass
+
 # Critical Resistance = first 5-min HIGH + 0.2611%
 _crit_res = round(_nifty_5m_high * 1.002611, 2) if _nifty_5m_high else None
 _crit_res_col = "var(--bear)" if (spot and _crit_res and spot < _crit_res) else "var(--bull)"
@@ -4571,12 +4645,15 @@ _5m_spcl_atm  = (
 )
 # Key WITHOUT anchor label — same ATM strike always reuses the same cached 5-min fetch
 _5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
+_5m_opt_c_key = f"atm_5m_c_{_today_str}_{_5m_spcl_atm}"
 # After market closes, use cached value to avoid repeated API calls.
 # During market hours: always fetch fresh (avoids stale-key bugs & ensures 9:20 candle is latest).
 _now_ist_5m   = datetime.now(IST)
 _mkt_closed   = not _mkt_open
 _atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce") if _mkt_closed else None
 _atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe") if _mkt_closed else None
+_atm_ce_5m_c  = st.session_state.get(_5m_opt_c_key + "_ce") if _mkt_closed else None
+_atm_pe_5m_c  = st.session_state.get(_5m_opt_c_key + "_pe") if _mkt_closed else None
 
 if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
     # Market open → intraday endpoint; market closed → prev-biz-day historical
@@ -4591,6 +4668,18 @@ if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
         _atm_pe_5m_h = _p5h
         if _mkt_closed:
             st.session_state[_5m_opt_key + "_pe"] = _p5h
+
+if (_atm_ce_5m_c is None or _atm_pe_5m_c is None) and token:
+    _5m_d_arg = None if _mkt_open else _5m_date_used.strftime("%Y-%m-%d")
+    _c5c, _p5c = fetch_atm_5min_close(token, near_raw, _5m_spcl_atm, date_str=_5m_d_arg)
+    if _c5c:
+        _atm_ce_5m_c = _c5c
+        if _mkt_closed:
+            st.session_state[_5m_opt_c_key + "_ce"] = _c5c
+    if _p5c:
+        _atm_pe_5m_c = _p5c
+        if _mkt_closed:
+            st.session_state[_5m_opt_c_key + "_pe"] = _p5c
 
 # Fallback chain for _atm_ce_day_high / _atm_pe_day_high (ATM card H/L display):
 #   1. chain OHLC high  (real, flagged by _atm_ce_ohlc_real)
@@ -5015,23 +5104,23 @@ st.markdown(
     f"letter-spacing:1.5px;padding:5px 8px;text-align:left;'>PROJ HIGH</th>"
     f"</tr></thead>"
     f"<tbody>"
-    # Row 1 — ATM Strike
-    + _tr("ATM Strike", f"{atm}", "var(--gold)")
+    # Row 1 — ATM Strike (anchor-derived, matches Pine lockedStrike)
+    + _tr("ATM Strike", f"{_5m_spcl_atm}", "var(--gold)")
     # Row 2 — Spot
     + _tr("Spot", f"{spot:,.2f}" if spot else "—", "color:rgb(255,165,0)")
     # Row 3 — SPCL Anchor (NIFTY 5m-high or confirmed extreme close)
     + _tr("Anchor", _spcl_anchor_tag, "var(--muted)")
     # Row 4 — CE LTP
     + _tr(f"{_5m_spcl_atm} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
-    # Row 5 — CE 5min (first 5-min candle HIGH of the anchor ATM CE option)
-    + _tr(f"{_5m_spcl_atm} CE 5min", _tk_f(_atm_ce_5m_h) if _atm_ce_5m_h else "—", "var(--ce)")
+    # Row 5 — CE 5min (first 5-min candle CLOSE of the anchor ATM CE option, matches Pine)
+    + _tr(f"{_5m_spcl_atm} CE 5min", _tk_f(_atm_ce_5m_c) if _atm_ce_5m_c else "—", "var(--ce)")
     # Row 6 — CE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_5m_spcl_atm} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
     # Row 7 — PE LTP
     + _tr(f"{_5m_spcl_atm} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
-    # Row 8 — PE 5min (first 5-min candle HIGH of the anchor ATM PE option)
-    + _tr(f"{_5m_spcl_atm} PE 5min", _tk_f(_atm_pe_5m_h) if _atm_pe_5m_h else "—", "var(--pe)")
+    # Row 8 — PE 5min (first 5-min candle CLOSE of the anchor ATM PE option, matches Pine)
+    + _tr(f"{_5m_spcl_atm} PE 5min", _tk_f(_atm_pe_5m_c) if _atm_pe_5m_c else "—", "var(--pe)")
     # Row 9 — PE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_5m_spcl_atm} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
