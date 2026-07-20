@@ -4794,6 +4794,16 @@ if True:  # always render — individual cells show "—" if data missing
     _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high, near_pe)
     _best_ce_s, _best_ce_ltp = _best_strike(_ce_range_strikes, _proj_ce_high, near_ce)
 
+    # Lock projection strikes when using "First 5m High" anchor so they
+    # don't shift as option LTPs fluctuate during the day.
+    if _anchor_mode == "First 5m High" and _5m_spcl_atm:
+        _proj_lock_key = f"proj_best_strikes_{_today_str}_{_5m_spcl_atm}"
+        _locked_best = st.session_state.get(_proj_lock_key)
+        if _locked_best:
+            _best_pe_s, _best_pe_ltp, _best_ce_s, _best_ce_ltp = _locked_best
+        elif _best_pe_s and _best_ce_s:
+            st.session_state[_proj_lock_key] = (_best_pe_s, _best_pe_ltp, _best_ce_s, _best_ce_ltp)
+
     _pe_h_strike = (
         f"<br><span style='color:var(--muted);font-size:9px;'>"
         f"↑{_best_pe_s} ₹{_best_pe_ltp:.1f}</span>"
@@ -4851,6 +4861,15 @@ if True:  # always render — individual cells show "—" if data missing
     _pe_display_strikes = _pe_range_strikes or (
         [(int(_best_pe_s), _best_pe_ltp)] if _best_pe_s else []
     )
+    # Lock display strike lists for "First 5m High" anchor — prevents the
+    # range-strikes list from shifting as live LTPs move in/out of range.
+    if _anchor_mode == "First 5m High" and _5m_spcl_atm:
+        _proj_disp_key = f"proj_disp_strikes_{_today_str}_{_5m_spcl_atm}"
+        _locked_disp = st.session_state.get(_proj_disp_key)
+        if _locked_disp:
+            _pe_display_strikes, _ce_display_strikes = _locked_disp
+        elif _pe_display_strikes and _ce_display_strikes:
+            st.session_state[_proj_disp_key] = (_pe_display_strikes, _ce_display_strikes)
     # Ensure pivots are fetched for fallback strikes too
     for _fs, _ft, _fp in [
         (_best_ce_s, "CE", _ce_strike_pivots),
