@@ -1219,19 +1219,19 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
     return ce_h, ce_l, pe_h, pe_l
 
 
-def fetch_atm_5min_close(tok, chain_data, atm_strike, date_str=None):
+def fetch_atm_5min_high(tok, chain_data, atm_strike, date_str=None):
     """
-    First 5-min candle CLOSE for ATM CE and PE options.
+    First 5-min candle HIGH for ATM CE and PE options.
     date_str=None        → v3 intraday with minutes/5 (market open; v3 supports options ✓)
     date_str='YYYY-MM-DD'→ v2 historical with 1minute (market closed/after-close/weekend)
 
     FIX (2026-07-18): v2 historical "5minute" is NOT a valid interval → returns {} silently.
     Valid v2 intervals: 1minute|30minute|60minute|1day|1week|1month.
-    When market closed: fetch 1-minute candles; close of first 5-min agg = close of 9:19
-    candle = _first_5[0][4] (newest-first, so index 0 = 9:19 candle, col 4 = close).
+    When market closed: fetch 1-minute candles and take max HIGH of last 5
+    (= first 5 minutes: 9:15–9:19, candles are newest-first so last 5 = earliest).
     Note: v3 intraday "minutes/5" works for options (not NSE_INDEX), keep for live path.
 
-    Returns (ce_5m_c, pe_5m_c) — either may be None.
+    Returns (ce_5m_h, pe_5m_h) — either may be None.
     """
     ce_inst = pe_inst = None
     for row in chain_data:
@@ -1242,22 +1242,22 @@ def fetch_atm_5min_close(tok, chain_data, atm_strike, date_str=None):
     if not ce_inst or not pe_inst:
         return None, None
 
-    def _first_5m_c(inst_key):
+    def _first_5m_h(inst_key):
         try:
             enc = urllib.parse.quote(inst_key, safe="")
             _h5 = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
             if date_str:
                 # Market closed / after-close / weekend → v2 with 1-minute candles
+                # "5minute" is invalid on v2 → silently returns {} → use 1minute instead
                 r = requests.get(
                     f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{date_str}/{date_str}",
                     headers=_h5, timeout=10,
                 )
                 candles = (r.json().get("data") or {}).get("candles") or []
                 if candles:
-                    # newest-first; last 5 = first 5 min (9:15–9:19); index 0 = 9:19 = close
+                    # newest-first; last 5 = first 5 minutes of session (9:15–9:19)
                     first_5 = candles[-5:] if len(candles) >= 5 else candles
-                    c = first_5[0]  # 9:19 candle (newest of first 5)
-                    return float(c[4]) if len(c) > 4 else None
+                    return max((float(c[2]) for c in first_5 if len(c) > 2), default=None)
             else:
                 # Market open → v3 intraday minutes/5 (works for options, not NSE_INDEX)
                 r = requests.get(
@@ -1267,29 +1267,30 @@ def fetch_atm_5min_close(tok, chain_data, atm_strike, date_str=None):
                 candles = (r.json().get("data") or {}).get("candles") or []
                 if candles:
                     first_c = candles[-1]   # newest-first → last = first 5-min candle
-                    return float(first_c[4]) if len(first_c) > 4 else None  # col 4 = close
+                    return float(first_c[2]) if len(first_c) > 2 else None
         except Exception:
             pass
         return None
 
-    return _first_5m_c(ce_inst), _first_5m_c(pe_inst)
+    return _first_5m_h(ce_inst), _first_5m_h(pe_inst)
 
 
 def fetch_atm_day_high(tok, chain_data, atm_strike, date_str):
-    """Wrapper — returns (ce_day_high, pe_day_high) for backward compat."""
-    ce_h, pe_h, _, _ = fetch_atm_day_hl_hist(tok, chain_data, atm_strike, date_str)
-    return ce_h, pe_h
-
-
-def fetch_atm_day_hl_hist(tok, chain_data, atm_strike, date_str):
     """
-    Full-day HIGH and LOW for ATM CE and PE via v2 1-minute historical candles.
-    Mirrors Pine Script f_optData():  dH = running max(high),  dL = running min(low).
+    Full-day HIGH for ATM CE and PE options via v2 1-minute historical candles.
+    Used as fallback when near_ce_high / near_pe_high are None (weekend/holiday —
+    Upstox option chain API omits ohlc.high on non-trading days).
 
-    date_str: 'YYYY-MM-DD' trading day.  Pass today during market hours to get
-    running intraday H/L (v2 returns all completed 1-min candles so far).
+    Returns max(HIGH) across ALL 1-min candles for that date = true daily HIGH.
+    This matches TradingView CE/PE daily chart HIGH value.
 
-    Returns (ce_h, pe_h, ce_l, pe_l) — any may be None on API error.
+    FIX (2026-07-18): On weekends parse_chain() returns near_ce_high[atm]=None
+    because ohlc is absent in the chain response. Without this fallback SPCL uses
+    LTP (~142.95) instead of the correct daily high (165.45). This function fetches
+    1-min candles for CE/PE at anchor ATM on the prev biz day and returns max HIGH.
+
+    date_str: 'YYYY-MM-DD' — must be a trading day (caller ensures this via _5m_date_used)
+    Returns (ce_day_high, pe_day_high) — either may be None on API error.
     """
     ce_inst = pe_inst = None
     for row in chain_data:
@@ -1298,9 +1299,9 @@ def fetch_atm_day_hl_hist(tok, chain_data, atm_strike, date_str):
             pe_inst = (row.get("put_options")  or {}).get("instrument_key")
             break
     if not ce_inst or not pe_inst:
-        return None, None, None, None
+        return None, None
 
-    def _day_hl(inst_key):
+    def _day_high(inst_key):
         try:
             enc = urllib.parse.quote(inst_key, safe="")
             _h  = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
@@ -1310,16 +1311,12 @@ def fetch_atm_day_hl_hist(tok, chain_data, atm_strike, date_str):
             )
             candles = (r.json().get("data") or {}).get("candles") or []
             if candles:
-                day_h = max((float(c[2]) for c in candles if len(c) > 2), default=None)
-                day_l = min((float(c[3]) for c in candles if len(c) > 3), default=None)
-                return day_h, day_l
+                return max((float(c[2]) for c in candles if len(c) > 2), default=None)
         except Exception:
             pass
-        return None, None
+        return None
 
-    ce_h, ce_l = _day_hl(ce_inst)
-    pe_h, pe_l = _day_hl(pe_inst)
-    return ce_h, pe_h, ce_l, pe_l
+    return _day_high(ce_inst), _day_high(pe_inst)
 
 
 def fetch_nifty_extreme_close(tok, date_str=None):
@@ -3540,16 +3537,14 @@ _5m_date_used  = (
     else _prev_biz_day()                              # weekend / holiday / pre-market
 )
 _5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
-_5m_close_key  = f"nifty_5m_close_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
-_nifty_5m_close = st.session_state.get(_5m_close_key)
 _5m_src_label  = (
     "today (live)"        if _mkt_open    else
     "today (after close)" if _after_close else
     f"prev day ({_5m_date_used})"
 )
 
-if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
+if _nifty_5m_high is None and token:
     try:
         _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
@@ -3558,8 +3553,7 @@ if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
         # "5minute" is NOT a valid v2 interval → silently returns {} → empty candles.
         # v3 uses "minutes/5" in the path but does NOT support NSE_INDEX instruments.
         # SOLUTION: always use v2 with "1minute" interval, then aggregate the first
-        # 5 one-minute candles (9:15–9:19). HIGH = max(c[2]) for Critical Resistance;
-        # CLOSE = c[4] of the 9:19 candle (newest of first 5) for the SPCL anchor ATM.
+        # 5 one-minute candles (9:15–9:19) to reconstruct the first 5-min HIGH.
         # Candles are returned newest-first; last 5 elements = first 5 minutes of day.
 
         def _get_1m_candles(date_str_arg):
@@ -3586,22 +3580,14 @@ if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
 
         if _candles5:
             # candles newest-first; last 5 elements = first 5 minutes of trading (9:15–9:19)
-            # Max HIGH across those 5 candles = "first 5-min candle HIGH" (used for Critical Res)
-            # CLOSE of first 5-min candle = close of the 9:19 candle = _first_5[0][4]
+            # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
             _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
             _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
-            # _first_5 is newest-first within the 5; index 0 = 9:19 candle → its close
-            _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
-            _5m_locked = (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20))
-            if _5m_h > 0 and _nifty_5m_high is None:
+            if _5m_h > 0:
                 _nifty_5m_high = _5m_h
                 # Lock once first 5-min period is complete (market: after 9:20; prev-day: always)
-                if _5m_locked:
+                if (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20)):
                     st.session_state[_5m_key] = _nifty_5m_high
-            if _5m_c > 0 and _nifty_5m_close is None:
-                _nifty_5m_close = _5m_c
-                if _5m_locked:
-                    st.session_state[_5m_close_key] = _nifty_5m_close
     except Exception:
         pass
 
@@ -4532,14 +4518,14 @@ with pb4:
 
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
-# SPCL uses FIRST 5-MIN CANDLE CLOSE of the NIFTY index to derive the anchor ATM.
+# SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
 _anchor_mode = st.selectbox(
     "SPCL ATM Anchor",
-    ["First 5m Close", "Extreme Close"],
+    ["First 5m High", "Extreme Close"],
     index=0,
-    key="spcl_anchor_v2",
-    help="First 5m Close: NIFTY first 5-min candle close → ATM strike.\n"
+    key="spcl_anchor_radio",
+    help="First 5m High: NIFTY first 5-min candle high → ATM strike.\n"
          "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
 )
 
@@ -4566,7 +4552,7 @@ if _anchor_mode == "Extreme Close":
     _spcl_anchor_lbl = f"▲ UP" if _ec_direction == "UP" else "▼ DN"
     _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 else:
-    _spcl_anchor_val = _nifty_5m_close
+    _spcl_anchor_val = _nifty_5m_high
     _spcl_anchor_lbl = "1st 5m"
     _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 
@@ -4576,27 +4562,27 @@ _5m_spcl_atm  = (
     else (_open_atm if _open_atm else atm)
 )
 # Key WITHOUT anchor label — same ATM strike always reuses the same cached 5-min fetch
-_5m_opt_key   = f"atm_5m_c_{_today_str}_{_5m_spcl_atm}"
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
 # After market closes, use cached value to avoid repeated API calls.
 # During market hours: always fetch fresh (avoids stale-key bugs & ensures 9:20 candle is latest).
 _now_ist_5m   = datetime.now(IST)
 _mkt_closed   = not _mkt_open
-_atm_ce_5m_c  = st.session_state.get(_5m_opt_key + "_ce") if _mkt_closed else None
-_atm_pe_5m_c  = st.session_state.get(_5m_opt_key + "_pe") if _mkt_closed else None
+_atm_ce_5m_h  = st.session_state.get(_5m_opt_key + "_ce") if _mkt_closed else None
+_atm_pe_5m_h  = st.session_state.get(_5m_opt_key + "_pe") if _mkt_closed else None
 
-if (_atm_ce_5m_c is None or _atm_pe_5m_c is None) and token:
+if (_atm_ce_5m_h is None or _atm_pe_5m_h is None) and token:
     # Market open → intraday endpoint; market closed → prev-biz-day historical
     _5m_d_arg = None if _mkt_open else _5m_date_used.strftime("%Y-%m-%d")
-    _c5c, _p5c = fetch_atm_5min_close(token, near_raw, _5m_spcl_atm, date_str=_5m_d_arg)
-    if _c5c:
-        _atm_ce_5m_c = _c5c
+    _c5h, _p5h = fetch_atm_5min_high(token, near_raw, _5m_spcl_atm, date_str=_5m_d_arg)
+    if _c5h:
+        _atm_ce_5m_h = _c5h
         # Cache permanently once market is closed; during hours keep fetching fresh
         if _mkt_closed:
-            st.session_state[_5m_opt_key + "_ce"] = _c5c
-    if _p5c:
-        _atm_pe_5m_c = _p5c
+            st.session_state[_5m_opt_key + "_ce"] = _c5h
+    if _p5h:
+        _atm_pe_5m_h = _p5h
         if _mkt_closed:
-            st.session_state[_5m_opt_key + "_pe"] = _p5c
+            st.session_state[_5m_opt_key + "_pe"] = _p5h
 
 # Fallback chain for _atm_ce_day_high / _atm_pe_day_high (ATM card H/L display):
 #   1. chain OHLC high  (real, flagged by _atm_ce_ohlc_real)
@@ -4614,44 +4600,31 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 
-# SPCL input: true running day HIGH of CE/PE at anchor ATM — mirrors Pine f_optData() dH.
-# Chain OHLC (near_ce_high) can be stale/wrong for non-ATM strikes, so we ALWAYS
-# fetch from 1-min candles via fetch_atm_day_hl. Cache per 5-min slot (market hours)
-# or permanently (after close) to limit API calls.
-_now_ist_spcl = datetime.now(IST)
-_spcl_slot = (
-    _now_ist_spcl.replace(second=0, microsecond=0)
-    .replace(minute=(_now_ist_spcl.minute // 5) * 5)
-    .strftime("%H%M")
-) if _mkt_open else "final"
-_spcl_hl_key = f"spcl_hl_{_today_str}_{_5m_spcl_atm}_{_spcl_slot}"
-
-_spcl_ce_h = st.session_state.get(_spcl_hl_key + "_ceh")
-_spcl_pe_h = st.session_state.get(_spcl_hl_key + "_peh")
-_spcl_ce_l = st.session_state.get(_spcl_hl_key + "_cel")
-_spcl_pe_l = st.session_state.get(_spcl_hl_key + "_pel")
-
+# SPCL input: Pine Script uses the DAILY HIGH of CE/PE at the ANCHOR ATM (_5m_spcl_atm).
+# FIX (2026-07-18): two prior bugs —
+#   1. Was using first 5-min HIGH (_atm_ce_5m_h) → wrong, Pine uses daily/running HIGH.
+#   2. _atm_ce_day_high is for `atm` (spot-derived), not `_5m_spcl_atm` (anchor-derived).
+#      When anchor ATM ≠ spot ATM (e.g. anchor=24308→24300, spot=24343→24350), the
+#      old code used the wrong strike's high entirely.
+# CORRECT: look up daily high directly from near_ce_high/near_pe_high at _5m_spcl_atm.
+#   near_ce_high / near_pe_high are {strike: day_high} dicts for ALL strikes in chain.
+# FIX (2026-07-18): On weekends/holidays Upstox chain API omits ohlc.high → near_ce_high
+#   returns None for all strikes. Fallback: call fetch_atm_day_high() to fetch 1-min
+#   historical candles for the prev biz day and return max(HIGH) = true daily high.
+#   This fixes SPCL showing 142.95 (LTP) instead of 165.45 (daily high) on weekends.
+_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm))
+_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm))
+# Weekend/holiday fallback: chain OHLC absent → fetch from 1-min historical candles
 if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
-    _spcl_d = _5m_date_used.strftime("%Y-%m-%d")
-    _f_ce_h, _f_pe_h, _f_ce_l, _f_pe_l = fetch_atm_day_hl_hist(token, near_raw, _5m_spcl_atm, _spcl_d)
-    if _f_ce_h:
-        _spcl_ce_h = _f_ce_h
-        st.session_state[_spcl_hl_key + "_ceh"] = _f_ce_h
-    if _f_pe_h:
-        _spcl_pe_h = _f_pe_h
-        st.session_state[_spcl_hl_key + "_peh"] = _f_pe_h
-    if _f_ce_l:
-        _spcl_ce_l = _f_ce_l
-        st.session_state[_spcl_hl_key + "_cel"] = _f_ce_l
-    if _f_pe_l:
-        _spcl_pe_l = _f_pe_l
-        st.session_state[_spcl_hl_key + "_pel"] = _f_pe_l
-
-# Final fallback to chain OHLC then LTP
+    _spcl_d   = _5m_date_used.strftime("%Y-%m-%d")
+    _fb_ce_h, _fb_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
+    _spcl_ce_h = _spcl_ce_h or _fb_ce_h
+    _spcl_pe_h = _spcl_pe_h or _fb_pe_h
+# Final fallback to LTP (pre-market or API error — no historical data available)
 if not _spcl_ce_h:
-    _spcl_ce_h = near_ce_high.get(float(_5m_spcl_atm)) or near_ce.get(float(_5m_spcl_atm))
+    _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
 if not _spcl_pe_h:
-    _spcl_pe_h = near_pe_high.get(float(_5m_spcl_atm)) or near_pe.get(float(_5m_spcl_atm))
+    _spcl_pe_h = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
@@ -4759,19 +4732,8 @@ if True:  # always render — individual cells show "—" if data missing
                 f"<div style='margin-bottom:4px;'>"
                 f"<span style='color:{color};font-weight:700;font-size:12px;'>{s}</span>"
                 f"<span style='color:var(--muted);font-size:10px;'> LTP ₹{ltp:.2f}</span>"
+                f"</div>"
             )
-            if option_type == "PE":
-                # Reverse CE LTP high = day's lowest LTP of this PE strike × 5.18
-                _pe_day_low = near_pe_low.get(float(s)) or near_pe_low.get(s)
-                if _pe_day_low and _pe_day_low > 0:
-                    _rev_ce_h = _pe_day_low * 5.18
-                    html += (
-                        f"<span style='color:var(--muted);font-size:9px;'>"
-                        f" &nbsp;·&nbsp; Rev CE H ₹{_rev_ce_h:.2f}"
-                        f" <span style='font-size:8px;opacity:.6;'>(low {_pe_day_low:.2f}×5.18)</span>"
-                        f"</span>"
-                    )
-            html += f"</div>"
             if piv:
                 # All pivot levels in order: R5→R1→P→S1→S5
                 pivot_rows = [
@@ -4832,9 +4794,9 @@ if True:  # always render — individual cells show "—" if data missing
     _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high, near_pe)
     _best_ce_s, _best_ce_ltp = _best_strike(_ce_range_strikes, _proj_ce_high, near_ce)
 
-    # Lock projection strikes when using "First 5m Close" anchor so they
+    # Lock projection strikes when using "First 5m High" anchor so they
     # don't shift as option LTPs fluctuate during the day.
-    if _anchor_mode == "First 5m Close" and _5m_spcl_atm:
+    if _anchor_mode == "First 5m High" and _5m_spcl_atm:
         _proj_lock_key = f"proj_best_strikes_{_today_str}_{_5m_spcl_atm}"
         _locked_best = st.session_state.get(_proj_lock_key)
         if _locked_best:
@@ -4899,9 +4861,9 @@ if True:  # always render — individual cells show "—" if data missing
     _pe_display_strikes = _pe_range_strikes or (
         [(int(_best_pe_s), _best_pe_ltp)] if _best_pe_s else []
     )
-    # Lock display strike lists for "First 5m Close" anchor — prevents the
+    # Lock display strike lists for "First 5m High" anchor — prevents the
     # range-strikes list from shifting as live LTPs move in/out of range.
-    if _anchor_mode == "First 5m Close" and _5m_spcl_atm:
+    if _anchor_mode == "First 5m High" and _5m_spcl_atm:
         _proj_disp_key = f"proj_disp_strikes_{_today_str}_{_5m_spcl_atm}"
         _locked_disp = st.session_state.get(_proj_disp_key)
         if _locked_disp:
@@ -4936,16 +4898,17 @@ if True:  # always render — individual cells show "—" if data missing
             unsafe_allow_html=True)
 
 # ── ATM Toolkit Table (mirrors TradingView Raj_ToolKit table) ────────────────
-# All CE/PE rows use ANCHOR ATM (_5m_spcl_atm), matching Pine Script lockedStrike.
-# H/L uses the 1-min candle values already fetched for SPCL (_spcl_ce_h/l etc.)
-# so no extra API call is needed here.
-_tk_ce_ltp  = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm) or 0
-_tk_pe_ltp  = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm) or 0
-# Day H/L: prefer 1-min candle values (from SPCL fetch above), fall back to chain OHLC
-_tk_ce_h_raw = _spcl_ce_h or near_ce_high.get(float(_5m_spcl_atm))
-_tk_pe_h_raw = _spcl_pe_h or near_pe_high.get(float(_5m_spcl_atm))
-_tk_ce_l_raw = _spcl_ce_l or near_ce_low.get(float(_5m_spcl_atm))
-_tk_pe_l_raw = _spcl_pe_l or near_pe_low.get(float(_5m_spcl_atm))
+# Re-extract LTP fresh from chain to avoid stale _atm_ce_ltp/_atm_pe_ltp
+_tk_ce_ltp  = near_ce.get(float(atm), 0)
+_tk_pe_ltp  = near_pe.get(float(atm), 0)
+# Day H/L priority:
+#   1. Chain OHLC (market_data.ohlc.high/low) — live during session
+#   2. market-quote / candle API (_atm_ce_candle_h/l) — live during session
+#   3. Prev-day H/L from SPP calc (_spp_ce_h/l) — fallback pre/post market, marked ᵖ
+_tk_ce_h_raw = near_ce_high.get(float(atm)) or _atm_ce_candle_h
+_tk_pe_h_raw = near_pe_high.get(float(atm)) or _atm_pe_candle_h
+_tk_ce_l_raw = near_ce_low.get(float(atm))  or _atm_ce_candle_l
+_tk_pe_l_raw = near_pe_low.get(float(atm))  or _atm_pe_candle_l
 
 _tk_hl_prev = False   # flag: showing prev-day data
 if not _tk_ce_h_raw and not _tk_pe_h_raw:
@@ -4969,8 +4932,8 @@ def _sane_vwap(vwap, ltp):
         return None
     return vwap if 0.15 * ltp < vwap < 5.0 * ltp else None
 
-_chain_ce_vwap = near_ce_vwap.get(float(_5m_spcl_atm)) or near_ce_vwap.get(_5m_spcl_atm)
-_chain_pe_vwap = near_pe_vwap.get(float(_5m_spcl_atm)) or near_pe_vwap.get(_5m_spcl_atm)
+_chain_ce_vwap = near_ce_vwap.get(float(atm))
+_chain_pe_vwap = near_pe_vwap.get(float(atm))
 _tk_ce_vwap = _sane_vwap(_chain_ce_vwap or _atm_ce_vwap, _tk_ce_ltp)
 _tk_pe_vwap = _sane_vwap(_chain_pe_vwap or _atm_pe_vwap, _tk_pe_ltp)
 
@@ -5014,8 +4977,8 @@ st.markdown(
     f"letter-spacing:1.5px;padding:5px 8px;text-align:left;'>PROJ HIGH</th>"
     f"</tr></thead>"
     f"<tbody>"
-    # Row 1 — ATM Strike (anchor ATM, matching Pine lockedStrike)
-    + _tr("ATM Strike", f"{_5m_spcl_atm}", "var(--gold)")
+    # Row 1 — ATM Strike
+    + _tr("ATM Strike", f"{atm}", "var(--gold)")
     # Row 2 — Spot
     + _tr("Spot", f"{spot:,.2f}" if spot else "—", "color:rgb(255,165,0)")
     # Row 3 — SPCL Anchor (NIFTY 5m-high or confirmed extreme close)
@@ -5023,14 +4986,14 @@ st.markdown(
     # Row 4 — CE LTP
     + _tr(f"{_5m_spcl_atm} CE LTP", _tk_f(_tk_ce_ltp), "var(--ce)")
     # Row 5 — CE 5min (first 5-min candle HIGH of the anchor ATM CE option)
-    + _tr(f"{_5m_spcl_atm} CE 5m C", _tk_f(_atm_ce_5m_c) if _atm_ce_5m_c else "—", "var(--ce)")
+    + _tr(f"{_5m_spcl_atm} CE 5min", _tk_f(_atm_ce_5m_h) if _atm_ce_5m_h else "—", "var(--ce)")
     # Row 6 — CE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_5m_spcl_atm} CE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_ce_h)} L:{_tk_f(_tk_ce_l)}", "var(--ce)")
     # Row 7 — PE LTP
     + _tr(f"{_5m_spcl_atm} PE LTP", _tk_f(_tk_pe_ltp), "var(--pe)")
     # Row 8 — PE 5min (first 5-min candle HIGH of the anchor ATM PE option)
-    + _tr(f"{_5m_spcl_atm} PE 5m C", _tk_f(_atm_pe_5m_c) if _atm_pe_5m_c else "—", "var(--pe)")
+    + _tr(f"{_5m_spcl_atm} PE 5min", _tk_f(_atm_pe_5m_h) if _atm_pe_5m_h else "—", "var(--pe)")
     # Row 9 — PE H/L (intraday; ᵖ = prev-day fallback)
     + _tr(f"{_5m_spcl_atm} PE H/L{'ᵖ' if _tk_hl_prev else ''}",
           f"H:{_tk_f(_tk_pe_h)} L:{_tk_f(_tk_pe_l)}", "var(--pe)")
