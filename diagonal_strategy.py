@@ -4886,11 +4886,15 @@ if True:  # always render — individual cells show "—" if data missing
             if _day_low and _day_low > 0:
                 _rev_lbl   = "Rev CE H" if option_type == "PE" else "Rev PE H"
                 _rev_color = "var(--ce)" if option_type == "PE" else "var(--pe)"
+                _rev_h     = _day_low * 5.18
+                _rev_spcl  = _rev_h * (1 - _SPCL_RET_PCT / 100)
                 _rev_inline = (
                     f"<span style='color:{_rev_color};font-weight:700;font-size:9px;"
-                    f"margin-left:6px;'>  {_rev_lbl} ₹{_day_low * 5.18:.2f}</span>"
+                    f"margin-left:6px;'>{_rev_lbl} ₹{_rev_h:.2f}</span>"
                     f"<span style='color:var(--muted);font-size:8px;opacity:.55;'>"
                     f" ({_day_low:.2f}×5.18)</span>"
+                    f"<span style='color:{_rev_color};font-weight:700;font-size:9px;"
+                    f"margin-left:4px;'>−{_SPCL_RET_PCT:.2f}% ₹{_rev_spcl:.2f}</span>"
                 )
             # Strike + LTP header (Rev inline)
             html = (
