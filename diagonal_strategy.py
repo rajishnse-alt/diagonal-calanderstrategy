@@ -1277,11 +1277,11 @@ def fetch_atm_5min_close(tok, chain_data, atm_strike, date_str=None):
 
 def fetch_atm_day_high(tok, chain_data, atm_strike, date_str):
     """Wrapper — returns (ce_day_high, pe_day_high) for backward compat."""
-    ce_h, pe_h, _, _ = fetch_atm_day_hl(tok, chain_data, atm_strike, date_str)
+    ce_h, pe_h, _, _ = fetch_atm_day_hl_hist(tok, chain_data, atm_strike, date_str)
     return ce_h, pe_h
 
 
-def fetch_atm_day_hl(tok, chain_data, atm_strike, date_str):
+def fetch_atm_day_hl_hist(tok, chain_data, atm_strike, date_str):
     """
     Full-day HIGH and LOW for ATM CE and PE via v2 1-minute historical candles.
     Mirrors Pine Script f_optData():  dH = running max(high),  dL = running min(low).
@@ -4633,7 +4633,7 @@ _spcl_pe_l = st.session_state.get(_spcl_hl_key + "_pel")
 
 if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
     _spcl_d = _5m_date_used.strftime("%Y-%m-%d")
-    _f_ce_h, _f_pe_h, _f_ce_l, _f_pe_l = fetch_atm_day_hl(token, near_raw, _5m_spcl_atm, _spcl_d)
+    _f_ce_h, _f_pe_h, _f_ce_l, _f_pe_l = fetch_atm_day_hl_hist(token, near_raw, _5m_spcl_atm, _spcl_d)
     if _f_ce_h:
         _spcl_ce_h = _f_ce_h
         st.session_state[_spcl_hl_key + "_ceh"] = _f_ce_h
