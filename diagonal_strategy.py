@@ -4608,21 +4608,60 @@ elif not _atm_pe_ohlc_real and not _atm_pe_candle_h:
     _atm_pe_day_high = (_spp_pe_h if _spp is not None else None) \
                        or float(near_pe.get(float(atm), 0) or near_pe.get(atm, 0))
 
-# SPCL input: DAY HIGH of CE/PE at anchor ATM (_5m_spcl_atm) — matches Pine Script.
-# Pine CeSPCL = ce_high × (1-13.06%) where ce_high = full-day HIGH of ATM CE option.
-_spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm))
-_spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm))
-# Weekend/holiday fallback: chain OHLC absent → fetch from 1-min historical candles
+# SPCL day H/L: market-quote API is accurate; chain OHLC is unreliable (stale).
+# PRIMARY: fetch_atm_day_hl (market-quote → v3 intraday fallback), cached per 5-min slot.
+# SECONDARY: fetch_atm_day_high (v2 historical 1-min candles) for after-close accuracy.
+# FINAL: chain OHLC / LTP.
+_now_ist_spcl = datetime.now(IST)
+_spcl_slot = (
+    _now_ist_spcl.replace(second=0, microsecond=0)
+    .replace(minute=(_now_ist_spcl.minute // 5) * 5)
+    .strftime("%H%M")
+) if _mkt_open else "final"
+_spcl_hl_key = f"spcl_hl_{_today_str}_{_5m_spcl_atm}_{_spcl_slot}"
+
+_spcl_ce_h = st.session_state.get(_spcl_hl_key + "_ceh")
+_spcl_pe_h = st.session_state.get(_spcl_hl_key + "_peh")
+_spcl_ce_l = st.session_state.get(_spcl_hl_key + "_cel")
+_spcl_pe_l = st.session_state.get(_spcl_hl_key + "_pel")
+
 if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
-    _spcl_d   = _5m_date_used.strftime("%Y-%m-%d")
-    _fb_ce_h, _fb_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
-    _spcl_ce_h = _spcl_ce_h or _fb_ce_h
-    _spcl_pe_h = _spcl_pe_h or _fb_pe_h
-# Final fallback to LTP (pre-market or API error — no historical data available)
+    # Try market-quote + v3 intraday (accurate H AND L)
+    _f_ce_h, _f_ce_l, _f_pe_h, _f_pe_l = fetch_atm_day_hl(token, near_raw, _5m_spcl_atm)
+    if _f_ce_h:
+        _spcl_ce_h = _f_ce_h
+        st.session_state[_spcl_hl_key + "_ceh"] = _f_ce_h
+    if _f_ce_l:
+        _spcl_ce_l = _f_ce_l
+        st.session_state[_spcl_hl_key + "_cel"] = _f_ce_l
+    if _f_pe_h:
+        _spcl_pe_h = _f_pe_h
+        st.session_state[_spcl_hl_key + "_peh"] = _f_pe_h
+    if _f_pe_l:
+        _spcl_pe_l = _f_pe_l
+        st.session_state[_spcl_hl_key + "_pel"] = _f_pe_l
+    # If still missing, try v2 historical 1-min candles
+    if not _spcl_ce_h or not _spcl_pe_h:
+        _spcl_d = _5m_date_used.strftime("%Y-%m-%d")
+        _fh_ce_h, _fh_pe_h = fetch_atm_day_high(token, near_raw, _5m_spcl_atm, _spcl_d)
+        if _fh_ce_h and not _spcl_ce_h:
+            _spcl_ce_h = _fh_ce_h
+            st.session_state[_spcl_hl_key + "_ceh"] = _fh_ce_h
+        if _fh_pe_h and not _spcl_pe_h:
+            _spcl_pe_h = _fh_pe_h
+            st.session_state[_spcl_hl_key + "_peh"] = _fh_pe_h
+
+# Fallback to chain OHLC / LTP
 if not _spcl_ce_h:
-    _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
+    _spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
+                  or near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm))
 if not _spcl_pe_h:
-    _spcl_pe_h = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
+    _spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
+                  or near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm))
+if not _spcl_ce_l:
+    _spcl_ce_l = near_ce_low.get(float(_5m_spcl_atm)) or near_ce_low.get(_5m_spcl_atm)
+if not _spcl_pe_l:
+    _spcl_pe_l = near_pe_low.get(float(_5m_spcl_atm)) or near_pe_low.get(_5m_spcl_atm)
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
@@ -4903,10 +4942,11 @@ _tk_pe_ltp  = near_pe.get(float(atm), 0)
 #   1. Chain OHLC (market_data.ohlc.high/low) — live during session
 #   2. market-quote / candle API (_atm_ce_candle_h/l) — live during session
 #   3. Prev-day H/L from SPP calc (_spp_ce_h/l) — fallback pre/post market, marked ᵖ
-_tk_ce_h_raw = near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(float(atm)) or _atm_ce_candle_h
-_tk_pe_h_raw = near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(float(atm)) or _atm_pe_candle_h
-_tk_ce_l_raw = near_ce_low.get(float(_5m_spcl_atm))  or near_ce_low.get(float(atm))  or _atm_ce_candle_l
-_tk_pe_l_raw = near_pe_low.get(float(_5m_spcl_atm))  or near_pe_low.get(float(atm))  or _atm_pe_candle_l
+# Use SPCL-fetched H/L (market-quote, accurate) as primary; chain OHLC as fallback
+_tk_ce_h_raw = _spcl_ce_h or near_ce_high.get(float(_5m_spcl_atm)) or _atm_ce_candle_h
+_tk_pe_h_raw = _spcl_pe_h or near_pe_high.get(float(_5m_spcl_atm)) or _atm_pe_candle_h
+_tk_ce_l_raw = _spcl_ce_l or near_ce_low.get(float(_5m_spcl_atm))  or _atm_ce_candle_l
+_tk_pe_l_raw = _spcl_pe_l or near_pe_low.get(float(_5m_spcl_atm))  or _atm_pe_candle_l
 
 _tk_hl_prev = False   # flag: showing prev-day data
 if not _tk_ce_h_raw and not _tk_pe_h_raw:
