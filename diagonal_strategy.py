@@ -3537,14 +3537,16 @@ _5m_date_used  = (
     else _prev_biz_day()                              # weekend / holiday / pre-market
 )
 _5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
+_5m_close_key  = f"nifty_5m_close_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
+_nifty_5m_close = st.session_state.get(_5m_close_key)
 _5m_src_label  = (
     "today (live)"        if _mkt_open    else
     "today (after close)" if _after_close else
     f"prev day ({_5m_date_used})"
 )
 
-if _nifty_5m_high is None and token:
+if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
     try:
         _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
@@ -3553,7 +3555,8 @@ if _nifty_5m_high is None and token:
         # "5minute" is NOT a valid v2 interval → silently returns {} → empty candles.
         # v3 uses "minutes/5" in the path but does NOT support NSE_INDEX instruments.
         # SOLUTION: always use v2 with "1minute" interval, then aggregate the first
-        # 5 one-minute candles (9:15–9:19) to reconstruct the first 5-min HIGH.
+        # 5 one-minute candles (9:15–9:19). HIGH = max(c[2]) for Critical Resistance;
+        # CLOSE = c[4] of the 9:19 candle (newest of first 5) for the SPCL anchor ATM.
         # Candles are returned newest-first; last 5 elements = first 5 minutes of day.
 
         def _get_1m_candles(date_str_arg):
@@ -3580,14 +3583,22 @@ if _nifty_5m_high is None and token:
 
         if _candles5:
             # candles newest-first; last 5 elements = first 5 minutes of trading (9:15–9:19)
-            # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
+            # Max HIGH across those 5 candles = "first 5-min candle HIGH" (used for Critical Res)
+            # CLOSE of first 5-min candle = close of the 9:19 candle = _first_5[0][4]
             _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
             _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
-            if _5m_h > 0:
+            # _first_5 is newest-first within the 5; index 0 = 9:19 candle → its close
+            _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
+            _5m_locked = (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20))
+            if _5m_h > 0 and _nifty_5m_high is None:
                 _nifty_5m_high = _5m_h
                 # Lock once first 5-min period is complete (market: after 9:20; prev-day: always)
-                if (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20)):
+                if _5m_locked:
                     st.session_state[_5m_key] = _nifty_5m_high
+            if _5m_c > 0 and _nifty_5m_close is None:
+                _nifty_5m_close = _5m_c
+                if _5m_locked:
+                    st.session_state[_5m_close_key] = _nifty_5m_close
     except Exception:
         pass
 
@@ -4518,14 +4529,14 @@ with pb4:
 
 
 # ── SPCL Projections — 3 columns ─────────────────────────────────────────────
-# SPCL uses FIRST 5-MIN CANDLE HIGH of the ATM CE/PE option (not full-day high).
+# SPCL uses FIRST 5-MIN CANDLE CLOSE of the NIFTY index to derive the anchor ATM.
 # Cached in session_state per day+ATM; fetched once after first 5-min candle closes.
 _anchor_mode = st.selectbox(
     "SPCL ATM Anchor",
-    ["First 5m High", "Extreme Close"],
+    ["First 5m Close", "Extreme Close"],
     index=0,
     key="spcl_anchor_radio",
-    help="First 5m High: NIFTY first 5-min candle high → ATM strike.\n"
+    help="First 5m Close: NIFTY first 5-min candle close → ATM strike.\n"
          "Extreme Close: last confirmed extreme close from 1-min candles (mirrors Pine Script).",
 )
 
@@ -4552,7 +4563,7 @@ if _anchor_mode == "Extreme Close":
     _spcl_anchor_lbl = f"▲ UP" if _ec_direction == "UP" else "▼ DN"
     _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 else:
-    _spcl_anchor_val = _nifty_5m_high
+    _spcl_anchor_val = _nifty_5m_close
     _spcl_anchor_lbl = "1st 5m"
     _spcl_anchor_tag = f"{_spcl_anchor_val:.2f} {_spcl_anchor_lbl}" if _spcl_anchor_val else "—"
 
@@ -4805,9 +4816,9 @@ if True:  # always render — individual cells show "—" if data missing
     _best_pe_s, _best_pe_ltp = _best_strike(_pe_range_strikes, _proj_pe_high, near_pe)
     _best_ce_s, _best_ce_ltp = _best_strike(_ce_range_strikes, _proj_ce_high, near_ce)
 
-    # Lock projection strikes when using "First 5m High" anchor so they
+    # Lock projection strikes when using "First 5m Close" anchor so they
     # don't shift as option LTPs fluctuate during the day.
-    if _anchor_mode == "First 5m High" and _5m_spcl_atm:
+    if _anchor_mode == "First 5m Close" and _5m_spcl_atm:
         _proj_lock_key = f"proj_best_strikes_{_today_str}_{_5m_spcl_atm}"
         _locked_best = st.session_state.get(_proj_lock_key)
         if _locked_best:
@@ -4872,9 +4883,9 @@ if True:  # always render — individual cells show "—" if data missing
     _pe_display_strikes = _pe_range_strikes or (
         [(int(_best_pe_s), _best_pe_ltp)] if _best_pe_s else []
     )
-    # Lock display strike lists for "First 5m High" anchor — prevents the
+    # Lock display strike lists for "First 5m Close" anchor — prevents the
     # range-strikes list from shifting as live LTPs move in/out of range.
-    if _anchor_mode == "First 5m High" and _5m_spcl_atm:
+    if _anchor_mode == "First 5m Close" and _5m_spcl_atm:
         _proj_disp_key = f"proj_disp_strikes_{_today_str}_{_5m_spcl_atm}"
         _locked_disp = st.session_state.get(_proj_disp_key)
         if _locked_disp:
