@@ -1199,12 +1199,16 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
 
             ce_h, ce_l = _ohlc(ce_inst)
             pe_h, pe_l = _ohlc(pe_inst)
-            if ce_h and pe_h:
+            # Only return early if ALL four values present.
+            # Market-quote may return H correctly but L=0 after close → fall through
+            # to Strategy 2 so candles supply the missing L.
+            if ce_h and pe_h and ce_l and pe_l:
                 return ce_h, ce_l, pe_h, pe_l
     except Exception:
-        pass
+        ce_h = ce_l = pe_h = pe_l = None
 
     # ── Strategy 2: intraday 1-min candles — max(H), min(L) ─────────────────
+    # Always runs if any value is still missing; results merged with Strategy 1.
     def _candle_hl(inst_key):
         try:
             enc = urllib.parse.quote(inst_key, safe="")
@@ -1224,8 +1228,14 @@ def fetch_atm_day_hl(tok, chain_data, atm_strike):
             pass
         return None, None
 
-    ce_h, ce_l = _candle_hl(ce_inst)
-    pe_h, pe_l = _candle_hl(pe_inst)
+    # Merge Strategy 1 + Strategy 2: prefer S1 H (market-quote, more accurate);
+    # fill missing L (and H) from S2 candles.
+    _c_ce_h, _c_ce_l = _candle_hl(ce_inst)
+    _c_pe_h, _c_pe_l = _candle_hl(pe_inst)
+    ce_h = ce_h or _c_ce_h
+    ce_l = ce_l or _c_ce_l
+    pe_h = pe_h or _c_pe_h
+    pe_l = pe_l or _c_pe_l
     return ce_h, ce_l, pe_h, pe_l
 
 
