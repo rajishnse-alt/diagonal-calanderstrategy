@@ -5005,6 +5005,23 @@ if True:  # always render — individual cells show "—" if data missing
         if _best_ce_s else ""
     )
 
+    # FCAHL / FCBHL / NFC label: compares current ATM LTP vs day H and L
+    def _fc_label(ltp, day_h, day_l):
+        if not ltp or not day_h or not day_l:
+            return ""
+        if ltp > day_h:
+            return "<span style='color:#00e676;font-weight:700;font-size:9px;margin-left:5px;'>FCAHL</span>"
+        if ltp < day_l:
+            return "<span style='color:#ff1744;font-weight:700;font-size:9px;margin-left:5px;'>FCBHL</span>"
+        return "<span style='color:#ffab00;font-weight:700;font-size:9px;margin-left:5px;'>NFC</span>"
+
+    # H = day high (_spcl_ce_h / _spcl_pe_h); L = SPCL value (_ce_spcl / _pe_spcl)
+    # i.e. the two numbers shown in the card: "137.20 | 119.28"
+    _ce_ltp_atm = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
+    _pe_ltp_atm = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
+    _ce_fc_lbl  = _fc_label(_ce_ltp_atm, _spcl_ce_h, _ce_spcl)
+    _pe_fc_lbl  = _fc_label(_pe_ltp_atm, _spcl_pe_h, _pe_spcl)
+
     st.markdown(
         f"<div class='card' style='padding:0;overflow:hidden;'>"
         f"<div style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
@@ -5014,7 +5031,8 @@ if True:  # always render — individual cells show "—" if data missing
         # CeSPCL row
         f"<tr>"
         f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;"
-        f"border-bottom:1px solid var(--border);white-space:nowrap;'>CeSPCL {_tk_ret}</td>"
+        f"border-bottom:1px solid var(--border);white-space:nowrap;'>"
+        f"CeSPCL {_tk_ret}{_ce_fc_lbl}</td>"
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
@@ -5029,7 +5047,7 @@ if True:  # always render — individual cells show "—" if data missing
         # PeSPCL row
         f"<tr>"
         f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
-        f"PeSPCL {_tk_ret}</td>"
+        f"PeSPCL {_tk_ret}{_pe_fc_lbl}</td>"
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
