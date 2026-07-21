@@ -1076,16 +1076,26 @@ def fetch_strike_pivots(tok, chain_data, strike, option_type, pivot_date_str=Non
         hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
 
         if pivot_date_str:
-            # Exact-date request: only one day's candle returned → take it directly
+            # Range request ending on pivot_date_str (7-day window).
+            # Handles: today's candle not yet settled, OTM strikes with sparse data,
+            # any other reason an exact-date request returns empty.
+            # Take the most recent candle on or before pivot_date_str.
+            _from_dt = (
+                datetime.strptime(pivot_date_str, "%Y-%m-%d") - timedelta(days=7)
+            ).strftime("%Y-%m-%d")
             r = requests.get(
                 f"https://api.upstox.com/v2/historical-candle/{enc}/day"
-                f"/{pivot_date_str}/{pivot_date_str}",
+                f"/{pivot_date_str}/{_from_dt}",
                 headers=hdr, timeout=10,
             )
             candles = (r.json().get("data") or {}).get("candles") or []
             if not candles:
                 return None
-            c = candles[0]
+            candles_s = sorted(candles, key=lambda x: str(x[0]), reverse=True)
+            candles_s = [x for x in candles_s if str(x[0])[:10] <= pivot_date_str]
+            if not candles_s:
+                return None
+            c = candles_s[0]
         else:
             # Fallback: 14-day range, sort newest-first, skip today's partial candle
             today     = datetime.now(IST).date()
@@ -4715,7 +4725,7 @@ _spcl_pe_h = st.session_state.get(_spcl_hl_key + "_peh")
 _spcl_ce_l = st.session_state.get(_spcl_hl_key + "_cel")
 _spcl_pe_l = st.session_state.get(_spcl_hl_key + "_pel")
 
-if (not _spcl_ce_h or not _spcl_pe_h) and token and near_raw:
+if (not _spcl_ce_h or not _spcl_pe_h or not _spcl_ce_l or not _spcl_pe_l) and token and near_raw:
     # Try market-quote + v3 intraday (accurate H AND L)
     _f_ce_h, _f_ce_l, _f_pe_h, _f_pe_l = fetch_atm_day_hl(token, near_raw, _5m_spcl_atm)
     if _f_ce_h:
