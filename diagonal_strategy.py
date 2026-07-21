@@ -5021,6 +5021,9 @@ if True:  # always render — individual cells show "—" if data missing
     _pe_ltp_atm = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
     _ce_fc_lbl  = _fc_label(_ce_ltp_atm, _spcl_ce_h, _ce_spcl)
     _pe_fc_lbl  = _fc_label(_pe_ltp_atm, _spcl_pe_h, _pe_spcl)
+    # Projection cells: best strike LTP vs proj low/high range
+    _pe_proj_fc = _fc_label(_best_pe_ltp, _proj_pe_high, _proj_pe_low)
+    _ce_proj_fc = _fc_label(_best_ce_ltp, _proj_ce_high, _proj_ce_low)
 
     st.markdown(
         f"<div class='card' style='padding:0;overflow:hidden;'>"
@@ -5039,7 +5042,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
+        f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_pe_h_strike}</td>"
@@ -5053,7 +5056,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
         f"{_fmt_s(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
+        f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_ce_h_strike}</td>"
         f"</tr>"
