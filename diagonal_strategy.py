@@ -3695,9 +3695,12 @@ if _nifty_5m_close is None and token:
         pass
 
 # Critical Resistance = first 5-min HIGH + 0.2611%
-_crit_res = round(_nifty_5m_high * 1.002611, 2) if _nifty_5m_high else None
-_crit_res_col = "var(--bear)" if (spot and _crit_res and spot < _crit_res) else "var(--bull)"
-_crit_res_tag = "⚠ RESISTANCE ABOVE" if (spot and _crit_res and spot < _crit_res) else ("✓ ABOVE RES" if (spot and _crit_res) else "")
+_crit_res  = round(_nifty_5m_high * 1.002611, 2) if _nifty_5m_high else None
+_strong_sup = round(_nifty_5m_high * 0.997389, 2) if _nifty_5m_high else None
+_crit_res_col  = "var(--bear)" if (spot and _crit_res  and spot < _crit_res)   else "var(--bull)"
+_strong_sup_col = "var(--bull)" if (spot and _strong_sup and spot > _strong_sup) else "var(--bear)"
+_crit_res_tag  = "⚠ RESISTANCE ABOVE" if (spot and _crit_res and spot < _crit_res) else ("✓ ABOVE RES" if (spot and _crit_res) else "")
+_sup_tag       = "✓ ABOVE SUP" if (spot and _strong_sup and spot > _strong_sup) else ("⚠ BELOW SUP" if (spot and _strong_sup) else "")
 
 # Build the 5-min resistance HTML snippet
 if _nifty_5m_high and _crit_res:
@@ -3720,6 +3723,22 @@ if _nifty_5m_high and _crit_res:
         + "</div>"
         "<div style='font-size:9px;font-weight:700;color:" + _crit_res_col + ";align-self:center;'>"
         + _crit_res_tag + "</div>"
+        "</div>"
+        # Strong support row
+        "<div style='display:flex;align-items:baseline;gap:10px;margin-top:5px;'>"
+        "<div>"
+        "<div style='font-size:8px;color:var(--muted);'>5m High</div>"
+        "<div style='font-family:var(--mono);font-size:14px;font-weight:700;color:var(--text);'>"
+        + f"{_nifty_5m_high:,.2f}</div>"
+        + "</div>"
+        "<div style='font-size:18px;color:var(--muted);'>→</div>"
+        "<div>"
+        "<div style='font-size:8px;color:var(--muted);'>−0.2611% Strong Sup</div>"
+        "<div style='font-family:var(--mono);font-size:16px;font-weight:900;color:" + _strong_sup_col + ";'>"
+        + f"{_strong_sup:,.2f}</div>"
+        + "</div>"
+        "<div style='font-size:9px;font-weight:700;color:" + _strong_sup_col + ";align-self:center;'>"
+        + _sup_tag + "</div>"
         "</div>"
         "</div>"
     )
