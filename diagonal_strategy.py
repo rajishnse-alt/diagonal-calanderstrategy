@@ -3606,13 +3606,15 @@ _5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
 _5m_close_key  = f"nifty_5m_close_{_5m_date_used.isoformat()}"
 _nifty_5m_close = st.session_state.get(_5m_close_key)
+_5m_low_key    = f"nifty_5m_low_{_5m_date_used.isoformat()}"
+_nifty_5m_low  = st.session_state.get(_5m_low_key)
 _5m_src_label  = (
     "today (live)"        if _mkt_open    else
     "today (after close)" if _after_close else
     f"prev day ({_5m_date_used})"
 )
 
-if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
+if (_nifty_5m_high is None or _nifty_5m_close is None or _nifty_5m_low is None) and token:
     try:
         _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
@@ -3651,6 +3653,7 @@ if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
             # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
             _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
             _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
+            _5m_l = min((float(c[3]) for c in _first_5 if len(c) > 3 and float(c[3]) > 0), default=0)
             # Close of first 5-min candle = close of 9:19 candle = _first_5[0] (newest-first), col 4
             _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
             _lock = (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20))
@@ -3658,6 +3661,10 @@ if (_nifty_5m_high is None or _nifty_5m_close is None) and token:
                 _nifty_5m_high = _5m_h
                 if _lock:
                     st.session_state[_5m_key] = _nifty_5m_high
+            if _5m_l > 0:
+                _nifty_5m_low = _5m_l
+                if _lock:
+                    st.session_state[_5m_low_key] = _nifty_5m_low
             if _5m_c > 0:
                 _nifty_5m_close = _5m_c
                 if _lock:
@@ -3695,8 +3702,9 @@ if _nifty_5m_close is None and token:
         pass
 
 # Critical Resistance = first 5-min HIGH + 0.2611%
-_crit_res  = round(_nifty_5m_high * 1.002611, 2) if _nifty_5m_high else None
-_strong_sup = round(_nifty_5m_high * 0.997389, 2) if _nifty_5m_high else None
+# Strong Support      = first 5-min LOW  − 0.2611%
+_crit_res   = round(_nifty_5m_high * 1.002611, 2) if _nifty_5m_high else None
+_strong_sup = round(_nifty_5m_low  * 0.997389, 2) if _nifty_5m_low  else None
 _crit_res_col  = "var(--bear)" if (spot and _crit_res  and spot < _crit_res)   else "var(--bull)"
 _strong_sup_col = "var(--bull)" if (spot and _strong_sup and spot > _strong_sup) else "var(--bear)"
 _crit_res_tag  = "⚠ RESISTANCE ABOVE" if (spot and _crit_res and spot < _crit_res) else ("✓ ABOVE RES" if (spot and _crit_res) else "")
@@ -3711,9 +3719,10 @@ if _nifty_5m_high and _crit_res:
         "<span style='font-weight:400;margin-left:5px;'>(" + _5m_src_label + ")</span></div>"
         "<div style='display:flex;align-items:baseline;gap:10px;'>"
         "<div>"
-        "<div style='font-size:8px;color:var(--muted);'>−0.2611% Strong Sup</div>"
+        "<div>"
+        "<div style='font-size:8px;color:var(--muted);'>5m Low −0.2611% Strong Sup</div>"
         "<div style='font-family:var(--mono);font-size:16px;font-weight:900;color:" + _strong_sup_col + ";'>"
-        + f"{_strong_sup:,.2f}</div>"
+        + (f"{_strong_sup:,.2f}" if _strong_sup else "—") + "</div>"
         + "</div>"
         "<div style='font-size:9px;font-weight:700;color:" + _strong_sup_col + ";align-self:center;'>"
         + _sup_tag + "</div>"
