@@ -2150,6 +2150,122 @@ def fetch_futures_buildup(tok, expiry_dates=None, underlying_key=None):
     return None, "No futures data — all 3 paths failed (Upstox smartlist/CDN/NSE India)"
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_fut_last_5m_close(tok):
+    """
+    LAST COMPLETED 5-minute candle of the current-month NIFTY future.
+
+    Key resolution : _get_nifty_fut_tokens (smartlist / CDN) → _dynamic_nifty_fut_keys
+    Candle source  : v3 intraday minutes/5  →  v3 intraday minutes/1 (aggregated)
+                     →  v2 historical 1minute for today / prev biz day (aggregated)
+
+    NOTE: v2 has no "5minute" interval (see the 5-min spot block) — 1-minute
+    candles are aggregated into clock-aligned 5-min buckets (9:15, 9:20, …).
+    The in-progress bucket is dropped so the close shown is always final.
+
+    Returns (dict, None) | (None, err)
+      dict = {symbol, ts, open, high, low, close, prev_close, src}
+    """
+    now       = datetime.now(IST)
+    today     = now.date()
+    cur_bucket = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0)
+
+    def _parse_ts(v):
+        try:
+            ts = datetime.fromisoformat(str(v))
+        except Exception:
+            return None
+        return ts if ts.tzinfo else IST.localize(ts)
+
+    def _agg_1m(candles):
+        """1-min candles → clock-aligned 5-min buckets, newest-first."""
+        buckets = {}
+        for c in candles:
+            ts = _parse_ts(c[0]) if c else None
+            if ts is None or len(c) < 5:
+                continue
+            b = ts.replace(minute=(ts.minute // 5) * 5, second=0, microsecond=0)
+            buckets.setdefault(b, []).append((ts, c))
+        out = []
+        for b in sorted(buckets, reverse=True):
+            rows = sorted(buckets[b], key=lambda x: x[0])   # oldest → newest in bucket
+            out.append((
+                b,
+                float(rows[0][1][1]),                        # open  = first 1m open
+                max(float(r[1][2]) for r in rows),           # high
+                min(float(r[1][3]) for r in rows),           # low
+                float(rows[-1][1][4]),                       # close = last 1m close
+            ))
+        return out
+
+    def _norm_5m(candles):
+        """Native 5-min candles → same tuple shape, newest-first."""
+        out = []
+        for c in candles:
+            ts = _parse_ts(c[0]) if c else None
+            if ts is None or len(c) < 5:
+                continue
+            out.append((ts, float(c[1]), float(c[2]), float(c[3]), float(c[4])))
+        out.sort(key=lambda x: x[0], reverse=True)
+        return out
+
+    def _last_done(rows):
+        """Drop the still-forming bucket; keep everything already closed."""
+        done = [r for r in rows if r[0] < cur_bucket]
+        return done or []
+
+    def _get(url):
+        try:
+            r = requests.get(url, headers=hdr(tok), timeout=10)
+            if r.status_code == 200:
+                return (r.json().get("data") or {}).get("candles") or []
+        except Exception:
+            pass
+        return []
+
+    # ── Candidate instrument keys: resolved numeric key first, calendar key next ──
+    cands   = []
+    toks, _ = _get_nifty_fut_tokens(tok)
+    if toks:
+        for exp in sorted(e for e in toks if e >= str(today))[:1]:
+            cands.append((toks[exp][0], toks[exp][1]))
+    for _label, ikey, _m in _dynamic_nifty_fut_keys()[:1]:
+        cands.append((ikey, ikey.split("|")[-1]))
+
+    if not cands:
+        return None, "no NIFTY futures instrument key"
+
+    prev_day = _prev_biz_day()
+    for ikey, sym in cands:
+        enc = urllib.parse.quote(ikey, safe="")
+        # (label, url, parser) — evaluated lazily: stop at the first source with data
+        for src, url, parse in (
+            ("v3 5m",      f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5", _norm_5m),
+            ("v3 1m",      f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/1", _agg_1m),
+            ("v2 1m",      f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{today}/{today}", _agg_1m),
+            ("v2 1m·prev", f"https://api.upstox.com/v2/historical-candle/{enc}/1minute/{prev_day}/{prev_day}", _agg_1m),
+        ):
+            done = _last_done(parse(_get(url)))
+            if not done:
+                continue
+            b, o, h, l, c = done[0]
+            if c <= 0:
+                continue
+            return {
+                "symbol":     sym,
+                "ts":         b.strftime("%H:%M"),
+                "date":       b.strftime("%Y-%m-%d"),
+                "open":       o,
+                "high":       h,
+                "low":        l,
+                "close":      c,
+                "prev_close": done[1][4] if len(done) > 1 else None,
+                "src":        src,
+            }, None
+
+    return None, "no futures 5-min candles (v3 intraday + v2 historical empty)"
+
+
 # ─────────────────────────────────────────────
 # STRATEGY LOGIC
 # ─────────────────────────────────────────────
@@ -3554,6 +3670,42 @@ if _fut_data:
             f"</div>"
             f"</div>"
         )
+
+# ── Futures LAST 5-MIN CANDLE CLOSE ──────────────────────────────────────────
+# Shown inside the FUTURES BUILD-UP block. Independent of the build-up fetch —
+# it renders even when all 3 build-up paths fail (the usual "no data" case).
+_f5m, _f5m_err = fetch_fut_last_5m_close(token)
+_f5m_html = ""
+if _f5m:
+    _f5c   = _f5m["close"]
+    _f5p   = _f5m.get("prev_close")
+    _f5d   = (_f5c - _f5p) if _f5p else None
+    _f5col = ("var(--bull)" if _f5d > 0 else "var(--bear)" if _f5d < 0 else "var(--text)") if _f5d is not None else "var(--text)"
+    _f5arr = ("▲" if _f5d > 0 else "▼" if _f5d < 0 else "·") if _f5d is not None else ""
+    _f5m_html = (
+        "<div style='display:flex;justify-content:space-between;align-items:center;"
+        "padding:4px 8px;margin-top:4px;background:rgba(128,128,128,0.06);"
+        "border:1px solid var(--border);border-radius:5px;'>"
+        "<div>"
+        f"<div style='font-size:8px;color:var(--muted);'>LAST 5-MIN CLOSE &nbsp;"
+        f"<span style='font-size:7px;'>{_f5m['ts']} · {_f5m['symbol']}</span></div>"
+        f"<div style='font-family:var(--mono);font-size:13px;font-weight:900;color:{_f5col};'>"
+        f"₹{_f5c:,.2f}"
+        + (f" <span style='font-size:9px;font-weight:700;'>{_f5arr} {abs(_f5d):,.2f}</span>"
+           if _f5d is not None else "")
+        + "</div>"
+        "</div>"
+        "<div style='text-align:right;font-family:var(--mono);font-size:9px;color:var(--muted);'>"
+        f"<div>O {_f5m['open']:,.2f} &nbsp; H {_f5m['high']:,.2f}</div>"
+        f"<div>L {_f5m['low']:,.2f} &nbsp;<span style='font-size:7px;'>{_f5m['src']}</span></div>"
+        "</div>"
+        "</div>"
+    )
+else:
+    _f5m_html = (
+        f"<div style='font-size:9px;color:var(--muted);font-style:italic;margin-top:4px;'>"
+        f"5-min close — {str(_f5m_err or '—')[:90]}</div>"
+    )
 # ── End futures build-up ──────────────────────────────────────────────────────
 
 # ── First 5-min candle HIGH → Critical Resistance (+0.2611%) ─────────────────
@@ -3820,6 +3972,8 @@ with r1c1:
             else f"<span style='font-size:9px;color:var(--muted);font-style:italic;'>"
                  f"{'—' if not _fut_err else str(_fut_err)[:120]}</span>"
           )
+        # Last completed 5-min futures candle — always rendered, build-up or not
+        + _f5m_html
         + f"</div>"
         + f"</div>",
         unsafe_allow_html=True
