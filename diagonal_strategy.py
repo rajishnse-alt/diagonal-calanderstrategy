@@ -5286,20 +5286,23 @@ if True:  # always render — individual cells show "—" if data missing
         if _bot is None and _top is None:
             return (f"<td style='padding:4px 8px;{_bd}color:var(--muted);"
                     f"font-size:9px;'>—</td>")
+        # Day range shown as [L-H] on both lines so each stays self-contained
+        _rng = (f"[{_l:,.2f}-{_h:,.2f}]" if (_l and _h)
+                else (f"[{_l:,.2f}-—]" if _l else f"[—-{_h:,.2f}]"))
         _inner = ""
         if _bot is not None:
             _inner += (
                 f"<div><span style='color:var(--bull);font-weight:700;'>▲ BOT REV </span>"
                 f"<span style='color:var(--bull);font-weight:900;font-size:10px;'>{_bot:,.2f}</span>"
                 f"<span style='color:var(--muted);font-size:8px;'> "
-                f"L {_l:,.2f}+{_SPCL_HIGH_PCT:.2f}%</span></div>"
+                f"{_rng}+{_SPCL_HIGH_PCT:.2f}%</span></div>"
             )
         if _top is not None:
             _inner += (
                 f"<div><span style='color:var(--bear);font-weight:700;'>▼ TOP REV </span>"
                 f"<span style='color:var(--bear);font-weight:900;font-size:10px;'>{_top:,.2f}</span>"
                 f"<span style='color:var(--muted);font-size:8px;'> "
-                f"H {_h:,.2f}−{_SPCL_RET_PCT:.2f}%</span></div>"
+                f"{_rng}−{_SPCL_RET_PCT:.2f}%</span></div>"
             )
         return (f"<td style='font-family:var(--mono);font-size:9px;padding:4px 8px;{_bd}"
                 f"white-space:nowrap;'>{_inner}</td>")
