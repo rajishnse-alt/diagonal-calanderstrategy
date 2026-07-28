@@ -5286,29 +5286,39 @@ if True:  # always render — individual cells show "—" if data missing
         if _bot is None and _top is None:
             return (f"<td style='padding:4px 8px;{_bd}color:var(--muted);"
                     f"font-size:9px;'>—</td>")
-        # Day range shown as [L-H] on both lines so each stays self-contained
-        _rng = (f"[{_l:,.2f}-{_h:,.2f}]" if (_l and _h)
-                else (f"[{_l:,.2f}-—]" if _l else f"[—-{_h:,.2f}]"))
+        # Each line is one bracketed span: [anchor → target], ascending.
+        #   BOT REV [day low - target]   target is the UPPER bound  (low + 15.04%)
+        #   TOP REV [target - day high]  target is the LOWER bound  (high − 13.06%)
+        # The computed level is the bold number inside the bracket.
+        def _span(a, b, bold_first, color, pct_txt, arrow, label):
+            _a = (f"<b>{a:,.2f}</b>" if bold_first else f"{a:,.2f}")
+            _b = (f"{b:,.2f}" if bold_first else f"<b>{b:,.2f}</b>")
+            return (
+                f"<div><span style='color:{color};font-weight:700;'>{arrow} {label} </span>"
+                f"<span style='color:{color};font-size:10px;'>[{_a}-{_b}]</span>"
+                f"<span style='color:var(--muted);font-size:8px;'>{pct_txt}</span></div>"
+            )
+
         _inner = ""
         if _bot is not None:
-            _inner += (
-                f"<div><span style='color:var(--bull);font-weight:700;'>▲ BOT REV </span>"
-                f"<span style='color:var(--bull);font-weight:900;font-size:10px;'>{_bot:,.2f}</span>"
-                f"<span style='color:var(--muted);font-size:8px;'> "
-                f"{_rng}+{_SPCL_HIGH_PCT:.2f}%</span></div>"
-            )
+            _inner += _span(_l, _bot, False, "var(--bull)",
+                            f"+{_SPCL_HIGH_PCT:.2f}%", "▲", "BOT REV")
         if _top is not None:
-            _inner += (
-                f"<div><span style='color:var(--bear);font-weight:700;'>▼ TOP REV </span>"
-                f"<span style='color:var(--bear);font-weight:900;font-size:10px;'>{_top:,.2f}</span>"
-                f"<span style='color:var(--muted);font-size:8px;'> "
-                f"{_rng}−{_SPCL_RET_PCT:.2f}%</span></div>"
-            )
+            _inner += _span(_top, _h, True, "var(--bear)",
+                            f"−{_SPCL_RET_PCT:.2f}%", "▼", "TOP REV")
         return (f"<td style='font-family:var(--mono);font-size:9px;padding:4px 8px;{_bd}"
                 f"white-space:nowrap;'>{_inner}</td>")
 
     _pe_rev_cell = _rev_cell(_best_pe_s, "PE", border=True)    # row 1 shows PE strike
     _ce_rev_cell = _rev_cell(_best_ce_s, "CE", border=False)   # row 2 shows CE strike
+
+    def _spcl_span(day_h, spcl):
+        """CeSPCL / PeSPCL value as [retracement target - day high], same bracket style."""
+        if not day_h or not spcl:
+            return f"{_fmt_s(day_h)} | {_fmt_s(spcl)}"   # keep old form if either is missing
+        return (f"[<b>{spcl:,.2f}</b>-{day_h:,.2f}]"
+                f"<span style='color:var(--muted);font-size:8px;font-weight:400;'>"
+                f"−{_SPCL_RET_PCT:.2f}%</span>")
 
     st.markdown(
         f"<div class='card' style='padding:0;overflow:hidden;'>"
@@ -5324,7 +5334,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_fmt_s(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}</td>"
+        f"{_spcl_span(_spcl_ce_h, _ce_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -5340,7 +5350,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_fmt_s(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}</td>"
+        f"{_spcl_span(_spcl_pe_h, _pe_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
