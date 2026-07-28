@@ -5254,6 +5254,59 @@ if True:  # always render — individual cells show "—" if data missing
     _pe_proj_fc = _fc_label(_best_pe_ltp, _proj_pe_high, _proj_pe_low)
     _ce_proj_fc = _fc_label(_best_ce_ltp, _proj_ce_high, _proj_ce_low)
 
+    # ── Reversal levels, per shown strike LTP ────────────────────────────────
+    #   Bottom reversal = that strike's day LOW  × (1 + 15.04%)
+    #   Top reversal    = that strike's day HIGH × (1 − 13.06%)
+    # Same two constants the SPCL projections use (_calc_spcl), applied to the
+    # strike's OWN day range instead of the ATM day high.
+    def _strike_day_hl(s, option_type):
+        """(day_high, day_low) for a strike: _fetch_proj_hl session cache, else chain OHLC."""
+        if not s:
+            return None, None
+        _si = int(s)
+        _cached = st.session_state.get(f"proj_hl_{_today_str}_{_si}_{option_type}_{_spcl_slot}")
+        if _cached and (_cached[0] or _cached[1]):
+            return _cached[0], _cached[1]
+        _hm = near_pe_high if option_type == "PE" else near_ce_high
+        _lm = near_pe_low  if option_type == "PE" else near_ce_low
+        return (_hm.get(float(_si)) or _hm.get(_si),
+                _lm.get(float(_si)) or _lm.get(_si))
+
+    def _rev_cell(s, option_type, border=True):
+        """Right-hand cell: bottom + top reversal for one strike's LTP."""
+        _h, _l = _strike_day_hl(s, option_type)
+        try:
+            _h = float(_h) if _h else None
+            _l = float(_l) if _l else None
+        except (TypeError, ValueError):
+            _h = _l = None
+        _bot = _l * (1 + _SPCL_HIGH_PCT / 100) if _l else None
+        _top = _h * (1 - _SPCL_RET_PCT  / 100) if _h else None
+        _bd  = "border-bottom:1px solid var(--border);" if border else ""
+        if _bot is None and _top is None:
+            return (f"<td style='padding:4px 8px;{_bd}color:var(--muted);"
+                    f"font-size:9px;'>—</td>")
+        _inner = ""
+        if _bot is not None:
+            _inner += (
+                f"<div><span style='color:var(--bull);font-weight:700;'>▲ BOT REV </span>"
+                f"<span style='color:var(--bull);font-weight:900;font-size:10px;'>{_bot:,.2f}</span>"
+                f"<span style='color:var(--muted);font-size:8px;'> "
+                f"L {_l:,.2f}+{_SPCL_HIGH_PCT:.2f}%</span></div>"
+            )
+        if _top is not None:
+            _inner += (
+                f"<div><span style='color:var(--bear);font-weight:700;'>▼ TOP REV </span>"
+                f"<span style='color:var(--bear);font-weight:900;font-size:10px;'>{_top:,.2f}</span>"
+                f"<span style='color:var(--muted);font-size:8px;'> "
+                f"H {_h:,.2f}−{_SPCL_RET_PCT:.2f}%</span></div>"
+            )
+        return (f"<td style='font-family:var(--mono);font-size:9px;padding:4px 8px;{_bd}"
+                f"white-space:nowrap;'>{_inner}</td>")
+
+    _pe_rev_cell = _rev_cell(_best_pe_s, "PE", border=True)    # row 1 shows PE strike
+    _ce_rev_cell = _rev_cell(_best_ce_s, "CE", border=False)   # row 2 shows CE strike
+
     st.markdown(
         f"<div class='card' style='padding:0;overflow:hidden;'>"
         f"<div style='background:rgba(30,40,80,.7);color:var(--muted);font-size:9px;"
@@ -5275,7 +5328,8 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_pe_h_strike}</td>"
-        f"</tr>"
+        + _pe_rev_cell
+        + f"</tr>"
         # PeSPCL row
         f"<tr>"
         f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
@@ -5288,7 +5342,8 @@ if True:  # always render — individual cells show "—" if data missing
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_ce_h_strike}</td>"
-        f"</tr>"
+        + _ce_rev_cell
+        + f"</tr>"
         f"</tbody></table></div>",
         unsafe_allow_html=True)
 
