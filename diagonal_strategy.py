@@ -5091,6 +5091,29 @@ _tk_ret  = f"(-{_SPCL_RET_PCT:.2f}%)"
 _tk_low  = f"({_SPCL_LOW_PCT:.2f}%)"
 _tk_high = f"(+{_SPCL_HIGH_PCT:.2f}%)"
 
+
+def _spcl_span(day_h, spcl, fmt_h=None, fmt_l=None):
+    """
+    CeSPCL / PeSPCL value as [retracement target - day high] followed by the %,
+    so the bracket sits next to the computed values. Shared by BOTH SPCL cards
+    (the projection card and the TK table below it) so the two cannot drift.
+
+    Module level on purpose: the projection card defines its helpers inside an
+    `if`, but the TK table renders outside it and still needs this.
+
+    fmt_h / fmt_l are the caller's own number formatters (_tk_f vs _fmt_s) and
+    are used only for the missing-data fallback, so each card keeps the look it
+    already had when either number is absent.
+    """
+    _fh = fmt_h or _fmt_s
+    _fl = fmt_l or _fmt_s
+    if not day_h or not spcl:
+        return f"{_fh(day_h)} | {_fl(spcl)}"
+    return (f"[<b>{spcl:,.2f}</b>-{day_h:,.2f}]"
+            f"<span style='color:var(--muted);font-size:8px;font-weight:400;'>"
+            f"−{_SPCL_RET_PCT:.2f}%</span>")
+
+
 if True:  # always render — individual cells show "—" if data missing
     _spcl_ret_tag  = f"−{_SPCL_RET_PCT:.2f}%"
     _spcl_low_tag  = f"{_SPCL_LOW_PCT:.2f}%"
@@ -5312,13 +5335,6 @@ if True:  # always render — individual cells show "—" if data missing
     _pe_rev_cell = _rev_cell(_best_pe_s, "PE", border=True)    # row 1 shows PE strike
     _ce_rev_cell = _rev_cell(_best_ce_s, "CE", border=False)   # row 2 shows CE strike
 
-    def _spcl_span(day_h, spcl):
-        """CeSPCL / PeSPCL value as [retracement target - day high], same bracket style."""
-        if not day_h or not spcl:
-            return f"{_fmt_s(day_h)} | {_fmt_s(spcl)}"   # keep old form if either is missing
-        return (f"[<b>{spcl:,.2f}</b>-{day_h:,.2f}]"
-                f"<span style='color:var(--muted);font-size:8px;font-weight:400;'>"
-                f"−{_SPCL_RET_PCT:.2f}%</span>")
 
     st.markdown(
         f"<div class='card' style='padding:0;overflow:hidden;'>"
@@ -5598,7 +5614,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
     f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-    f"{_tk_f(_spcl_ce_h)} | {_fmt_s(_ce_spcl)}</td>"
+    f"{_spcl_span(_spcl_ce_h, _ce_spcl, _tk_f, _fmt_s)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
     f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -5612,7 +5628,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;'>"
     f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-    f"{_tk_f(_spcl_pe_h)} | {_fmt_s(_pe_spcl)}</td>"
+    f"{_spcl_span(_spcl_pe_h, _pe_spcl, _tk_f, _fmt_s)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
