@@ -3768,73 +3768,62 @@ _5m_src_label  = (
 
 if (_nifty_5m_high is None or _nifty_5m_close is None or _nifty_5m_low is None) and token:
     try:
-        _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")
+        _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        # FIX (2026-07-18): CRITICAL — Upstox v2 API valid intervals are ONLY:
+        #   1minute | 30minute | 60minute | 1day | 1week | 1month
+        # "5minute" is NOT a valid v2 interval → silently returns {} → empty candles.
+        # v3 uses "minutes/5" in the path but does NOT support NSE_INDEX instruments.
+        #
+        # REGRESSION (2026-07-28, d9bf09c) — DO NOT REINTRODUCE:
+        #   that commit switched this to v3 "minutes/5" on NSE_INDEX|Nifty 50 and
+        #   deleted the warning above. v3 returns nothing for index keys, so
+        #   _nifty_5m_high stayed None and the card was stuck forever on
+        #   "fetching first 5-min candle…". Its market-closed URL was also missing
+        #   the required /{to_date}/{from_date} segments, and it dropped the
+        #   holiday-aware _5m_date_used logic. Reverted to the v2 approach below.
+        #
+        # SOLUTION: always use v2 with "1minute" interval, then aggregate the first
+        # 5 one-minute candles (9:15–9:19) to reconstruct the first 5-min HIGH.
+        # Candles are returned newest-first; last 5 elements = first 5 minutes of day.
+        # Timeouts stay short (afb7ab7) so a slow API can't freeze the app.
 
-        # Simple market open check
-        def _market_is_open():
-            _now = datetime.now(IST)
-            if _now.weekday() >= 5:  # Saturday=5, Sunday=6
-                return False
-            _start = _now.replace(hour=9, minute=15, second=0, microsecond=0)
-            _end = _now.replace(hour=15, minute=30, second=0, microsecond=0)
-            return _start <= _now <= _end
-
-        # Get first 5-minute candle using v3 API
-        def _get_first_5min_candle():
+        def _get_1m_candles(date_str_arg):
+            """Fetch 1-min candles for NSE_INDEX on given date via v2."""
             try:
-                if _market_is_open():
-                    # Market open: use intraday API
-                    url = f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/5"
-                else:
-                    # Market closed: use historical API
-                    url = f"https://api.upstox.com/v3/historical-candle/{_enc_key}/minutes/5"
+                _r = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{_enc_key}/1minute/{date_str_arg}/{date_str_arg}",
+                    headers=_hdr5, timeout=5,
+                )
+                return (_r.json().get("data") or {}).get("candles") or []
+            except requests.RequestException:   # covers Timeout
+                return []
 
-                r = requests.get(url, headers=_hdr5, timeout=5)
-                r.raise_for_status()
-                candles = r.json().get("data", {}).get("candles", [])
+        if _mkt_open:
+            # Market live: try v3 intraday/1minute first, fall back to v2 1minute today
+            try:
+                _r5 = requests.get(
+                    f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/1",
+                    headers=_hdr5, timeout=5,
+                )
+                _candles5 = (_r5.json().get("data") or {}).get("candles") or []
+            except requests.RequestException:
+                _candles5 = []
+            if not _candles5:
+                _candles5 = _get_1m_candles(_today_ist.strftime("%Y-%m-%d"))
+        else:
+            # Market not live: v2 1-minute for _5m_date_used
+            # (_5m_date_used = today if after-close, prev biz day if weekend/holiday/pre-mkt)
+            _candles5 = _get_1m_candles(_5m_date_used.strftime("%Y-%m-%d"))
 
-                if not candles:
-                    return None
-
-                # Reverse to get oldest first
-                candles.reverse()
-
-                if _market_is_open():
-                    # During market hours, first candle is the 09:15 candle
-                    c = candles[0]
-                else:
-                    # After market close, find first candle of latest trading day
-                    latest_date = candles[-1][0][:10]
-                    for c in candles:
-                        if c[0].startswith(latest_date):
-                            return {
-                                "time": c[0],
-                                "open": float(c[1]) if len(c) > 1 else 0,
-                                "high": float(c[2]) if len(c) > 2 else 0,
-                                "low": float(c[3]) if len(c) > 3 else 0,
-                                "close": float(c[4]) if len(c) > 4 else 0,
-                                "volume": float(c[5]) if len(c) > 5 else 0,
-                            }
-                    return None
-
-                return {
-                    "time": c[0],
-                    "open": float(c[1]) if len(c) > 1 else 0,
-                    "high": float(c[2]) if len(c) > 2 else 0,
-                    "low": float(c[3]) if len(c) > 3 else 0,
-                    "close": float(c[4]) if len(c) > 4 else 0,
-                    "volume": float(c[5]) if len(c) > 5 else 0,
-                }
-            except Exception as e:
-                return None
-
-        _5min_candle = _get_first_5min_candle()
-
-        if _5min_candle:
-            _5m_h = _5min_candle.get("high", 0)
-            _5m_l = _5min_candle.get("low", 0)
-            _5m_c = _5min_candle.get("close", 0)
+        if _candles5:
+            # candles newest-first; last 5 elements = first 5 minutes of trading (9:15–9:19)
+            # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
+            _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
+            _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
+            _5m_l = min((float(c[3]) for c in _first_5 if len(c) > 3 and float(c[3]) > 0), default=0)
+            # Close of first 5-min candle = close of 9:19 candle = _first_5[0] (newest-first), col 4
+            _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
 
             _lock = (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20))
 
@@ -3859,45 +3848,28 @@ if _nifty_5m_close is None and token:
     try:
         _enc_nf = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")
         _hdr_nf = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
-
-        def _market_is_open_nf():
-            _now = datetime.now(IST)
-            if _now.weekday() >= 5:
-                return False
-            _start = _now.replace(hour=9, minute=15, second=0, microsecond=0)
-            _end = _now.replace(hour=15, minute=30, second=0, microsecond=0)
-            return _start <= _now <= _end
-
+        _d_nf   = _5m_date_used.strftime("%Y-%m-%d")
+        # Same v3-on-NSE_INDEX regression applied here in d9bf09c — reverted.
+        # v3 intraday/minutes/1 works for both live and after-close; v2 1minute is the fallback.
+        _cn = []
         try:
-            if _market_is_open_nf():
-                url = f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_nf}/minutes/5"
-            else:
-                url = f"https://api.upstox.com/v3/historical-candle/{_enc_nf}/minutes/5"
-
-            _r_nf = requests.get(url, headers=_hdr_nf, timeout=5)
-            _r_nf.raise_for_status()
-            _cn = _r_nf.json().get("data", {}).get("candles", [])
-
-            if _cn:
-                _cn_rev = list(reversed(_cn))
-                if _market_is_open_nf():
-                    _f5n = _cn_rev[0]
-                else:
-                    latest_date = _cn[-1][0][:10]
-                    for _c in _cn_rev:
-                        if _c[0].startswith(latest_date):
-                            _f5n = _c
-                            break
-                    else:
-                        _f5n = None
-
-                if _f5n and len(_f5n) > 4:
-                    _cv = float(_f5n[4])
-                    if _cv > 0:
-                        _nifty_5m_close = _cv
-                        st.session_state[_5m_close_key] = _cv
-        except (requests.Timeout, requests.RequestException):
-            pass
+            _r_nf = requests.get(
+                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_nf}/minutes/1",
+                headers=_hdr_nf, timeout=5,
+            )
+            _cn = (_r_nf.json().get("data") or {}).get("candles") or []
+        except requests.RequestException:
+            _cn = []
+        # Fallback to v2 historical if v3 intraday returns empty
+        if not _cn:
+            try:
+                _r_nf2 = requests.get(
+                    f"https://api.upstox.com/v2/historical-candle/{_enc_nf}/1minute/{_d_nf}/{_d_nf}",
+                    headers=_hdr_nf, timeout=5,
+                )
+                _cn = (_r_nf2.json().get("data") or {}).get("candles") or []
+            except requests.RequestException:
+                _cn = []
         if _cn:
             _f5n = _cn[-5:] if len(_cn) >= 5 else _cn
             _cv  = float(_f5n[0][4]) if _f5n and len(_f5n[0]) > 4 else 0
