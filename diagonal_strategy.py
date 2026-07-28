@@ -1810,6 +1810,31 @@ def weeks_out(expiry_str):
         return 0.0
 
 
+def _parse_upstox_expiry(v):
+    """
+    Upstox reports expiry in TWO different shapes depending on the source:
+      • instruments dump (CDN) → epoch MILLISECONDS as an int, e.g. 1785263399000
+      • smartlist REST API     → ISO string, e.g. "2026-07-28"
+    VERIFIED 2026-07-28 against complete.json.gz — the old code did
+    str(expiry)[:10] + strptime("%Y-%m-%d"), which turns the epoch into
+    "1785263399" and raises on every single row. Returns date | None.
+    """
+    if v is None:
+        return None
+    if isinstance(v, (int, float)) or str(v).isdigit():
+        try:
+            n = float(v)
+            if n > 1e11:          # milliseconds → seconds
+                n /= 1000.0
+            return datetime.fromtimestamp(n, IST).date()
+        except Exception:
+            return None
+    try:
+        return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_nifty_fut_tokens(tok):
     """
@@ -1829,14 +1854,14 @@ def _get_nifty_fut_tokens(tok):
                 continue
             sym  = (item.get("trading_symbol") or "").upper()
             ikey = item.get("instrument_key") or ""
-            exp  = str(item.get("expiry") or "")[:10]
-            if not ikey or not exp:
+            exp_d = _parse_upstox_expiry(item.get("expiry"))
+            if not ikey or not exp_d or exp_d < today:
                 continue
             if "NIFTY" not in sym:
                 continue
-            if any(x in sym for x in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "CPSE")):
+            if any(x in sym for x in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "CPSE")):
                 continue
-            tokens[exp] = (ikey, sym)
+            tokens[str(exp_d)] = (ikey, sym)
         return tokens
 
     # ── PRIMARY: smartlist REST API ───────────────────────────────────────────
@@ -1860,9 +1885,12 @@ def _get_nifty_fut_tokens(tok):
         pass
 
     # ── FALLBACK: instruments master JSON (public CDN, no auth) ───────────────
+    # VERIFIED 2026-07-28: the per-exchange NSE_FO.json.gz dump is RETIRED — it
+    # returns S3 "403 AccessDenied". complete.json.gz is live (200, ~3.5 MB).
+    # Kept second only as a courtesy in case Upstox restores it.
     INST_URLS = [
-        "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz",
         "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz",
+        "https://assets.upstox.com/market-quote/instruments/exchange/NSE_FO.json.gz",
     ]
     for url in INST_URLS:
         try:
@@ -1881,20 +1909,19 @@ def _get_nifty_fut_tokens(tok):
                     continue
                 if item.get("segment") != "NSE_FO" or item.get("instrument_type") != "FUT":
                     continue
-                if item.get("underlying_symbol") != "NIFTY 50":   # Upstox exact name
+                # VERIFIED 2026-07-28 against the live dump: on a NIFTY future row
+                #   underlying_symbol = "NIFTY"  (NOT "NIFTY 50" — that match found 0 rows)
+                #   underlying_key    = "NSE_INDEX|Nifty 50"
+                # Matching on underlying_key also excludes NIFTYNXT50, whose key is
+                # "NSE_INDEX|Nifty Next 50". Example row: NSE_FO|61093 "NIFTY FUT 28 JUL 26".
+                if item.get("underlying_key") != "NSE_INDEX|Nifty 50":
                     continue
-                exp_str = str(item.get("expiry") or "")[:10]
-                ikey    = item.get("instrument_key", "")
-                sym     = item.get("trading_symbol", "")
-                if not ikey or not exp_str:
+                ikey     = item.get("instrument_key", "")
+                sym      = item.get("trading_symbol", "")
+                exp_date = _parse_upstox_expiry(item.get("expiry"))   # epoch-ms in this dump
+                if not ikey or not exp_date or exp_date < today:
                     continue
-                try:
-                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                except Exception:
-                    continue
-                if exp_date < today:
-                    continue
-                nifty_rows.append((exp_date, exp_str, ikey, sym))
+                nifty_rows.append((exp_date, str(exp_date), ikey, sym))
             if nifty_rows:
                 nifty_rows.sort(key=lambda x: x[0])
                 tokens = {exp_str: (ikey, sym) for _, exp_str, ikey, sym in nifty_rows[:2]}
@@ -3770,60 +3797,71 @@ if (_nifty_5m_high is None or _nifty_5m_close is None or _nifty_5m_low is None) 
     try:
         _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
-        # FIX (2026-07-18): CRITICAL — Upstox v2 API valid intervals are ONLY:
-        #   1minute | 30minute | 60minute | 1day | 1week | 1month
-        # "5minute" is NOT a valid v2 interval → silently returns {} → empty candles.
-        # v3 uses "minutes/5" in the path but does NOT support NSE_INDEX instruments.
+        # ══ ENDPOINT RULES — VERIFIED BY DIRECT PROBE ON 2026-07-28 ═══════════
+        # Measured against NSE_INDEX|Nifty 50 (all HTTP 200; the difference is
+        # the candle COUNT, which is why the old failures were silent):
         #
-        # REGRESSION (2026-07-28, d9bf09c) — DO NOT REINTRODUCE:
-        #   that commit switched this to v3 "minutes/5" on NSE_INDEX|Nifty 50 and
-        #   deleted the warning above. v3 returns nothing for index keys, so
-        #   _nifty_5m_high stayed None and the card was stuck forever on
-        #   "fetching first 5-min candle…". Its market-closed URL was also missing
-        #   the required /{to_date}/{from_date} segments, and it dropped the
-        #   holiday-aware _5m_date_used logic. Reverted to the v2 approach below.
+        #   v2 historical 1minute / TODAY (2026-07-28)        →   0 candles
+        #   v2 historical 1minute / PREV DAY (2026-07-27)     → 375 candles
+        #   v3 intraday   minutes/1                           → 375 candles (today)
+        #   v3 intraday   minutes/5                           →  75 candles (today)
+        #   v3 dated      minutes/5/{to}/{from} PREV DAY      →  75 candles
+        #   v3 dated      minutes/5/{to}/{from} TODAY         →   0 candles
         #
-        # SOLUTION: always use v2 with "1minute" interval, then aggregate the first
-        # 5 one-minute candles (9:15–9:19) to reconstruct the first 5-min HIGH.
-        # Candles are returned newest-first; last 5 elements = first 5 minutes of day.
-        # Timeouts stay short (afb7ab7) so a slow API can't freeze the app.
+        # Two corrections to what this file previously asserted:
+        #   1. "v3 does NOT support NSE_INDEX" — FALSE. v3 intraday serves the
+        #      index fine, live AND after close. That claim caused the v2-only design.
+        #   2. v2 historical EXCLUDES the current day. So on an after-close trading
+        #      day (_5m_date_used = today) v2 returns nothing, which is why a plain
+        #      revert to v2 did NOT fix the "fetching first 5-min candle…" card.
+        #
+        # RULE: today's session → v3 INTRADAY. Any past date → v3 DATED (or v2 1minute).
+        # Never ask a dated/historical endpoint for today; never ask intraday for a past day.
+        #
+        # d9bf09c broke this by using the DATED v3 url with NO date segments for the
+        # market-closed branch (404), and by treating after-close-today as "closed"
+        # so intraday was never tried. Timeouts stay short (afb7ab7).
 
-        def _get_1m_candles(date_str_arg):
-            """Fetch 1-min candles for NSE_INDEX on given date via v2."""
+        def _c(url):
             try:
-                _r = requests.get(
-                    f"https://api.upstox.com/v2/historical-candle/{_enc_key}/1minute/{date_str_arg}/{date_str_arg}",
-                    headers=_hdr5, timeout=5,
-                )
+                _r = requests.get(url, headers=_hdr5, timeout=5)
                 return (_r.json().get("data") or {}).get("candles") or []
             except requests.RequestException:   # covers Timeout
                 return []
 
-        if _mkt_open:
-            # Market live: try v3 intraday/1minute first, fall back to v2 1minute today
-            try:
-                _r5 = requests.get(
-                    f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_key}/minutes/1",
-                    headers=_hdr5, timeout=5,
-                )
-                _candles5 = (_r5.json().get("data") or {}).get("candles") or []
-            except requests.RequestException:
-                _candles5 = []
+        _V3 = "https://api.upstox.com/v3/historical-candle"
+        _V2 = "https://api.upstox.com/v2/historical-candle"
+        _d5 = _5m_date_used.strftime("%Y-%m-%d")
+
+        _candles5, _is_5m = [], False
+        if _mkt_open or _after_close:
+            # TODAY's session — intraday only
+            _candles5 = _c(f"{_V3}/intraday/{_enc_key}/minutes/5")
+            _is_5m    = bool(_candles5)
             if not _candles5:
-                _candles5 = _get_1m_candles(_today_ist.strftime("%Y-%m-%d"))
+                _candles5 = _c(f"{_V3}/intraday/{_enc_key}/minutes/1")
         else:
-            # Market not live: v2 1-minute for _5m_date_used
-            # (_5m_date_used = today if after-close, prev biz day if weekend/holiday/pre-mkt)
-            _candles5 = _get_1m_candles(_5m_date_used.strftime("%Y-%m-%d"))
+            # Weekend / holiday / pre-market — dated endpoints
+            _candles5 = _c(f"{_V3}/{_enc_key}/minutes/5/{_d5}/{_d5}")
+            _is_5m    = bool(_candles5)
+            if not _candles5:
+                _candles5 = _c(f"{_V2}/{_enc_key}/1minute/{_d5}/{_d5}")
 
         if _candles5:
-            # candles newest-first; last 5 elements = first 5 minutes of trading (9:15–9:19)
-            # Max HIGH across those 5 candles = equivalent of "first 5-min candle HIGH"
-            _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
-            _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
-            _5m_l = min((float(c[3]) for c in _first_5 if len(c) > 3 and float(c[3]) > 0), default=0)
-            # Close of first 5-min candle = close of 9:19 candle = _first_5[0] (newest-first), col 4
-            _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
+            # Candles are newest-first, so the FIRST candle of the day is the LAST element.
+            if _is_5m:
+                # Native 5-min: element [-1] IS the 09:15–09:19 candle. No aggregation.
+                _fc   = _candles5[-1]
+                _5m_h = float(_fc[2]) if len(_fc) > 2 else 0
+                _5m_l = float(_fc[3]) if len(_fc) > 3 else 0
+                _5m_c = float(_fc[4]) if len(_fc) > 4 else 0
+            else:
+                # 1-min fallback: aggregate the first 5 (9:15–9:19) into one 5-min candle
+                _first_5 = _candles5[-5:] if len(_candles5) >= 5 else _candles5
+                _5m_h = max((float(c[2]) for c in _first_5 if len(c) > 2), default=0)
+                _5m_l = min((float(c[3]) for c in _first_5 if len(c) > 3 and float(c[3]) > 0), default=0)
+                # Close of the 5-min candle = close of the 9:19 candle = _first_5[0]
+                _5m_c = float(_first_5[0][4]) if _first_5 and len(_first_5[0]) > 4 else 0
 
             _lock = (not _mkt_open) or (_now_ist.hour > 9 or (_now_ist.hour == 9 and _now_ist.minute >= 20))
 
@@ -3849,30 +3887,32 @@ if _nifty_5m_close is None and token:
         _enc_nf = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")
         _hdr_nf = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
         _d_nf   = _5m_date_used.strftime("%Y-%m-%d")
-        # Same v3-on-NSE_INDEX regression applied here in d9bf09c — reverted.
-        # v3 intraday/minutes/1 works for both live and after-close; v2 1minute is the fallback.
-        _cn = []
-        try:
-            _r_nf = requests.get(
-                f"https://api.upstox.com/v3/historical-candle/intraday/{_enc_nf}/minutes/1",
-                headers=_hdr_nf, timeout=5,
-            )
-            _cn = (_r_nf.json().get("data") or {}).get("candles") or []
-        except requests.RequestException:
-            _cn = []
-        # Fallback to v2 historical if v3 intraday returns empty
-        if not _cn:
+        # Safety net for the close alone. Same today→intraday / past→dated rule as
+        # the block above (see the probe table there); d9bf09c broke this one too.
+        def _cnf(url):
             try:
-                _r_nf2 = requests.get(
-                    f"https://api.upstox.com/v2/historical-candle/{_enc_nf}/1minute/{_d_nf}/{_d_nf}",
-                    headers=_hdr_nf, timeout=5,
-                )
-                _cn = (_r_nf2.json().get("data") or {}).get("candles") or []
+                _r = requests.get(url, headers=_hdr_nf, timeout=5)
+                return (_r.json().get("data") or {}).get("candles") or []
             except requests.RequestException:
-                _cn = []
+                return []
+
+        _V3n = "https://api.upstox.com/v3/historical-candle"
+        _V2n = "https://api.upstox.com/v2/historical-candle"
+        if _mkt_open or _after_close:
+            _cn, _cn_is_5m = _cnf(f"{_V3n}/intraday/{_enc_nf}/minutes/5"), True
+            if not _cn:
+                _cn, _cn_is_5m = _cnf(f"{_V3n}/intraday/{_enc_nf}/minutes/1"), False
+        else:
+            _cn, _cn_is_5m = _cnf(f"{_V3n}/{_enc_nf}/minutes/5/{_d_nf}/{_d_nf}"), True
+            if not _cn:
+                _cn, _cn_is_5m = _cnf(f"{_V2n}/{_enc_nf}/1minute/{_d_nf}/{_d_nf}"), False
         if _cn:
-            _f5n = _cn[-5:] if len(_cn) >= 5 else _cn
-            _cv  = float(_f5n[0][4]) if _f5n and len(_f5n[0]) > 4 else 0
+            # newest-first → first candle of the day is the last element
+            if _cn_is_5m:
+                _cv = float(_cn[-1][4]) if len(_cn[-1]) > 4 else 0
+            else:
+                _f5n = _cn[-5:] if len(_cn) >= 5 else _cn
+                _cv  = float(_f5n[0][4]) if _f5n and len(_f5n[0]) > 4 else 0
             if _cv > 0:
                 _nifty_5m_close = _cv
                 st.session_state[_5m_close_key] = _cv
