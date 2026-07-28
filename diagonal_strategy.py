@@ -5094,24 +5094,31 @@ _tk_high = f"(+{_SPCL_HIGH_PCT:.2f}%)"
 
 def _spcl_span(day_h, spcl, fmt_h=None, fmt_l=None):
     """
-    CeSPCL / PeSPCL value as [retracement target - day high] followed by the %,
-    so the bracket sits next to the computed values. Shared by BOTH SPCL cards
-    (the projection card and the TK table below it) so the two cannot drift.
+    CeSPCL / PeSPCL cell: the original "day high | SPCL" values, then the
+    computed range appended in a bracket.
 
-    Module level on purpose: the projection card defines its helpers inside an
-    `if`, but the TK table renders outside it and still needs this.
+        109.60 | 95.29  [95.29-109.60]−13.06%
 
-    fmt_h / fmt_l are the caller's own number formatters (_tk_f vs _fmt_s) and
-    are used only for the missing-data fallback, so each card keeps the look it
-    already had when either number is absent.
+    The original pair stays the primary reading; the bracket is the derived
+    span (retracement target → day high), styled down so it reads as an
+    annotation rather than replacing what was there.
+
+    Shared by BOTH SPCL cards (the projection card and the TK table below it)
+    so the two cannot drift. Module level on purpose: the projection card
+    defines its helpers inside an `if`, but the TK table renders outside it.
+
+    fmt_h / fmt_l are the caller's own number formatters (_tk_f vs _fmt_s), so
+    each card keeps the look it already had for the leading pair.
     """
     _fh = fmt_h or _fmt_s
     _fl = fmt_l or _fmt_s
+    _lead = f"{_fh(day_h)} | {_fl(spcl)}"
     if not day_h or not spcl:
-        return f"{_fh(day_h)} | {_fl(spcl)}"
-    return (f"[<b>{spcl:,.2f}</b>-{day_h:,.2f}]"
-            f"<span style='color:var(--muted);font-size:8px;font-weight:400;'>"
-            f"−{_SPCL_RET_PCT:.2f}%</span>")
+        return _lead
+    return (f"{_lead}"
+            f"<span style='color:var(--muted);font-size:9px;font-weight:400;"
+            f"margin-left:6px;'>[<b>{spcl:,.2f}</b>-{day_h:,.2f}]"
+            f"<span style='font-size:8px;'>−{_SPCL_RET_PCT:.2f}%</span></span>")
 
 
 if True:  # always render — individual cells show "—" if data missing
