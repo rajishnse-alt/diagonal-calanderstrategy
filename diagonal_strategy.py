@@ -5092,33 +5092,70 @@ _tk_low  = f"({_SPCL_LOW_PCT:.2f}%)"
 _tk_high = f"(+{_SPCL_HIGH_PCT:.2f}%)"
 
 
-def _spcl_span(day_h, spcl, fmt_h=None, fmt_l=None):
+def _rev_lines(day_h, day_l):
     """
-    CeSPCL / PeSPCL cell: the original "day high | SPCL" values, then the
-    computed range appended in a bracket.
+    THE canonical reversal format. Every place that shows reversal levels calls
+    this — the REV cells on the right of the projection card AND the CeSPCL /
+    PeSPCL cells in both SPCL cards — so the format exists in exactly one place
+    and cannot drift:
 
-        109.60 | 95.29  [95.29-109.60]−13.06%
+        ▲ BOT REV [6.45-7.42]+15.04%      target = day low  × (1 + 15.04%)
+        ▼ TOP REV [56.42-64.90]−13.06%    target = day high × (1 − 13.06%)
 
-    The original pair stays the primary reading; the bracket is the derived
-    span (retracement target → day high), styled down so it reads as an
-    annotation rather than replacing what was there.
+    Brackets ascend; the bold number in each is the computed level. A missing
+    high or low drops only its own line.
+    """
+    try:
+        _h = float(day_h) if day_h else None
+        _l = float(day_l) if day_l else None
+    except (TypeError, ValueError):
+        _h = _l = None
+    _out = ""
+    if _l:
+        _bot = _l * (1 + _SPCL_HIGH_PCT / 100)
+        _out += (
+            f"<div><span style='color:var(--bull);font-weight:700;'>▲ BOT REV </span>"
+            f"<span style='color:var(--bull);font-size:10px;'>"
+            f"[{_l:,.2f}-<b>{_bot:,.2f}</b>]</span>"
+            f"<span style='color:var(--muted);font-size:8px;'>"
+            f"+{_SPCL_HIGH_PCT:.2f}%</span></div>"
+        )
+    if _h:
+        _top = _h * (1 - _SPCL_RET_PCT / 100)
+        _out += (
+            f"<div><span style='color:var(--bear);font-weight:700;'>▼ TOP REV </span>"
+            f"<span style='color:var(--bear);font-size:10px;'>"
+            f"[<b>{_top:,.2f}</b>-{_h:,.2f}]</span>"
+            f"<span style='color:var(--muted);font-size:8px;'>"
+            f"−{_SPCL_RET_PCT:.2f}%</span></div>"
+        )
+    return _out
 
-    Shared by BOTH SPCL cards (the projection card and the TK table below it)
-    so the two cannot drift. Module level on purpose: the projection card
-    defines its helpers inside an `if`, but the TK table renders outside it.
 
-    fmt_h / fmt_l are the caller's own number formatters (_tk_f vs _fmt_s), so
-    each card keeps the look it already had for the leading pair.
+def _spcl_span(day_h, day_l, spcl, fmt_h=None, fmt_l=None):
+    """
+    CeSPCL / PeSPCL cell: the original "day high | SPCL" pair kept as the first
+    line, with the reversal levels underneath in the canonical format:
+
+        109.60 | 95.29
+        ▲ BOT REV [6.45-7.42]+15.04%
+        ▼ TOP REV [95.29-109.60]−13.06%
+
+    Shared by BOTH SPCL cards (projection card + TK table below it). Module
+    level on purpose: the projection card defines its helpers inside an `if`,
+    but the TK table renders outside it.
+
+    fmt_h / fmt_l are the caller's own formatters (_tk_f vs _fmt_s) so each card
+    keeps the look it already had for the leading pair.
     """
     _fh = fmt_h or _fmt_s
     _fl = fmt_l or _fmt_s
     _lead = f"{_fh(day_h)} | {_fl(spcl)}"
-    if not day_h or not spcl:
+    _rev  = _rev_lines(day_h, day_l)
+    if not _rev:
         return _lead
-    return (f"{_lead}"
-            f"<span style='color:var(--muted);font-size:9px;font-weight:400;"
-            f"margin-left:6px;'>[<b>{spcl:,.2f}</b>-{day_h:,.2f}]"
-            f"<span style='font-size:8px;'>−{_SPCL_RET_PCT:.2f}%</span></span>")
+    return (f"<div>{_lead}</div>"
+            f"<div style='font-family:var(--mono);font-weight:400;'>{_rev}</div>")
 
 
 if True:  # always render — individual cells show "—" if data missing
@@ -5305,37 +5342,11 @@ if True:  # always render — individual cells show "—" if data missing
     def _rev_cell(s, option_type, border=True):
         """Right-hand cell: bottom + top reversal for one strike's LTP."""
         _h, _l = _strike_day_hl(s, option_type)
-        try:
-            _h = float(_h) if _h else None
-            _l = float(_l) if _l else None
-        except (TypeError, ValueError):
-            _h = _l = None
-        _bot = _l * (1 + _SPCL_HIGH_PCT / 100) if _l else None
-        _top = _h * (1 - _SPCL_RET_PCT  / 100) if _h else None
-        _bd  = "border-bottom:1px solid var(--border);" if border else ""
-        if _bot is None and _top is None:
+        _bd    = "border-bottom:1px solid var(--border);" if border else ""
+        _inner = _rev_lines(_h, _l)      # canonical format — see _rev_lines
+        if not _inner:
             return (f"<td style='padding:4px 8px;{_bd}color:var(--muted);"
                     f"font-size:9px;'>—</td>")
-        # Each line is one bracketed span: [anchor → target], ascending.
-        #   BOT REV [day low - target]   target is the UPPER bound  (low + 15.04%)
-        #   TOP REV [target - day high]  target is the LOWER bound  (high − 13.06%)
-        # The computed level is the bold number inside the bracket.
-        def _span(a, b, bold_first, color, pct_txt, arrow, label):
-            _a = (f"<b>{a:,.2f}</b>" if bold_first else f"{a:,.2f}")
-            _b = (f"{b:,.2f}" if bold_first else f"<b>{b:,.2f}</b>")
-            return (
-                f"<div><span style='color:{color};font-weight:700;'>{arrow} {label} </span>"
-                f"<span style='color:{color};font-size:10px;'>[{_a}-{_b}]</span>"
-                f"<span style='color:var(--muted);font-size:8px;'>{pct_txt}</span></div>"
-            )
-
-        _inner = ""
-        if _bot is not None:
-            _inner += _span(_l, _bot, False, "var(--bull)",
-                            f"+{_SPCL_HIGH_PCT:.2f}%", "▲", "BOT REV")
-        if _top is not None:
-            _inner += _span(_top, _h, True, "var(--bear)",
-                            f"−{_SPCL_RET_PCT:.2f}%", "▼", "TOP REV")
         return (f"<td style='font-family:var(--mono);font-size:9px;padding:4px 8px;{_bd}"
                 f"white-space:nowrap;'>{_inner}</td>")
 
@@ -5357,7 +5368,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_spcl_span(_spcl_ce_h, _ce_spcl)}</td>"
+        f"{_spcl_span(_spcl_ce_h, _spcl_ce_l, _ce_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -5373,7 +5384,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_spcl_span(_spcl_pe_h, _pe_spcl)}</td>"
+        f"{_spcl_span(_spcl_pe_h, _spcl_pe_l, _pe_spcl)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
@@ -5621,7 +5632,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
     f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-    f"{_spcl_span(_spcl_ce_h, _ce_spcl, _tk_f, _fmt_s)}</td>"
+    f"{_spcl_span(_spcl_ce_h, _spcl_ce_l, _ce_spcl, _tk_f, _fmt_s)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
     f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -5635,7 +5646,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;'>"
     f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-    f"{_spcl_span(_spcl_pe_h, _pe_spcl, _tk_f, _fmt_s)}</td>"
+    f"{_spcl_span(_spcl_pe_h, _spcl_pe_l, _pe_spcl, _tk_f, _fmt_s)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
