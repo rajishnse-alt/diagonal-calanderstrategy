@@ -3149,6 +3149,7 @@ if not _atm_pe_day_high:
 _SPCL_RET_PCT  = 13.06   # CE/PE High retracement % → CeSPCL / PeSPCL
 _SPCL_LOW_PCT  = 19.29   # Cross-leg low % (CE High × % = Proj PE Low, etc.)
 _SPCL_HIGH_PCT = 15.04   # Low → High uplift %
+_SPCL_TAR_PCT  = 26.11   # →PE H / →CE H uplift → projPeTar / projCeTar (Tg)
 
 def _calc_spcl(ce_h: float, pe_h: float):
     """Return (ce_spcl, pe_spcl, proj_pe_low, proj_pe_high, proj_ce_low, proj_ce_high)."""
@@ -3161,6 +3162,26 @@ def _calc_spcl(ce_h: float, pe_h: float):
     proj_ce_low  = pe_h * _SPCL_LOW_PCT  / 100
     proj_ce_high = proj_ce_low  * (1 + _SPCL_HIGH_PCT / 100)
     return ce_spcl, pe_spcl, proj_pe_low, proj_pe_high, proj_ce_low, proj_ce_high
+
+
+def _tar_line(proj_high):
+    """
+    Tg — the projected target sitting above →PE H / →CE H:
+
+        projPeTar = projPeHigh + projPeHigh × (26.11 / 100)
+        projCeTar = projCeHigh + projCeHigh × (26.11 / 100)
+
+    Rendered by every →PE H / →CE H cell (projection card AND the TK table)
+    from this one place, so the two cannot drift. Returns "" when there is no
+    projected high to work from, so the cell just omits the line.
+    """
+    if not proj_high:
+        return ""
+    _t = proj_high * (1 + _SPCL_TAR_PCT / 100)
+    return (f"<br><span style='color:var(--gold);font-weight:700;font-size:10px;'>"
+            f"Tg {_t:,.2f}</span>"
+            f"<span style='color:var(--muted);font-size:8px;font-weight:400;'>"
+            f" +{_SPCL_TAR_PCT:.2f}%</span>")
 
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_atm_ce_day_high, _atm_pe_day_high)
@@ -5474,7 +5495,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -5488,7 +5509,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
@@ -5738,7 +5759,7 @@ st.markdown(
     f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-    f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}</td>"
+    f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}</td>"
     f"</tr>"
     f"<tr>"
     f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
@@ -5750,7 +5771,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-    f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}</td>"
+    f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}</td>"
     f"</tr>"
     f"</tbody></table></div>",
     unsafe_allow_html=True)
