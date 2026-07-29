@@ -4894,8 +4894,8 @@ _5m_spcl_atm  = (
     else (_open_atm if _open_atm else atm)
 )
 # Key WITHOUT anchor label — same ATM strike always reuses the same cached 5-min fetch
-_5m_opt_key   = f"atm_5m_h_{_today_str}_{_5m_spcl_atm}"
-_5m_opt_c_key = f"atm_5m_c_{_today_str}_{_5m_spcl_atm}"
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{near_exp}_{_5m_spcl_atm}"
+_5m_opt_c_key = f"atm_5m_c_{_today_str}_{near_exp}_{_5m_spcl_atm}"
 # After market closes, use cached value to avoid repeated API calls.
 # During market hours: always fetch fresh (avoids stale-key bugs & ensures 9:20 candle is latest).
 _now_ist_5m   = datetime.now(IST)
@@ -4957,7 +4957,7 @@ _spcl_slot = (
     .replace(minute=(_now_ist_spcl.minute // 5) * 5)
     .strftime("%H%M")
 ) if _mkt_open else "final"
-_spcl_hl_key = f"spcl_hl_{_today_str}_{_5m_spcl_atm}_{_spcl_slot}"
+_spcl_hl_key = f"spcl_hl_{_today_str}_{near_exp}_{_5m_spcl_atm}_{_spcl_slot}"
 
 _spcl_ce_h = st.session_state.get(_spcl_hl_key + "_ceh")
 _spcl_pe_h = st.session_state.get(_spcl_hl_key + "_peh")
@@ -5320,7 +5320,7 @@ if True:  # always render — individual cells show "—" if data missing
     # Lock projection strikes when using "First 5m High" anchor so they
     # don't shift as option LTPs fluctuate during the day.
     if _anchor_mode == "First 5m High" and _5m_spcl_atm:
-        _proj_lock_key = f"proj_best_strikes_{_today_str}_{_5m_spcl_atm}"
+        _proj_lock_key = f"proj_best_strikes_{_today_str}_{near_exp}_{_5m_spcl_atm}"
         _locked_best = st.session_state.get(_proj_lock_key)
         if _locked_best:
             _best_pe_s, _best_pe_ltp, _best_ce_s, _best_ce_ltp = _locked_best
@@ -5374,7 +5374,7 @@ if True:  # always render — individual cells show "—" if data missing
         if not s:
             return None, None, False
         _si = int(s)
-        _ck = f"proj_hl_{_today_str}_{_si}_{option_type}_{_spcl_slot}"
+        _ck = f"proj_hl_{_today_str}_{near_exp}_{_si}_{option_type}_{_spcl_slot}"
         _cached = st.session_state.get(_ck)
         if _cached and (_cached[0] or _cached[1]):
             return _cached[0], _cached[1], bool(st.session_state.get(_ck + "_prev"))
@@ -5469,7 +5469,7 @@ if True:  # always render — individual cells show "—" if data missing
     # Lock display strike lists for "First 5m High" anchor — prevents the
     # range-strikes list from shifting as live LTPs move in/out of range.
     if _anchor_mode == "First 5m High" and _5m_spcl_atm:
-        _proj_disp_key = f"proj_disp_strikes_{_today_str}_{_5m_spcl_atm}"
+        _proj_disp_key = f"proj_disp_strikes_{_today_str}_{near_exp}_{_5m_spcl_atm}"
         _locked_disp = st.session_state.get(_proj_disp_key)
         if _locked_disp:
             _pe_display_strikes, _ce_display_strikes = _locked_disp
@@ -5497,7 +5497,7 @@ if True:  # always render — individual cells show "—" if data missing
             _s_int = int(_s)
             if _s_int in out_dict:
                 continue
-            _slot_k = f"proj_hl_{_today_str}_{_s_int}_{option_type}_{_spcl_slot}"
+            _slot_k = f"proj_hl_{_today_str}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
             _cached = st.session_state.get(_slot_k)
             if _cached:
                 out_dict[_s_int] = _cached
@@ -5535,7 +5535,7 @@ if True:  # always render — individual cells show "—" if data missing
                     _l = float(_o.get("low")  or 0) or None
                     if _h or _l:
                         out_dict[_s_int] = (_h, _l)
-                        _slot_k = f"proj_hl_{_today_str}_{_s_int}_{option_type}_{_spcl_slot}"
+                        _slot_k = f"proj_hl_{_today_str}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
                         st.session_state[_slot_k] = (_h, _l)
         except Exception:
             pass
@@ -5560,7 +5560,7 @@ if True:  # always render — individual cells show "—" if data missing
                         _l2 = min(_lows2)  if _lows2  else None
                         if _h2 or _l2:
                             out_dict[_s_int] = (_h2, _l2)
-                            _slot_k2 = f"proj_hl_{_today_str}_{_s_int}_{option_type}_{_spcl_slot}"
+                            _slot_k2 = f"proj_hl_{_today_str}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
                             st.session_state[_slot_k2] = (_h2, _l2)
             except Exception:
                 pass
