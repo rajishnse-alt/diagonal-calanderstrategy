@@ -5004,6 +5004,43 @@ if not _spcl_pe_l:
 _ce_spcl, _pe_spcl, _proj_pe_low, _proj_pe_high, _proj_ce_low, _proj_ce_high = \
     _calc_spcl(_spcl_ce_h, _spcl_pe_h)
 
+# ── Pre-compute + save SPCL day H/L for the nearest 4 expiries ───────────────
+# Switching the Current Expiry dropdown then renders from cache instead of
+# waiting on a fresh chain + day-H/L round trip. Keys are byte-identical to
+# _spcl_hl_key, so the selected-expiry block above simply finds them warm and
+# every value derived from them (CeSPCL / PeSPCL, the projections, the reversal
+# lines) recomputes for the newly selected expiry with no extra fetch.
+#
+# Guards matter because fetch_chain is NOT st.cache_data — every miss is a real
+# HTTP call:
+#   • skip the selected expiry (just computed above)
+#   • skip any expiry already cached for this 5-min slot
+#   • mark each (expiry, slot) attempted so a persistently failing expiry does
+#     not re-hit the API on every rerun
+_SPCL_PRECOMPUTE_N = 4
+_spcl_pre_sfx      = ("_ceh", "_cel", "_peh", "_pel")
+for _pre_exp in (near_expiries or [])[:_SPCL_PRECOMPUTE_N]:
+    if not token or _pre_exp == near_exp:
+        continue
+    _pre_key = f"spcl_hl_{_today_str}_{_pre_exp}_{_5m_spcl_atm}_{_spcl_slot}"
+    if all(st.session_state.get(_pre_key + _s) for _s in _spcl_pre_sfx):
+        continue
+    _pre_flag = _pre_key + "_tried"
+    if st.session_state.get(_pre_flag):
+        continue
+    st.session_state[_pre_flag] = True
+    try:
+        _pre_raw, _pre_err = fetch_chain(token, _pre_exp)
+        if _pre_err or not _pre_raw:
+            continue
+        # returns (ce_high, ce_low, pe_high, pe_low) — order matches _spcl_pre_sfx
+        for _s, _v in zip(_spcl_pre_sfx,
+                          fetch_atm_day_hl(token, _pre_raw, _5m_spcl_atm)):
+            if _v:
+                st.session_state[_pre_key + _s] = _v
+    except Exception:
+        pass
+
 # Strikes in near expiry whose LTP falls within the SPCL proj Low→High range
 def _strikes_in_range(price_map, lo, hi):
     if not lo or not hi:
