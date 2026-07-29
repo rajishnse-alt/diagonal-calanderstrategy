@@ -5132,6 +5132,43 @@ def _rev_lines(day_h, day_l):
     return _out
 
 
+def _fetch_strike_day_hl(inst_key):
+    """
+    (day_high, day_low, is_prev_day) for one option instrument key.
+
+    VERIFIED 2026-07-29 09:00 IST (pre-market): v3 intraday returns 0 candles
+    for EVERY instrument before 09:15 — index, options and futures alike. The
+    chain carries no OHLC yet either, so on a fresh trading day the REV cells
+    had nothing to work with and rendered "—" until the session opened.
+
+    So: today's session first, then fall back to the previous trading day's
+    dated candles (confirmed 375 x 1-min for these strikes), the same rule
+    _5m_date_used already applies pre-market. Caller marks prev-day data with ᵖ.
+    """
+    if not inst_key:
+        return None, None, False
+    _enc = urllib.parse.quote(inst_key, safe="")
+
+    def _hl(url):
+        try:
+            _r = requests.get(url, headers=hdr(token), timeout=5)
+            _c = (_r.json().get("data") or {}).get("candles") or []
+        except requests.RequestException:
+            return None, None
+        _hs = [float(x[2]) for x in _c if len(x) > 2 and x[2]]
+        _ls = [float(x[3]) for x in _c if len(x) > 3 and x[3]]
+        return (max(_hs) if _hs else None), (min(_ls) if _ls else None)
+
+    _V3 = "https://api.upstox.com/v3/historical-candle"
+    if _mkt_open or _after_close:
+        _h, _l = _hl(f"{_V3}/intraday/{_enc}/minutes/1")
+        if _h or _l:
+            return _h, _l, False
+    _p = _prev_biz_day().strftime("%Y-%m-%d")
+    _h, _l = _hl(f"{_V3}/{_enc}/minutes/1/{_p}/{_p}")
+    return _h, _l, bool(_h or _l)
+
+
 def _spcl_span(day_h, day_l, spcl, fmt_h=None, fmt_l=None):
     """
     CeSPCL / PeSPCL cell: the original "day high | SPCL" pair kept as the first
@@ -5327,26 +5364,52 @@ if True:  # always render — individual cells show "—" if data missing
     # Same two constants the SPCL projections use (_calc_spcl), applied to the
     # strike's OWN day range instead of the ATM day high.
     def _strike_day_hl(s, option_type):
-        """(day_high, day_low) for a strike: _fetch_proj_hl session cache, else chain OHLC."""
+        """
+        (day_high, day_low, is_prev_day) for a strike.
+        Cache → chain OHLC → direct candle fetch. That last step matters:
+        _fetch_proj_hl only runs AFTER this card renders, so on a fresh trading
+        day (and especially pre-market, when nothing has today's data yet) the
+        first two sources are both empty and the cell would show "—".
+        """
         if not s:
-            return None, None
+            return None, None, False
         _si = int(s)
-        _cached = st.session_state.get(f"proj_hl_{_today_str}_{_si}_{option_type}_{_spcl_slot}")
+        _ck = f"proj_hl_{_today_str}_{_si}_{option_type}_{_spcl_slot}"
+        _cached = st.session_state.get(_ck)
         if _cached and (_cached[0] or _cached[1]):
-            return _cached[0], _cached[1]
+            return _cached[0], _cached[1], bool(st.session_state.get(_ck + "_prev"))
         _hm = near_pe_high if option_type == "PE" else near_ce_high
         _lm = near_pe_low  if option_type == "PE" else near_ce_low
-        return (_hm.get(float(_si)) or _hm.get(_si),
-                _lm.get(float(_si)) or _lm.get(_si))
+        _h = _hm.get(float(_si)) or _hm.get(_si)
+        _l = _lm.get(float(_si)) or _lm.get(_si)
+        if _h or _l:
+            return _h, _l, False
+        # Last resort — resolve the instrument key off the chain and fetch.
+        _opts_field = "call_options" if option_type == "CE" else "put_options"
+        _inst = None
+        for _row in (near_raw or []):
+            if int(float(_row.get("strike_price", 0))) == _si:
+                _inst = (_row.get(_opts_field) or {}).get("instrument_key")
+                break
+        if not _inst:
+            return None, None, False
+        _h, _l, _prev = _fetch_strike_day_hl(_inst)
+        if _h or _l:
+            st.session_state[_ck] = (_h, _l)          # 2-tuple: _fetch_proj_hl reuses it
+            st.session_state[_ck + "_prev"] = _prev
+        return _h, _l, _prev
 
     def _rev_cell(s, option_type, border=True):
         """Right-hand cell: bottom + top reversal for one strike's LTP."""
-        _h, _l = _strike_day_hl(s, option_type)
+        _h, _l, _prev = _strike_day_hl(s, option_type)
         _bd    = "border-bottom:1px solid var(--border);" if border else ""
         _inner = _rev_lines(_h, _l)      # canonical format — see _rev_lines
         if not _inner:
             return (f"<td style='padding:4px 8px;{_bd}color:var(--muted);"
                     f"font-size:9px;'>—</td>")
+        if _prev:   # ᵖ = derived from the previous session, same marker the TK rows use
+            _inner = (f"<div style='color:var(--muted);font-size:8px;'>"
+                      f"ᵖ prev session</div>{_inner}")
         return (f"<td style='font-family:var(--mono);font-size:9px;padding:4px 8px;{_bd}"
                 f"white-space:nowrap;'>{_inner}</td>")
 
