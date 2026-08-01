@@ -1385,7 +1385,7 @@ def fetch_atm_day_high(tok, chain_data, atm_strike, date_str):
     return _day_high(ce_inst), _day_high(pe_inst)
 
 
-def fetch_nifty_extreme_close(tok, date_str=None):
+def fetch_nifty_extreme_close(tok, date_str=None, spot_key=None):
     """
     Pine Script f_spotAnchors() — Confirmed Extreme Close anchor for NIFTY.
     Scans 1-min candles (oldest→newest) using RUNNING SESSION WATERMARKS:
@@ -1398,7 +1398,11 @@ def fetch_nifty_extreme_close(tok, date_str=None):
     date_str=None  → auto-detect: market open → today's intraday;
                      market closed/holiday/weekend → prev biz day historical.
     date_str='YYYY-MM-DD' → force that specific date (historical v2 endpoint).
-    Always uses NIFTY 50 index key regardless of user's selected instrument.
+    [2026-08-01] Now follows the SELECTED instrument via spot_key. It used to
+    hardcode NIFTY, so picking SENSEX left the anchor/ATM on NIFTY values
+    (spot 78,894 with ATM 24,400) and every SPCL cell fell to "—".
+    Verified BSE_INDEX|SENSEX and NSE_INDEX|Nifty Bank both return 375 1-min
+    candles from the same endpoints.
 
     KNOWN FIXES (do not revert):
       [2026-07-17] Bare None → (None, None) on empty candles (TypeError fix)
@@ -1427,8 +1431,9 @@ def fetch_nifty_extreme_close(tok, date_str=None):
                    Anchor = close of LAST candle satisfying either condition.
     """
     try:
-        _nifty_key = "NSE_INDEX|Nifty 50"
-        enc = urllib.parse.quote(_nifty_key, safe="")
+        # spot_key defaults to NIFTY but callers pass the SELECTED instrument —
+        # see the 2026-08-01 note in the docstring.
+        enc = urllib.parse.quote(spot_key or "NSE_INDEX|Nifty 50", safe="")
         hdr = {"Accept": "application/json", "Authorization": f"Bearer {tok}"}
 
         # ── Determine which date/endpoint to use ─────────────────────────────
@@ -3273,7 +3278,7 @@ def _hma_line(strike_int, option_type):
     # for the whole browser session — and session_state survives a code reload.
     # Entries written by the broken last-bar-only logic would have kept showing
     # "—" even after the fix shipped. Bump this whenever the maths below changes.
-    _hk = (f"hma{_HMA_CACHE_V}_{_today_str}_{near_exp}_"
+    _hk = (f"hma{_HMA_CACHE_V}_{_today_str}_{_inst_choice}_{near_exp}_"
            f"{int(strike_int)}_{option_type}_{_spcl_slot}")
     _hit = st.session_state.get(_hk)
     # dir 0 == "no direction found"; never let that stick — recompute instead
@@ -3286,7 +3291,7 @@ def _hma_line(strike_int, option_type):
         if not _vs:
             st.session_state[_hk] = ("", 0)
             return ""
-        _dk  = f"hma_dir_{_today_str}_{near_exp}_{int(strike_int)}_{option_type}"
+        _dk  = f"hma_dir_{_today_str}_{_inst_choice}_{near_exp}_{int(strike_int)}_{option_type}"
         _dir = 0
         for _i in range(_HMA_TREND_LEN, len(_vs)):          # mirrors Pine's per-bar var
             _w = _vs[_i - _HMA_TREND_LEN: _i + 1]
@@ -3945,11 +3950,11 @@ _5m_date_used  = (
     _today_ist      if (_mkt_open or _after_close)   # today (live or just closed)
     else _prev_biz_day()                              # weekend / holiday / pre-market
 )
-_5m_key        = f"nifty_5m_high_{_5m_date_used.isoformat()}"
+_5m_key        = f"idx_5m_high_{_inst_choice}_{_5m_date_used.isoformat()}"
 _nifty_5m_high = st.session_state.get(_5m_key)
-_5m_close_key  = f"nifty_5m_close_{_5m_date_used.isoformat()}"
+_5m_close_key  = f"idx_5m_close_{_inst_choice}_{_5m_date_used.isoformat()}"
 _nifty_5m_close = st.session_state.get(_5m_close_key)
-_5m_low_key    = f"nifty_5m_low_{_5m_date_used.isoformat()}"
+_5m_low_key    = f"idx_5m_low_{_inst_choice}_{_5m_date_used.isoformat()}"
 _nifty_5m_low  = st.session_state.get(_5m_low_key)
 _5m_src_label  = (
     "today (live)"        if _mkt_open    else
@@ -3959,7 +3964,7 @@ _5m_src_label  = (
 
 if (_nifty_5m_high is None or _nifty_5m_close is None or _nifty_5m_low is None) and token:
     try:
-        _enc_key = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")  # always NIFTY index, NOT INSTRUMENT_KEY global
+        _enc_key = urllib.parse.quote(INSTRUMENT_KEY, safe="")   # selected instrument (NIFTY / BANKNIFTY / SENSEX)
         _hdr5    = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
         # ══ ENDPOINT RULES — VERIFIED BY DIRECT PROBE ON 2026-07-28 ═══════════
         # Measured against NSE_INDEX|Nifty 50 (all HTTP 200; the difference is
@@ -4048,7 +4053,7 @@ if (_nifty_5m_high is None or _nifty_5m_close is None or _nifty_5m_low is None) 
 # Try v3 intraday first (has today's data live AND after-close); fall back to v2 historical.
 if _nifty_5m_close is None and token:
     try:
-        _enc_nf = urllib.parse.quote("NSE_INDEX|Nifty 50", safe="")
+        _enc_nf = urllib.parse.quote(INSTRUMENT_KEY, safe="")
         _hdr_nf = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
         _d_nf   = _5m_date_used.strftime("%Y-%m-%d")
         # Safety net for the close alone. Same today→intraday / past→dated rule as
@@ -5028,19 +5033,19 @@ _anchor_mode = st.selectbox(
 _ec_direction = "UP"   # direction of confirmed extreme (UP/DN); only used for Extreme Close
 if _anchor_mode == "Extreme Close":
     # Fetch confirmed extreme close from 1-min NIFTY candles (NOT cached intraday)
-    _ec_cache_key = f"nifty_ec_{_5m_date_used.isoformat()}"
+    _ec_cache_key = f"idx_ec_{_inst_choice}_{_5m_date_used.isoformat()}"
     _ec_dir_key   = _ec_cache_key + "_dir"
     if _mkt_open:
         # Always recompute during market hours (anchor moves as candles form)
         _nifty_extreme_close, _ec_direction = (
-            fetch_nifty_extreme_close(token) if token else (None, "UP")
+            fetch_nifty_extreme_close(token, spot_key=INSTRUMENT_KEY) if token else (None, "UP")
         )
     else:
         _nifty_extreme_close = st.session_state.get(_ec_cache_key)
         _ec_direction        = st.session_state.get(_ec_dir_key, "UP")
         if _nifty_extreme_close is None and token:
             _d_ec = _5m_date_used.strftime("%Y-%m-%d")
-            _nifty_extreme_close, _ec_direction = fetch_nifty_extreme_close(token, date_str=_d_ec)
+            _nifty_extreme_close, _ec_direction = fetch_nifty_extreme_close(token, date_str=_d_ec, spot_key=INSTRUMENT_KEY)
             if _nifty_extreme_close:
                 st.session_state[_ec_cache_key] = _nifty_extreme_close
                 st.session_state[_ec_dir_key]   = _ec_direction
@@ -5058,8 +5063,8 @@ _5m_spcl_atm  = (
     else (_open_atm if _open_atm else atm)
 )
 # Key WITHOUT anchor label — same ATM strike always reuses the same cached 5-min fetch
-_5m_opt_key   = f"atm_5m_h_{_today_str}_{near_exp}_{_5m_spcl_atm}"
-_5m_opt_c_key = f"atm_5m_c_{_today_str}_{near_exp}_{_5m_spcl_atm}"
+_5m_opt_key   = f"atm_5m_h_{_today_str}_{_inst_choice}_{near_exp}_{_5m_spcl_atm}"
+_5m_opt_c_key = f"atm_5m_c_{_today_str}_{_inst_choice}_{near_exp}_{_5m_spcl_atm}"
 # After market closes, use cached value to avoid repeated API calls.
 # During market hours: always fetch fresh (avoids stale-key bugs & ensures 9:20 candle is latest).
 _now_ist_5m   = datetime.now(IST)
@@ -5121,7 +5126,7 @@ _spcl_slot = (
     .replace(minute=(_now_ist_spcl.minute // 5) * 5)
     .strftime("%H%M")
 ) if _mkt_open else "final"
-_spcl_hl_key = f"spcl_hl_{_today_str}_{near_exp}_{_5m_spcl_atm}_{_spcl_slot}"
+_spcl_hl_key = f"spcl_hl_{_today_str}_{_inst_choice}_{near_exp}_{_5m_spcl_atm}_{_spcl_slot}"
 
 _spcl_ce_h = st.session_state.get(_spcl_hl_key + "_ceh")
 _spcl_pe_h = st.session_state.get(_spcl_hl_key + "_peh")
@@ -5186,7 +5191,7 @@ _spcl_pre_sfx      = ("_ceh", "_cel", "_peh", "_pel")
 for _pre_exp in (near_expiries or [])[:_SPCL_PRECOMPUTE_N]:
     if not token or _pre_exp == near_exp:
         continue
-    _pre_key = f"spcl_hl_{_today_str}_{_pre_exp}_{_5m_spcl_atm}_{_spcl_slot}"
+    _pre_key = f"spcl_hl_{_today_str}_{_inst_choice}_{_pre_exp}_{_5m_spcl_atm}_{_spcl_slot}"
     if all(st.session_state.get(_pre_key + _s) for _s in _spcl_pre_sfx):
         continue
     _pre_flag = _pre_key + "_tried"
@@ -5521,7 +5526,7 @@ if True:  # always render — individual cells show "—" if data missing
     # Lock projection strikes when using "First 5m High" anchor so they
     # don't shift as option LTPs fluctuate during the day.
     if _anchor_mode == "First 5m High" and _5m_spcl_atm:
-        _proj_lock_key = f"proj_best_strikes_{_today_str}_{near_exp}_{_5m_spcl_atm}"
+        _proj_lock_key = f"proj_best_strikes_{_today_str}_{_inst_choice}_{near_exp}_{_5m_spcl_atm}"
         _locked_best = st.session_state.get(_proj_lock_key)
         if _locked_best:
             _best_pe_s, _best_pe_ltp, _best_ce_s, _best_ce_ltp = _locked_best
@@ -5553,7 +5558,7 @@ if True:  # always render — individual cells show "—" if data missing
                 format_func=_strike_lbl(_auto_pe_s),
                 # auto strike in the key: when auto moves the options move with
                 # it, so a stale pick can never sit outside the new list
-                key=f"pe_strike_pick_{_today_str}_{near_exp}_{_auto_pe_s}",
+                key=f"pe_strike_pick_{_today_str}_{_inst_choice}_{near_exp}_{_auto_pe_s}",
             )
             _best_pe_ltp = near_pe.get(float(_best_pe_s)) or near_pe.get(_best_pe_s) or 0.0
     with _pick_ce_col:
@@ -5562,7 +5567,7 @@ if True:  # always render — individual cells show "—" if data missing
             _best_ce_s = st.selectbox(
                 "CE strike — auto ±2", _ce_opts, index=2,
                 format_func=_strike_lbl(_auto_ce_s),
-                key=f"ce_strike_pick_{_today_str}_{near_exp}_{_auto_ce_s}",
+                key=f"ce_strike_pick_{_today_str}_{_inst_choice}_{near_exp}_{_auto_ce_s}",
             )
             _best_ce_ltp = near_ce.get(float(_best_ce_s)) or near_ce.get(_best_ce_s) or 0.0
 
@@ -5614,7 +5619,7 @@ if True:  # always render — individual cells show "—" if data missing
         if not s:
             return None, None, False
         _si = int(s)
-        _ck = f"proj_hl_{_today_str}_{near_exp}_{_si}_{option_type}_{_spcl_slot}"
+        _ck = f"proj_hl_{_today_str}_{_inst_choice}_{near_exp}_{_si}_{option_type}_{_spcl_slot}"
         _cached = st.session_state.get(_ck)
         if _cached and (_cached[0] or _cached[1]):
             return _cached[0], _cached[1], bool(st.session_state.get(_ck + "_prev"))
@@ -5709,7 +5714,7 @@ if True:  # always render — individual cells show "—" if data missing
     # Lock display strike lists for "First 5m High" anchor — prevents the
     # range-strikes list from shifting as live LTPs move in/out of range.
     if _anchor_mode == "First 5m High" and _5m_spcl_atm:
-        _proj_disp_key = f"proj_disp_strikes_{_today_str}_{near_exp}_{_5m_spcl_atm}"
+        _proj_disp_key = f"proj_disp_strikes_{_today_str}_{_inst_choice}_{near_exp}_{_5m_spcl_atm}"
         _locked_disp = st.session_state.get(_proj_disp_key)
         if _locked_disp:
             _pe_display_strikes, _ce_display_strikes = _locked_disp
@@ -5737,7 +5742,7 @@ if True:  # always render — individual cells show "—" if data missing
             _s_int = int(_s)
             if _s_int in out_dict:
                 continue
-            _slot_k = f"proj_hl_{_today_str}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
+            _slot_k = f"proj_hl_{_today_str}_{_inst_choice}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
             _cached = st.session_state.get(_slot_k)
             if _cached:
                 out_dict[_s_int] = _cached
@@ -5775,7 +5780,7 @@ if True:  # always render — individual cells show "—" if data missing
                     _l = float(_o.get("low")  or 0) or None
                     if _h or _l:
                         out_dict[_s_int] = (_h, _l)
-                        _slot_k = f"proj_hl_{_today_str}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
+                        _slot_k = f"proj_hl_{_today_str}_{_inst_choice}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
                         st.session_state[_slot_k] = (_h, _l)
         except Exception:
             pass
@@ -5800,7 +5805,7 @@ if True:  # always render — individual cells show "—" if data missing
                         _l2 = min(_lows2)  if _lows2  else None
                         if _h2 or _l2:
                             out_dict[_s_int] = (_h2, _l2)
-                            _slot_k2 = f"proj_hl_{_today_str}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
+                            _slot_k2 = f"proj_hl_{_today_str}_{_inst_choice}_{near_exp}_{_s_int}_{option_type}_{_spcl_slot}"
                             st.session_state[_slot_k2] = (_h2, _l2)
             except Exception:
                 pass
