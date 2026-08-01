@@ -1,0 +1,26 @@
+{
+  "instrument": "SENSEX",
+  "generated_at": "2026-08-01T22:21:57+05:30",
+  "spot": 78034.57,
+  "horizon_bars": 75,
+  "bar_minutes": 5,
+  "model": {
+    "valid_auc": 0.7679579862905166,
+    "valid_brier": 0.1955186512512836,
+    "base_rate": 0.3612549182025264,
+    "trained_through": "2026-07-30 15:25:00",
+    "rows": 38476
+  },
+  "legs": [
+    {
+      "strike": 24200.0,
+      "opt_type": "PE",
+      "error": "contract not found"
+    },
+    {
+      "strike": 24500.0,
+      "opt_type": "CE",
+      "error": "contract not found"
+    }
+  ]
+}
