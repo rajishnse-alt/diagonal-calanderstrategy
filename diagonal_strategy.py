@@ -3164,6 +3164,127 @@ def _calc_spcl(ce_h: float, pe_h: float):
     return ce_spcl, pe_spcl, proj_pe_low, proj_pe_high, proj_ce_low, proj_ce_high
 
 
+# ── HMA trend (port of Raj_OPT_Kit PART 3f) ─────────────────────────────────
+# Pine: ta.hma(close, 50) on the 5-min series of the TARGET STRIKE'S OWN
+# contract, with direction flipping only when ta.rising / ta.falling holds for
+# hmaTrendLength bars — so single-bar noise does not flip the arrow.
+_HMA_LENGTH    = 50   # Pine hmaLength
+_HMA_TREND_LEN = 3    # Pine hmaTrendLength
+_HMA_TF        = 5    # Pine hmaTF ("5")
+
+
+def _wma(vals, n):
+    """Weighted MA over the last n of vals (oldest→newest). None if too short."""
+    if n <= 0 or len(vals) < n:
+        return None
+    _w = vals[-n:]
+    return sum(v * (i + 1) for i, v in enumerate(_w)) / (n * (n + 1) / 2.0)
+
+
+def _hma_series(closes, length=_HMA_LENGTH, count=1):
+    """
+    Last `count` Hull MA values, oldest→newest. [] when there is not enough data.
+    Pine: wma(2*wma(src, length/2) - wma(src, length), round(sqrt(length)))
+    with length/2 as INTEGER division, matching Pine's int `length`.
+    """
+    n = int(length)
+    if n < 2 or count < 1:
+        return []
+    _half = n // 2
+    _sq   = int(round(math.sqrt(n)))
+    _need = _sq + count - 1                     # raw values required
+    if len(closes) < n + _need - 1:
+        return []
+    _raw = []
+    for _j in range(len(closes) - _need, len(closes)):
+        _seg = closes[: _j + 1]
+        _wh, _wf = _wma(_seg, _half), _wma(_seg, n)
+        if _wh is None or _wf is None:
+            return []
+        _raw.append(2 * _wh - _wf)
+    _out = []
+    for _k in range(count):
+        _v = _wma(_raw[: _need - count + 1 + _k], _sq)
+        if _v is None:
+            return []
+        _out.append(_v)
+    return _out
+
+
+def _fetch_opt_5m_closes(inst_key, days=10):
+    """
+    5-min closes for an option, oldest→newest.
+    Dated endpoint for history (it EXCLUDES the current day), plus intraday for
+    today's live session — the same split verified for every other fetch here.
+    """
+    if not inst_key:
+        return []
+    _enc = urllib.parse.quote(inst_key, safe="")
+    _V3  = "https://api.upstox.com/v3/historical-candle"
+
+    def _get(url):
+        try:
+            _r = requests.get(url, headers=hdr(token), timeout=6)
+            return (_r.json().get("data") or {}).get("candles") or []
+        except requests.RequestException:
+            return []
+
+    _to   = datetime.now(IST).date()
+    _from = _to - timedelta(days=days)
+    _c    = _get(f"{_V3}/{_enc}/minutes/{_HMA_TF}/{_to}/{_from}")   # newest-first
+    _c    = list(reversed(_c))                                      # → oldest-first
+    if _mkt_open or _after_close:
+        _c += list(reversed(_get(f"{_V3}/intraday/{_enc}/minutes/{_HMA_TF}")))
+    return [float(x[4]) for x in _c if len(x) > 4 and x[4] is not None]
+
+
+def _opt_inst_key(strike_int, option_type):
+    """Instrument key for a strike in the near chain (same lookup _fetch_proj_hl uses)."""
+    _f = "call_options" if option_type == "CE" else "put_options"
+    for _row in (near_raw or []):
+        try:
+            if int(float(_row.get("strike_price", 0))) == int(strike_int):
+                return (_row.get(_f) or {}).get("instrument_key")
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _hma_line(strike_int, option_type):
+    """
+    "HMA:39.97 ▲" for one strike's own contract, coloured by trend.
+    Direction is held in session_state the way Pine holds it in a `var`: it only
+    changes on a confirmed rising/falling run, otherwise the last known one stands.
+    Cached per 5-min slot — this costs up to two HTTP calls on a miss.
+    """
+    if not strike_int or not token:
+        return ""
+    _hk = f"hma_{_today_str}_{near_exp}_{int(strike_int)}_{option_type}_{_spcl_slot}"
+    _hit = st.session_state.get(_hk)
+    if _hit is None:
+        _cl = _fetch_opt_5m_closes(_opt_inst_key(strike_int, option_type))
+        _vs = _hma_series(_cl, _HMA_LENGTH, _HMA_TREND_LEN + 1)   # need 4 for rising(3)
+        if not _vs:
+            st.session_state[_hk] = ("", 0)
+            return ""
+        _rising  = all(_vs[i] > _vs[i - 1] for i in range(1, len(_vs)))
+        _falling = all(_vs[i] < _vs[i - 1] for i in range(1, len(_vs)))
+        _dk = f"hma_dir_{_today_str}_{near_exp}_{int(strike_int)}_{option_type}"
+        if _rising:
+            st.session_state[_dk] = 1
+        elif _falling:
+            st.session_state[_dk] = -1
+        _hit = (f"{_vs[-1]:,.2f}", st.session_state.get(_dk, 0))
+        st.session_state[_hk] = _hit
+    _val, _dir = _hit
+    if not _val:
+        return ""
+    _arrow = "▲" if _dir == 1 else ("▼" if _dir == -1 else "—")
+    _col   = "var(--bull)" if _dir == 1 else ("var(--bear)" if _dir == -1 else "var(--muted)")
+    return (f"<br><span style='color:var(--muted);font-size:8px;'>HMA:</span>"
+            f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>")
+
+
 def _tar_line(proj_high):
     """
     Tg — the projected target sitting above →PE H / →CE H:
@@ -5495,7 +5616,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -5509,7 +5630,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
