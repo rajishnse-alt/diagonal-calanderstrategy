@@ -1,0 +1,45 @@
+{
+  "instrument": "NIFTY",
+  "generated_at": "2026-08-01T22:15:42+05:30",
+  "spot": 24366.7,
+  "horizon_bars": 75,
+  "bar_minutes": 5,
+  "model": {
+    "valid_auc": 0.3561064012533022,
+    "valid_brier": 0.21785553176286593,
+    "base_rate": 0.30825232846626266,
+    "trained_through": "2026-07-30 15:25:00",
+    "rows": 98305
+  },
+  "legs": [
+    {
+      "strike": 24200.0,
+      "opt_type": "PE",
+      "instrument_key": "NSE_FO|65776",
+      "expiry": "2026-08-04",
+      "last_close": 30.8,
+      "target": 40.58,
+      "required_move_pct": 31.75,
+      "p_hit": 0.2613,
+      "as_of_bar": "2026-07-31 15:25:00"
+    },
+    {
+      "strike": 24500.0,
+      "opt_type": "CE",
+      "instrument_key": "NSE_FO|65860",
+      "expiry": "2026-08-04",
+      "last_close": 31.15,
+      "target": 34.7,
+      "required_move_pct": 11.4,
+      "p_hit": 0.2805,
+      "as_of_bar": "2026-07-31 15:25:00"
+    }
+  ],
+  "comparison": {
+    "higher": "24500 CE",
+    "higher_p": 0.2805,
+    "lower": "24200 PE",
+    "lower_p": 0.2613,
+    "ratio": 1.07
+  }
+}
