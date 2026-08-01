@@ -3256,6 +3256,14 @@ def _hma_line(strike_int, option_type):
     Direction is held in session_state the way Pine holds it in a `var`: it only
     changes on a confirmed rising/falling run, otherwise the last known one stands.
     Cached per 5-min slot — this costs up to two HTTP calls on a miss.
+
+    Direction is resolved the way Pine does it, and this is the subtle part:
+    Pine walks EVERY bar and updates its `var` whenever a rising/falling run
+    completes, so the last known direction stands even when the most recent
+    bars are flat. Evaluating only the final bar (the first version of this)
+    left any strike whose last 4 HMA values were not monotonic showing "—" —
+    which is exactly what happened as soon as a non-auto strike was picked.
+    So: build a long HMA series and walk it forward, latching the direction.
     """
     if not strike_int or not token:
         return ""
@@ -3263,18 +3271,24 @@ def _hma_line(strike_int, option_type):
     _hit = st.session_state.get(_hk)
     if _hit is None:
         _cl = _fetch_opt_5m_closes(_opt_inst_key(strike_int, option_type))
-        _vs = _hma_series(_cl, _HMA_LENGTH, _HMA_TREND_LEN + 1)   # need 4 for rising(3)
+        # As many HMA values as the data supports (capped), not just the last 4
+        _cap = len(_cl) - _HMA_LENGTH - int(round(math.sqrt(_HMA_LENGTH))) + 2
+        _cnt = max(_HMA_TREND_LEN + 1, min(250, _cap))
+        _vs  = _hma_series(_cl, _HMA_LENGTH, _cnt)
         if not _vs:
             st.session_state[_hk] = ("", 0)
             return ""
-        _rising  = all(_vs[i] > _vs[i - 1] for i in range(1, len(_vs)))
-        _falling = all(_vs[i] < _vs[i - 1] for i in range(1, len(_vs)))
-        _dk = f"hma_dir_{_today_str}_{near_exp}_{int(strike_int)}_{option_type}"
-        if _rising:
-            st.session_state[_dk] = 1
-        elif _falling:
-            st.session_state[_dk] = -1
-        _hit = (f"{_vs[-1]:,.2f}", st.session_state.get(_dk, 0))
+        _dk  = f"hma_dir_{_today_str}_{near_exp}_{int(strike_int)}_{option_type}"
+        _dir = 0
+        for _i in range(_HMA_TREND_LEN, len(_vs)):          # mirrors Pine's per-bar var
+            _w = _vs[_i - _HMA_TREND_LEN: _i + 1]
+            if all(_w[j] > _w[j - 1] for j in range(1, len(_w))):
+                _dir = 1
+            elif all(_w[j] < _w[j - 1] for j in range(1, len(_w))):
+                _dir = -1
+        if _dir:
+            st.session_state[_dk] = _dir
+        _hit = (f"{_vs[-1]:,.2f}", _dir or st.session_state.get(_dk, 0))
         st.session_state[_hk] = _hit
     _val, _dir = _hit
     if not _val:
