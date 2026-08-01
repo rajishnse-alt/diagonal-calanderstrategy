@@ -60,7 +60,7 @@ def load_instruments(force: bool = False) -> list:
 
 
 def option_contracts(instrument: str,
-                     expiries_to_scan: int = S.EXPIRIES_TO_SCAN,
+                     expiries_to_scan: int | None = None,
                      spot: float | None = None,
                      all_expiries: bool = False) -> list[dict]:
     """
@@ -71,6 +71,8 @@ def option_contracts(instrument: str,
     and matching the symbol also drags in NIFTYNXT50.
     """
     c = S.cfg(instrument)
+    if expiries_to_scan is None:
+        expiries_to_scan = c.get("expiries", S.EXPIRIES_TO_SCAN)
     today = today_ist()
     rows = []
     for i in load_instruments():

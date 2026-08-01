@@ -36,19 +36,25 @@ INSTRUMENTS = {
         "underlying_key": "NSE_INDEX|Nifty 50",
         "segment":        "NSE_FO",
         "strike_step":    50,
-        "max_strike_dist": 1500,
+        "max_strike_dist": 600,      # +/-12 strikes
+        "expiries":       2,
     },
     "BANKNIFTY": {
         "underlying_key": "NSE_INDEX|Nifty Bank",
         "segment":        "NSE_FO",
         "strike_step":    100,
-        "max_strike_dist": 3000,
+        "max_strike_dist": 1200,     # +/-12 strikes
+        # No weeklies — nearest expiry is monthly. Fewer independent contract
+        # lifecycles per month than NIFTY/SENSEX, so take every live expiry and
+        # let the DAILY archive accumulate breadth over time instead.
+        "expiries":       6,
     },
     "SENSEX": {
         "underlying_key": "BSE_INDEX|SENSEX",
         "segment":        "BSE_FO",
         "strike_step":    100,
-        "max_strike_dist": 3000,
+        "max_strike_dist": 1200,     # +/-12 strikes
+        "expiries":       2,
     },
 }
 DEFAULT_INSTRUMENT = "NIFTY"
@@ -65,7 +71,15 @@ MIN_BARS_PER_CONTRACT = 120
 MAX_SPAN_DAYS = {"minutes": 28, "hours": 90, "days": 2000}   # measured above
 INDEX_HISTORY_DAYS  = 730    # 2 years of 5-min index history
 OPTION_HISTORY_DAYS = 730    # capped by each contract's listing date anyway
-EXPIRIES_TO_SCAN    = 6
+EXPIRIES_TO_SCAN    = 2      # per-instrument override in INSTRUMENTS["expiries"]
+
+# ARCHIVE SIZE IS THE BINDING CONSTRAINT, not runtime.
+# Measured: month-partitioned parquet costs ~63 KB per contract-month. The
+# original scope (+/-1500-3000 points, 6 expiries = 3,736 contracts) projected
+# to ~228 MB/month, i.e. ~2.7 GB/year committed to git — past GitHub's 1 GB
+# soft limit inside five months, and git history never shrinks.
+# Bounded to strikes that a 75-bar intraday horizon can actually reach and to
+# the nearest expiries, which cuts both the archive and the request count.
 
 # Archive is partitioned by month so a closed month's file never changes again;
 # git then stores it once instead of a new blob on every append.
