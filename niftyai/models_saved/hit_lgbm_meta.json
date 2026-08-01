@@ -1,0 +1,142 @@
+{
+  "features": [
+    "f_atr_rel",
+    "f_bars_left",
+    "f_bb_pos",
+    "f_body",
+    "f_close",
+    "f_dist_hi_12",
+    "f_dist_hi_24",
+    "f_dist_hi_75",
+    "f_dist_lo_12",
+    "f_dist_lo_24",
+    "f_dist_lo_75",
+    "f_dow",
+    "f_dte",
+    "f_ema_rel_12",
+    "f_ema_rel_48",
+    "f_hl_range",
+    "f_hma_rel",
+    "f_hma_slope",
+    "f_idx_ret_24",
+    "f_idx_ret_6",
+    "f_idx_rsi",
+    "f_idx_vol_24",
+    "f_is_ce",
+    "f_log_close",
+    "f_lower_wick",
+    "f_minute_of_day",
+    "f_moneyness",
+    "f_oi_chg_24",
+    "f_oi_chg_6",
+    "f_req_move",
+    "f_ret_1",
+    "f_ret_12",
+    "f_ret_24",
+    "f_ret_3",
+    "f_ret_48",
+    "f_ret_6",
+    "f_rsi",
+    "f_tsi",
+    "f_upper_wick",
+    "f_vol_12",
+    "f_vol_24",
+    "f_vol_48",
+    "f_vol_6",
+    "f_vol_rel"
+  ],
+  "horizon_bars": 75,
+  "bar_minutes": 5,
+  "rows": 124947,
+  "trained_through": "2026-07-30 15:25:00",
+  "valid_auc": 0.739967892207371,
+  "valid_brier": 0.1838530086717627,
+  "base_rate": 0.28433380263663127,
+  "best_iteration": 18,
+  "top_features": [
+    [
+      "f_dte",
+      93928.12949752808
+    ],
+    [
+      "f_req_move",
+      88829.94497680664
+    ],
+    [
+      "f_dow",
+      31778.88087081909
+    ],
+    [
+      "f_close",
+      29149.312118530273
+    ],
+    [
+      "f_is_ce",
+      24854.05788040161
+    ],
+    [
+      "f_dist_hi_75",
+      21078.72706604004
+    ],
+    [
+      "f_dist_lo_75",
+      13278.364776611328
+    ],
+    [
+      "f_moneyness",
+      12814.866863250732
+    ],
+    [
+      "f_idx_vol_24",
+      11257.2045211792
+    ],
+    [
+      "f_ret_48",
+      10692.944557189941
+    ],
+    [
+      "f_idx_ret_24",
+      8682.448219299316
+    ],
+    [
+      "f_bars_left",
+      6038.282852172852
+    ],
+    [
+      "f_tsi",
+      5529.809375762939
+    ],
+    [
+      "f_vol_48",
+      5154.55712890625
+    ],
+    [
+      "f_ema_rel_48",
+      1564.8337097167969
+    ],
+    [
+      "f_minute_of_day",
+      934.4076156616211
+    ],
+    [
+      "f_atr_rel",
+      814.2803115844727
+    ],
+    [
+      "f_vol_12",
+      688.9448051452637
+    ],
+    [
+      "f_rsi",
+      666.7113952636719
+    ],
+    [
+      "f_idx_rsi",
+      664.5232887268066
+    ]
+  ],
+  "threshold_range": [
+    0.05,
+    0.6
+  ]
+}

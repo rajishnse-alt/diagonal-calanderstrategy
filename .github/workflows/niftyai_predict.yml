@@ -1,0 +1,96 @@
+name: NiftyAI prediction
+
+# Runs entirely on GitHub — nothing touches a local machine.
+#
+# Uses ONLY public Upstox endpoints (no access token): /v3/historical-candle
+# and the public instrument dump both answer unauthenticated, verified
+# 2026-08-01. That is what allows this to run unattended.
+#
+# Three jobs in one workflow because they share the archive:
+#   archive  — snapshot candles daily. An option's history disappears from the
+#              API once it expires, so without this the training set can never
+#              grow past the ~1 month the API retains.
+#   train    — rebuild the model from the accumulated dataset (weekly).
+#   predict  — score the current CE/PE legs and commit latest.json.
+
+on:
+  schedule:
+    # 15:45 IST = 10:15 UTC, after the session closes. Predict + archive daily.
+    - cron: "15 10 * * 1-5"
+    # Retrain Saturdays 06:00 UTC, on the week's accumulated archive.
+    - cron: "0 6 * * 6"
+  workflow_dispatch:
+    inputs:
+      legs:
+        description: "strike:TYPE:target, comma separated"
+        required: false
+        default: "24200:PE:40.58,24500:CE:34.70"
+      retrain:
+        description: "Rebuild the dataset and retrain before predicting"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: niftyai
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -q lightgbm pandas numpy requests pyarrow scikit-learn
+
+      - name: Build dataset + archive candles
+        # Always archives. Rebuilds the training set on the Saturday cron or on
+        # a manual run with retrain=true.
+        if: github.event.schedule == '0 6 * * 6' || inputs.retrain || github.event_name == 'schedule'
+        run: |
+          python niftyai/training/build_dataset.py \
+            --out niftyai/datasets/train.parquet
+
+      - name: Train
+        if: github.event.schedule == '0 6 * * 6' || inputs.retrain
+        run: python niftyai/training/train.py --data niftyai/datasets/train.parquet
+
+      - name: Predict
+        # Skipped rather than failed when no model is committed yet — the first
+        # scheduled run trains, the ones after it can predict.
+        run: |
+          if [ -f niftyai/models_saved/hit_lgbm.txt ]; then
+            python niftyai/prediction/predict.py \
+              --legs "${{ inputs.legs || '24200:PE:40.58,24500:CE:34.70' }}"
+          else
+            echo "no model committed yet — skipping predict (run with retrain=true first)"
+          fi
+
+      - name: Commit results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A niftyai/datasets niftyai/models_saved niftyai/prediction || true
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "NiftyAI: prediction/dataset update $(date -u '+%Y-%m-%d %H:%M UTC')"
+            # The repo receives frequent automated commits (PCR log, caches),
+            # so rebase before pushing or this races them and fails.
+            for i in 1 2 3; do
+              git pull --rebase origin "${GITHUB_REF_NAME}" && \
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+              echo "push attempt $i failed, retrying"
+              sleep 5
+            done
+            exit 1
+          fi

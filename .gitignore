@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 data/
+
+# NiftyAI — built artefacts, not source
+niftyai/datasets/train.parquet
+niftyai/datasets/train.csv
