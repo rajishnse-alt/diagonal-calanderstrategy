@@ -3171,6 +3171,7 @@ def _calc_spcl(ce_h: float, pe_h: float):
 _HMA_LENGTH    = 50   # Pine hmaLength
 _HMA_TREND_LEN = 3    # Pine hmaTrendLength
 _HMA_TF        = 5    # Pine hmaTF ("5")
+_HMA_CACHE_V   = 2    # bump to invalidate cached HMA results (see _hma_line)
 
 
 def _wma(vals, n):
@@ -3267,9 +3268,16 @@ def _hma_line(strike_int, option_type):
     """
     if not strike_int or not token:
         return ""
-    _hk = f"hma_{_today_str}_{near_exp}_{int(strike_int)}_{option_type}_{_spcl_slot}"
+    # _HMA_CACHE_V is part of the key on purpose. While the market is closed
+    # _spcl_slot is the constant "final", so a cached entry would otherwise live
+    # for the whole browser session — and session_state survives a code reload.
+    # Entries written by the broken last-bar-only logic would have kept showing
+    # "—" even after the fix shipped. Bump this whenever the maths below changes.
+    _hk = (f"hma{_HMA_CACHE_V}_{_today_str}_{near_exp}_"
+           f"{int(strike_int)}_{option_type}_{_spcl_slot}")
     _hit = st.session_state.get(_hk)
-    if _hit is None:
+    # dir 0 == "no direction found"; never let that stick — recompute instead
+    if _hit is None or (_hit[0] and not _hit[1]):
         _cl = _fetch_opt_5m_closes(_opt_inst_key(strike_int, option_type))
         # As many HMA values as the data supports (capped), not just the last 4
         _cap = len(_cl) - _HMA_LENGTH - int(round(math.sqrt(_HMA_LENGTH))) + 2
