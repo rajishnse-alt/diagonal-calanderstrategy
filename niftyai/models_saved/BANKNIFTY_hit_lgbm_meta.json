@@ -1,0 +1,143 @@
+{
+  "instrument": "BANKNIFTY",
+  "features": [
+    "f_atr_rel",
+    "f_bars_left",
+    "f_bb_pos",
+    "f_body",
+    "f_close",
+    "f_dist_hi_12",
+    "f_dist_hi_24",
+    "f_dist_hi_75",
+    "f_dist_lo_12",
+    "f_dist_lo_24",
+    "f_dist_lo_75",
+    "f_dow",
+    "f_dte",
+    "f_ema_rel_12",
+    "f_ema_rel_48",
+    "f_hl_range",
+    "f_hma_rel",
+    "f_hma_slope",
+    "f_idx_ret_24",
+    "f_idx_ret_6",
+    "f_idx_rsi",
+    "f_idx_vol_24",
+    "f_is_ce",
+    "f_log_close",
+    "f_lower_wick",
+    "f_minute_of_day",
+    "f_moneyness",
+    "f_oi_chg_24",
+    "f_oi_chg_6",
+    "f_req_move",
+    "f_ret_1",
+    "f_ret_12",
+    "f_ret_24",
+    "f_ret_3",
+    "f_ret_48",
+    "f_ret_6",
+    "f_rsi",
+    "f_tsi",
+    "f_upper_wick",
+    "f_vol_12",
+    "f_vol_24",
+    "f_vol_48",
+    "f_vol_6",
+    "f_vol_rel"
+  ],
+  "horizon_bars": 75,
+  "bar_minutes": 5,
+  "rows": 102918,
+  "trained_through": "2026-07-30 15:25:00",
+  "valid_auc": 0.7208546018000672,
+  "valid_brier": 0.12152464962242251,
+  "base_rate": 0.14373836126629422,
+  "best_iteration": 13,
+  "top_features": [
+    [
+      "f_req_move",
+      65095.45950508118
+    ],
+    [
+      "f_dte",
+      38167.17654418945
+    ],
+    [
+      "f_close",
+      32054.01187324524
+    ],
+    [
+      "f_dow",
+      8766.29956817627
+    ],
+    [
+      "f_is_ce",
+      8088.229198455811
+    ],
+    [
+      "f_dist_lo_75",
+      7659.379299163818
+    ],
+    [
+      "f_dist_hi_75",
+      6087.500293731689
+    ],
+    [
+      "f_idx_vol_24",
+      6056.906787872314
+    ],
+    [
+      "f_ret_48",
+      3308.324119567871
+    ],
+    [
+      "f_moneyness",
+      2114.4668045043945
+    ],
+    [
+      "f_vol_48",
+      1985.947898864746
+    ],
+    [
+      "f_bars_left",
+      1751.5838012695312
+    ],
+    [
+      "f_ema_rel_48",
+      1253.138687133789
+    ],
+    [
+      "f_atr_rel",
+      1166.2503051757812
+    ],
+    [
+      "f_idx_rsi",
+      1015.654899597168
+    ],
+    [
+      "f_idx_ret_24",
+      573.8265991210938
+    ],
+    [
+      "f_tsi",
+      421.6855926513672
+    ],
+    [
+      "f_minute_of_day",
+      407.2114944458008
+    ],
+    [
+      "f_vol_24",
+      357.11059951782227
+    ],
+    [
+      "f_ret_24",
+      282.3154983520508
+    ]
+  ],
+  "threshold_range": [
+    0.05,
+    0.6
+  ]
+}

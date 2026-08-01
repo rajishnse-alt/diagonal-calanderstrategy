@@ -1,0 +1,26 @@
+{
+  "instrument": "BANKNIFTY",
+  "generated_at": "2026-08-01T22:19:28+05:30",
+  "spot": 57214.1,
+  "horizon_bars": 75,
+  "bar_minutes": 5,
+  "model": {
+    "valid_auc": 0.7208546018000672,
+    "valid_brier": 0.12152464962242251,
+    "base_rate": 0.14373836126629422,
+    "trained_through": "2026-07-30 15:25:00",
+    "rows": 102918
+  },
+  "legs": [
+    {
+      "strike": 24200.0,
+      "opt_type": "PE",
+      "error": "contract not found"
+    },
+    {
+      "strike": 24500.0,
+      "opt_type": "CE",
+      "error": "contract not found"
+    }
+  ]
+}
