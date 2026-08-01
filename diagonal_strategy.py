@@ -5506,16 +5506,55 @@ if True:  # always render — individual cells show "—" if data missing
         elif _best_pe_s and _best_ce_s:
             st.session_state[_proj_lock_key] = (_best_pe_s, _best_pe_ltp, _best_ce_s, _best_ce_ltp)
 
-    _pe_h_strike = (
-        f"<br><span style='color:var(--muted);font-size:9px;'>"
-        f"↑{_best_pe_s} ₹{_best_pe_ltp:.1f}</span>"
-        if _best_pe_s else ""
-    )
-    _ce_h_strike = (
-        f"<br><span style='color:var(--muted);font-size:9px;'>"
-        f"↑{_best_ce_s} ₹{_best_ce_ltp:.1f}</span>"
-        if _best_ce_s else ""
-    )
+    # ── Strike picker: the auto strike ±2 steps ─────────────────────────────
+    # Placed here, after the lock and before anything strike-specific is built,
+    # so one selection flows into all three: the ↑strike ₹LTP line, the HMA and
+    # the reversal cell. The projections themselves are cross-leg (derived from
+    # the ATM day high, not this strike) and deliberately do not move.
+    _auto_pe_s, _auto_ce_s = _best_pe_s, _best_ce_s
+
+    def _strike_opts(auto_s):
+        _stp = int(STEP)
+        return [int(auto_s) + _k * _stp for _k in (-2, -1, 0, 1, 2)] if auto_s else []
+
+    def _strike_lbl(auto_s):
+        _a, _stp = int(auto_s), int(STEP)
+        return lambda v: (f"{v}  ● auto" if v == _a
+                          else f"{v}  ({(v - _a) // _stp:+d})")
+
+    _pick_pe_col, _pick_ce_col = st.columns(2)
+    with _pick_pe_col:
+        _pe_opts = _strike_opts(_auto_pe_s)
+        if _pe_opts:
+            _best_pe_s = st.selectbox(
+                "PE strike — auto ±2", _pe_opts, index=2,
+                format_func=_strike_lbl(_auto_pe_s),
+                # auto strike in the key: when auto moves the options move with
+                # it, so a stale pick can never sit outside the new list
+                key=f"pe_strike_pick_{_today_str}_{near_exp}_{_auto_pe_s}",
+            )
+            _best_pe_ltp = near_pe.get(float(_best_pe_s)) or near_pe.get(_best_pe_s) or 0.0
+    with _pick_ce_col:
+        _ce_opts = _strike_opts(_auto_ce_s)
+        if _ce_opts:
+            _best_ce_s = st.selectbox(
+                "CE strike — auto ±2", _ce_opts, index=2,
+                format_func=_strike_lbl(_auto_ce_s),
+                key=f"ce_strike_pick_{_today_str}_{near_exp}_{_auto_ce_s}",
+            )
+            _best_ce_ltp = near_ce.get(float(_best_ce_s)) or near_ce.get(_best_ce_s) or 0.0
+
+    def _h_strike_line(s, ltp, auto_s):
+        """↑strike ₹LTP, with a marker when it is not the auto-picked strike."""
+        if not s:
+            return ""
+        _px  = f"₹{ltp:.1f}" if ltp else "₹—"
+        _tag = "" if (auto_s and int(s) == int(auto_s)) else " ⇄"
+        return (f"<br><span style='color:var(--muted);font-size:9px;'>"
+                f"↑{s} {_px}{_tag}</span>")
+
+    _pe_h_strike = _h_strike_line(_best_pe_s, _best_pe_ltp, _auto_pe_s)
+    _ce_h_strike = _h_strike_line(_best_ce_s, _best_ce_ltp, _auto_ce_s)
 
     # FCAHL / FCBHL / NFC label: compares current ATM LTP vs day H and L
     def _fc_label(ltp, day_h, day_l):
