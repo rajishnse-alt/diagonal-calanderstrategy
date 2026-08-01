@@ -23,9 +23,11 @@ import pandas as pd
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from niftyai.config import settings as S              # noqa: E402
-from niftyai.data import upstox                        # noqa: E402
-from niftyai.features import engineer                  # noqa: E402
-from niftyai.training.build_dataset import to_frame    # noqa: E402
+from niftyai.data import cache                          # noqa: E402
+from niftyai.data import upstox                         # noqa: E402
+from niftyai.features import engineer                   # noqa: E402
+
+to_frame = cache.to_frame
 
 
 def resolve(strike: float, opt_type: str, contracts: list[dict]) -> dict | None:
@@ -39,11 +41,18 @@ def main():
     import lightgbm as lgb
 
     ap = argparse.ArgumentParser()
+    ap.add_argument("--instrument", default=S.DEFAULT_INSTRUMENT)
     ap.add_argument("--legs", required=True, help="strike:TYPE:target, comma separated")
-    ap.add_argument("--model", default=S.MODEL_PATH)
-    ap.add_argument("--meta", default=S.META_PATH)
-    ap.add_argument("--out", default=S.PRED_PATH)
+    ap.add_argument("--model", default=None)
+    ap.add_argument("--meta", default=None)
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
+
+    inst = a.instrument.upper()
+    P = S.paths(inst)
+    a.model = a.model or P["model"]
+    a.meta  = a.meta  or P["meta"]
+    a.out   = a.out   or P["pred"]
 
     if not os.path.exists(a.model):
         raise SystemExit(f"no model at {a.model} — run niftyai/training/train.py first")
@@ -56,11 +65,13 @@ def main():
         s, t, tgt = part.split(":")
         legs.append((float(s), t.upper(), float(tgt)))
 
-    idx = to_frame(upstox.index_candles())
+    ikey = S.cfg(inst)["underlying_key"]
+    idx  = cache.get(inst, ikey, days=S.INDEX_HISTORY_DAYS, is_index=True)
     spot = float(idx["close"].iloc[-1]) if not idx.empty else None
-    contracts = upstox.option_contracts(max_strike_dist=S.MAX_STRIKE_DIST, spot=spot)
+    contracts = upstox.option_contracts(inst, spot=spot)
 
     out = {
+        "instrument": inst,
         "generated_at": datetime.now(upstox.IST).isoformat(timespec="seconds"),
         "spot": spot,
         "horizon_bars": S.HORIZON_BARS,
@@ -76,7 +87,7 @@ def main():
             out["legs"].append({"strike": strike, "opt_type": opt_type,
                                 "error": "contract not found"})
             continue
-        df = to_frame(upstox.candles(c["instrument_key"]))
+        df = cache.get(inst, c["instrument_key"], days=S.OPTION_HISTORY_DAYS)
         if df.empty:
             out["legs"].append({"strike": strike, "opt_type": opt_type,
                                 "error": "no candles"})

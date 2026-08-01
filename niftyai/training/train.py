@@ -63,11 +63,19 @@ def main():
     import lightgbm as lgb
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="niftyai/datasets/train.parquet")
-    ap.add_argument("--model-out", default=S.MODEL_PATH)
-    ap.add_argument("--meta-out", default=S.META_PATH)
+    ap.add_argument("--instrument", default=S.DEFAULT_INSTRUMENT)
+    ap.add_argument("--data", default=None)
+    ap.add_argument("--model-out", default=None)
+    ap.add_argument("--meta-out", default=None)
     ap.add_argument("--seed", type=int, default=42)
     a = ap.parse_args()
+
+    inst = a.instrument.upper()
+    P = S.paths(inst)
+    a.data      = a.data      or P["dataset"]
+    a.model_out = a.model_out or P["model"]
+    a.meta_out  = a.meta_out  or P["meta"]
+    print(f"[{inst}]")
 
     rng = np.random.default_rng(a.seed)
     df = load(a.data).sort_values("ts").reset_index(drop=True)
@@ -83,10 +91,21 @@ def main():
         feats.append("f_req_move")
     feats = sorted(set(feats))
 
-    # time-ordered split on the TIMESTAMP, so no contract straddles the boundary
-    cut_ts = df["ts"].quantile(1 - S.VALID_FRACTION)
-    tr, va = df[df["ts"] < cut_ts], df[df["ts"] >= cut_ts]
-    print(f"train={len(tr):,}  valid={len(va):,}  cut at {cut_ts}")
+    # Time-ordered split with a PURGE GAP.
+    #
+    # A plain cut leaks: row t's label is max(high[t+1 .. t+HORIZON]) , so any
+    # training row within HORIZON bars of the boundary has a label computed from
+    # bars that live in the validation period. Measured on SENSEX, the unpurged
+    # split reported AUC 0.945 with predictions of 0.72 against an actual 0.44 —
+    # the score was reading its own answers. Dropping the overlap is what makes
+    # the number mean anything.
+    cut_ts  = df["ts"].quantile(1 - S.VALID_FRACTION)
+    purge   = pd.Timedelta(minutes=S.HORIZON_BARS * S.BAR_MINUTES)
+    tr = df[df["ts"] < cut_ts - purge]
+    va = df[df["ts"] >= cut_ts]
+    dropped = len(df) - len(tr) - len(va)
+    print(f"train={len(tr):,}  valid={len(va):,}  cut at {cut_ts}  "
+          f"(purged {dropped:,} rows within {purge} of the cut)")
     if len(va) < 500:
         raise SystemExit("validation split too small — collect more data first")
 
@@ -124,6 +143,7 @@ def main():
     imp = sorted(zip(feats, booster.feature_importance("gain")),
                  key=lambda x: -x[1])[:20]
     meta = {
+        "instrument": inst,
         "features": feats,
         "horizon_bars": S.HORIZON_BARS,
         "bar_minutes": S.BAR_MINUTES,

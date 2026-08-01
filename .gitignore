@@ -7,3 +7,5 @@ data/
 # NiftyAI — built artefacts, not source
 niftyai/datasets/train.parquet
 niftyai/datasets/train.csv
+niftyai/datasets/*_train.parquet
+niftyai/datasets/*_train.csv

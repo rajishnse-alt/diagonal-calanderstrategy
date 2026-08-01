@@ -1,43 +1,84 @@
 """
 NiftyAI-Pro — prediction module configuration.
 
-SCOPE NOTE: this is the probability engine only, not the full platform. It
-answers one question: given the CE and PE legs on the SPCL card, what is the
-probability each one's premium reaches its Tg target within the horizon?
+SCOPE: the probability engine only, not the full platform. It answers one
+question — given a CE/PE leg, what is the probability its premium reaches a
+target within the horizon?
 
-DATA REALITY (measured 2026-08-01, do not assume otherwise):
-  • An option's 5-min history begins at its LISTING date, not N days back.
-    NSE_FO|65852 (24350 CE, exp 2026-08-04) has daily candles from 2026-07-01
-    only; June and May return HTTP 200 with zero candles.
-  • v3 range requests are capped at ~1 month — beyond that the API returns
-    UDAPI1148 "Invalid date range". Harvest in <=30 day chunks.
-  • EXPIRED contracts are dropped from the instrument dump, so their history
-    becomes unreachable. The archive step exists to outlive that.
+═══════════════════════════════════════════════════════════════════════════
+MEASURED API BEHAVIOUR (probed 2026-08-01 — do not assume otherwise)
+═══════════════════════════════════════════════════════════════════════════
+Max span of ONE request, by unit. Exceeding it returns HTTP 400 UDAPI1148
+("Invalid date range"), NOT a truncated result — so backfill must chunk:
+    minutes/5   28d works, 35d fails
+    hours/1     90d works, 100d fails
+    days/1      2000d works (returned 1,358 bars back to 2021-02)
+
+History depth, walking backwards in chunks:
+    INDEX 5-min   available at least 24 months back (1,425 bars at the
+                  24-month mark) -> 2 years of intraday IS reachable
+    INDEX daily   back to 2021
+    OPTION        starts at the contract's LISTING date, nothing earlier.
+                  Near weeklies have ~1 month (NSE_FO|65852 listed 2026-07-01).
+                  Long-dated contracts carry far more: the 2027-06-29 expiry
+                  was listed ~2024-11-01 with 364 daily bars.
+
+EXPIRED contracts are dropped from the instrument dump entirely, so their
+history becomes unreachable. That is why the archive exists.
+═══════════════════════════════════════════════════════════════════════════
 """
 
-# ── Underlying ───────────────────────────────────────────────────────────────
-UNDERLYING_KEY = "NSE_INDEX|Nifty 50"
-SEGMENT        = "NSE_FO"
-STRIKE_STEP    = 50
+# ── Instruments ──────────────────────────────────────────────────────────────
+# Verified live 2026-08-01. Note SENSEX options are on BSE_FO, not NSE_FO —
+# a single hardcoded segment silently returns ZERO contracts for it.
+INSTRUMENTS = {
+    "NIFTY": {
+        "underlying_key": "NSE_INDEX|Nifty 50",
+        "segment":        "NSE_FO",
+        "strike_step":    50,
+        "max_strike_dist": 1500,
+    },
+    "BANKNIFTY": {
+        "underlying_key": "NSE_INDEX|Nifty Bank",
+        "segment":        "NSE_FO",
+        "strike_step":    100,
+        "max_strike_dist": 3000,
+    },
+    "SENSEX": {
+        "underlying_key": "BSE_INDEX|SENSEX",
+        "segment":        "BSE_FO",
+        "strike_step":    100,
+        "max_strike_dist": 3000,
+    },
+}
+DEFAULT_INSTRUMENT = "NIFTY"
 
 # ── Prediction problem ───────────────────────────────────────────────────────
-# Label: did the option's HIGH reach entry_price * (1 + TARGET_PCT) within
-# HORIZON_BARS 5-min bars? A touch, not a close-above — matches how a Tg is hit.
 BAR_MINUTES   = 5
-HORIZON_BARS  = 75          # one full session (09:15-15:30)
-TARGET_PCT    = 0.2611      # the Tg uplift used on the card
+HORIZON_BARS  = 75          # one session (09:15-15:30)
+TARGET_PCT    = 0.2611      # the Tg uplift on the card (reporting default only)
 
-# Training rows are dropped when the premium is too small for the move to be
-# meaningful — a 2.00 -> 2.52 tick is noise, not a signal.
-MIN_PREMIUM   = 5.0
+MIN_PREMIUM   = 5.0         # below this a +26% move is tick noise
 MIN_BARS_PER_CONTRACT = 120
 
-# ── Harvest ──────────────────────────────────────────────────────────────────
-MAX_RANGE_DAYS   = 28       # under the ~1 month API cap
-EXPIRIES_TO_SCAN = 4        # nearest N expiries
-MAX_STRIKE_DIST  = 1500     # ignore deep wings: illiquid, stale candles
+# ── Harvest / cache ──────────────────────────────────────────────────────────
+MAX_SPAN_DAYS = {"minutes": 28, "hours": 90, "days": 2000}   # measured above
+INDEX_HISTORY_DAYS  = 730    # 2 years of 5-min index history
+OPTION_HISTORY_DAYS = 730    # capped by each contract's listing date anyway
+EXPIRIES_TO_SCAN    = 6
+
+# Archive is partitioned by month so a closed month's file never changes again;
+# git then stores it once instead of a new blob on every append.
+ARCHIVE_DIR = "niftyai/datasets/candles"
+ARCHIVE_FMT = "parquet"
 
 # ── Model ────────────────────────────────────────────────────────────────────
+# One model PER INSTRUMENT, not one shared model with an instrument flag. The
+# two strongest features are f_dte and f_dow, and the expiry cycles genuinely
+# differ: NIFTY expires weekly (2026-08-04, 08-11), SENSEX weekly on a
+# different weekday (08-06, 08-13), BANKNIFTY has no weeklies at all — its
+# nearest expiry is monthly (2026-08-25). Sharing one model would force three
+# conflicting cycles through the same splits.
 LGBM_PARAMS = {
     "objective":        "binary",
     "learning_rate":    0.05,
@@ -51,13 +92,24 @@ LGBM_PARAMS = {
 }
 NUM_BOOST_ROUND = 400
 EARLY_STOPPING  = 40
+VALID_FRACTION  = 0.25       # time-ordered, validation strictly later
 
-# Time-ordered split: the validation set is strictly LATER than training, so
-# the score reflects forecasting rather than interpolation.
-VALID_FRACTION = 0.25
 
-# ── Paths ────────────────────────────────────────────────────────────────────
-ARCHIVE_DIR = "niftyai/datasets/candles"
-MODEL_PATH  = "niftyai/models_saved/hit_lgbm.txt"
-META_PATH   = "niftyai/models_saved/hit_lgbm_meta.json"
-PRED_PATH   = "niftyai/prediction/latest.json"
+def paths(instrument: str) -> dict:
+    """Per-instrument artefact paths — nothing is shared between instruments."""
+    i = instrument.upper()
+    return {
+        "archive":  f"{ARCHIVE_DIR}/{i}",
+        "dataset":  f"niftyai/datasets/{i}_train.parquet",
+        "model":    f"niftyai/models_saved/{i}_hit_lgbm.txt",
+        "meta":     f"niftyai/models_saved/{i}_hit_lgbm_meta.json",
+        "pred":     f"niftyai/prediction/{i}_latest.json",
+    }
+
+
+def cfg(instrument: str) -> dict:
+    i = instrument.upper()
+    if i not in INSTRUMENTS:
+        raise SystemExit(f"unknown instrument {instrument!r}; "
+                         f"known: {', '.join(INSTRUMENTS)}")
+    return INSTRUMENTS[i]

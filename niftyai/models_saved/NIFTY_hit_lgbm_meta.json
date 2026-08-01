@@ -1,0 +1,143 @@
+{
+  "instrument": "NIFTY",
+  "features": [
+    "f_atr_rel",
+    "f_bars_left",
+    "f_bb_pos",
+    "f_body",
+    "f_close",
+    "f_dist_hi_12",
+    "f_dist_hi_24",
+    "f_dist_hi_75",
+    "f_dist_lo_12",
+    "f_dist_lo_24",
+    "f_dist_lo_75",
+    "f_dow",
+    "f_dte",
+    "f_ema_rel_12",
+    "f_ema_rel_48",
+    "f_hl_range",
+    "f_hma_rel",
+    "f_hma_slope",
+    "f_idx_ret_24",
+    "f_idx_ret_6",
+    "f_idx_rsi",
+    "f_idx_vol_24",
+    "f_is_ce",
+    "f_log_close",
+    "f_lower_wick",
+    "f_minute_of_day",
+    "f_moneyness",
+    "f_oi_chg_24",
+    "f_oi_chg_6",
+    "f_req_move",
+    "f_ret_1",
+    "f_ret_12",
+    "f_ret_24",
+    "f_ret_3",
+    "f_ret_48",
+    "f_ret_6",
+    "f_rsi",
+    "f_tsi",
+    "f_upper_wick",
+    "f_vol_12",
+    "f_vol_24",
+    "f_vol_48",
+    "f_vol_6",
+    "f_vol_rel"
+  ],
+  "horizon_bars": 75,
+  "bar_minutes": 5,
+  "rows": 124947,
+  "trained_through": "2026-07-30 15:25:00",
+  "valid_auc": 0.419458696762668,
+  "valid_brier": 0.20594328107095033,
+  "base_rate": 0.28433380263663127,
+  "best_iteration": 1,
+  "top_features": [
+    [
+      "f_dte",
+      5704.320907592773
+    ],
+    [
+      "f_close",
+      5175.527290344238
+    ],
+    [
+      "f_moneyness",
+      3778.3012619018555
+    ],
+    [
+      "f_dist_lo_75",
+      3131.336051940918
+    ],
+    [
+      "f_dow",
+      2301.4755249023438
+    ],
+    [
+      "f_ret_48",
+      2296.509063720703
+    ],
+    [
+      "f_idx_vol_24",
+      1153.5189971923828
+    ],
+    [
+      "f_tsi",
+      802.0750122070312
+    ],
+    [
+      "f_bars_left",
+      491.3462905883789
+    ],
+    [
+      "f_ret_12",
+      392.9159851074219
+    ],
+    [
+      "f_ema_rel_48",
+      235.57400512695312
+    ],
+    [
+      "f_dist_hi_24",
+      207.9969940185547
+    ],
+    [
+      "f_idx_rsi",
+      178.36199951171875
+    ],
+    [
+      "f_idx_ret_24",
+      169.16400146484375
+    ],
+    [
+      "f_vol_12",
+      115.46199798583984
+    ],
+    [
+      "f_atr_rel",
+      0.0
+    ],
+    [
+      "f_bb_pos",
+      0.0
+    ],
+    [
+      "f_body",
+      0.0
+    ],
+    [
+      "f_dist_hi_12",
+      0.0
+    ],
+    [
+      "f_dist_hi_75",
+      0.0
+    ]
+  ],
+  "threshold_range": [
+    0.05,
+    0.6
+  ]
+}

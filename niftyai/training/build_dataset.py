@@ -25,22 +25,11 @@ import pandas as pd
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from niftyai.config import settings as S          # noqa: E402
-from niftyai.data import upstox                    # noqa: E402
-from niftyai.features import engineer              # noqa: E402
+from niftyai.data import cache                      # noqa: E402
+from niftyai.data import upstox                     # noqa: E402
+from niftyai.features import engineer               # noqa: E402
 
-COLS = ["ts", "open", "high", "low", "close", "volume", "oi"]
-
-
-def to_frame(raw: list[list]) -> pd.DataFrame:
-    if not raw:
-        return pd.DataFrame(columns=COLS)
-    df = pd.DataFrame(raw, columns=COLS[:len(raw[0])])
-    for c in ("open", "high", "low", "close", "volume", "oi"):
-        if c in df:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["ts"] = pd.to_datetime(df["ts"], format="mixed", utc=True) \
-                 .dt.tz_convert(upstox.IST).dt.tz_localize(None)
-    return df.sort_values("ts").reset_index(drop=True)
+to_frame = cache.to_frame          # single definition, shared with predict.py
 
 
 def forward_max_return(df: pd.DataFrame, horizon: int) -> pd.Series:
@@ -65,41 +54,42 @@ def forward_max_return(df: pd.DataFrame, horizon: int) -> pd.Series:
     return fwd / df["close"].astype(float).clip(lower=0.05) - 1.0
 
 
-def archive(df: pd.DataFrame, key: str) -> None:
-    os.makedirs(S.ARCHIVE_DIR, exist_ok=True)
-    path = os.path.join(S.ARCHIVE_DIR, key.replace("|", "_") + ".csv")
-    if os.path.exists(path):
-        old = pd.read_csv(path, parse_dates=["ts"])
-        df  = pd.concat([old, df]).drop_duplicates("ts").sort_values("ts")
-    df.to_csv(path, index=False)
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="niftyai/datasets/train.parquet")
+    ap.add_argument("--instrument", default=S.DEFAULT_INSTRUMENT)
+    ap.add_argument("--out", default=None)
     ap.add_argument("--max-contracts", type=int, default=0, help="0 = no cap")
-    ap.add_argument("--days", type=int, default=S.MAX_RANGE_DAYS)
-    ap.add_argument("--no-archive", action="store_true")
+    ap.add_argument("--days", type=int, default=S.OPTION_HISTORY_DAYS)
+    ap.add_argument("--index-days", type=int, default=S.INDEX_HISTORY_DAYS)
+    ap.add_argument("--no-cache", action="store_true",
+                    help="bypass the archive (API only) — for debugging")
     a = ap.parse_args()
 
-    idx = to_frame(upstox.index_candles(days=a.days))
-    print(f"underlying bars: {len(idx)}", flush=True)
+    inst = a.instrument.upper()
+    P = S.paths(inst)
+    out_path = a.out or P["dataset"]
+
+    ikey = S.cfg(inst)["underlying_key"]
+    idx = (to_frame(upstox.index_candles(inst, days=a.index_days)) if a.no_cache
+           else cache.get(inst, ikey, days=a.index_days, is_index=True))
+    print(f"[{inst}] underlying bars: {len(idx):,}"
+          f"{'' if idx.empty else '  ' + str(idx['ts'].min().date()) + ' .. ' + str(idx['ts'].max().date())}",
+          flush=True)
     spot = float(idx["close"].iloc[-1]) if not idx.empty else None
 
-    contracts = upstox.option_contracts(max_strike_dist=S.MAX_STRIKE_DIST, spot=spot)
+    contracts = upstox.option_contracts(inst, spot=spot)
     if a.max_contracts:
         contracts = contracts[:a.max_contracts]
-    print(f"contracts to scan: {len(contracts)} (spot {spot})", flush=True)
+    print(f"[{inst}] contracts to scan: {len(contracts)} (spot {spot})", flush=True)
 
     frames, kept, skipped = [], 0, 0
     for n, c in enumerate(contracts, 1):
-        raw = upstox.candles(c["instrument_key"], days=a.days)
-        df  = to_frame(raw)
+        df = (to_frame(upstox.candles(c["instrument_key"], days=a.days))
+              if a.no_cache else
+              cache.get(inst, c["instrument_key"], days=a.days))
         if len(df) < S.MIN_BARS_PER_CONTRACT:
             skipped += 1
             continue
-        if not a.no_archive:
-            archive(df, c["instrument_key"])
         df["opt_type"]  = c["opt_type"]
         df["strike"]    = c["strike"]
         df["moneyness"] = (c["strike"] - spot) / spot if spot else 0.0
@@ -119,18 +109,20 @@ def main():
         sys.exit(1)
 
     data = pd.concat(frames, ignore_index=True).sort_values("ts").reset_index(drop=True)
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     try:
-        data.to_parquet(a.out, index=False)
+        data.to_parquet(out_path, index=False)
     except Exception:
-        a.out = a.out.replace(".parquet", ".csv")
-        data.to_csv(a.out, index=False)
+        out_path = out_path.replace(".parquet", ".csv")
+        data.to_csv(out_path, index=False)
     _at_default = (data["fwd_max_ret"] >= S.TARGET_PCT).mean()
     print(f"\nrows={len(data):,}  contracts={kept}  "
           f"hit-rate@{S.TARGET_PCT:.2%}={_at_default:.4f}  "
           f"median fwd_max_ret={data['fwd_max_ret'].median():.4f}")
     print(f"span {data['ts'].min()} .. {data['ts'].max()}")
-    print(f"written: {a.out}")
+    print(f"written: {out_path}")
+    if not a.no_cache:
+        print(f"cache: {cache.stats(inst)}")
 
 
 if __name__ == "__main__":

@@ -2,29 +2,34 @@ name: NiftyAI prediction
 
 # Runs entirely on GitHub — nothing touches a local machine.
 #
-# Uses ONLY public Upstox endpoints (no access token): /v3/historical-candle
-# and the public instrument dump both answer unauthenticated, verified
-# 2026-08-01. That is what allows this to run unattended.
+# PUBLIC Upstox endpoints only (no access token): /v3/historical-candle and the
+# instrument dump both answer unauthenticated for NSE_INDEX, NSE_FO, BSE_INDEX
+# and BSE_FO. Verified 2026-08-01. That is what allows unattended CI runs.
 #
-# Three jobs in one workflow because they share the archive:
-#   archive  — snapshot candles daily. An option's history disappears from the
-#              API once it expires, so without this the training set can never
-#              grow past the ~1 month the API retains.
-#   train    — rebuild the model from the accumulated dataset (weekly).
-#   predict  — score the current CE/PE legs and commit latest.json.
+# THE ARCHIVE IS THE POINT. An option's candles exist only from its listing
+# date, and once it expires the contract disappears from the instrument dump —
+# the history becomes permanently unreachable. Every run appends to
+# niftyai/datasets/candles/<INSTRUMENT>/<key>/<YYYY-MM>.parquet, which is how
+# the training set grows past the ~1 month the API retains for a live weekly.
+# Index history is backfilled 2 years deep (5-min data is available that far).
 
 on:
   schedule:
-    # 15:45 IST = 10:15 UTC, after the session closes. Predict + archive daily.
+    # 15:45 IST (10:15 UTC) weekdays — after close: archive + predict.
     - cron: "15 10 * * 1-5"
-    # Retrain Saturdays 06:00 UTC, on the week's accumulated archive.
+    # Saturday 06:00 UTC — retrain each instrument on the accumulated archive.
     - cron: "0 6 * * 6"
   workflow_dispatch:
     inputs:
+      instrument:
+        description: "Which instrument (or all)"
+        type: choice
+        options: [all, NIFTY, BANKNIFTY, SENSEX]
+        default: all
       legs:
-        description: "strike:TYPE:target, comma separated"
+        description: "strike:TYPE:target, comma separated (applies to the chosen instrument)"
         required: false
-        default: "24200:PE:40.58,24500:CE:34.70"
+        default: ""
       retrain:
         description: "Rebuild the dataset and retrain before predicting"
         type: boolean
@@ -33,64 +38,89 @@ on:
 permissions:
   contents: write
 
+# Never let two runs push at once — they would race the repo's other automated
+# commits (PCR log, caches) and each other.
 concurrency:
   group: niftyai
   cancel-in-progress: false
 
 jobs:
-  run:
+  matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
+    strategy:
+      # One model PER INSTRUMENT: f_dte and f_dow are the strongest features and
+      # the expiry cycles genuinely differ (NIFTY weekly Tue-ish, SENSEX weekly
+      # on another weekday, BANKNIFTY monthly only). A shared model would push
+      # three conflicting cycles through the same splits.
+      fail-fast: false
+      # Serial, not parallel: the jobs all commit to the same branch.
+      max-parallel: 1
+      matrix:
+        instrument: [NIFTY, BANKNIFTY, SENSEX]
+
     steps:
       - uses: actions/checkout@v4
 
+      - name: Skip instruments not selected
+        id: gate
+        run: |
+          want="${{ inputs.instrument || 'all' }}"
+          if [ "$want" = "all" ] || [ "$want" = "${{ matrix.instrument }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "skipping ${{ matrix.instrument }}"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install deps
+        if: steps.gate.outputs.run == 'true'
         run: pip install -q lightgbm pandas numpy requests pyarrow scikit-learn
 
-      - name: Build dataset + archive candles
-        # Always archives. Rebuilds the training set on the Saturday cron or on
-        # a manual run with retrain=true.
-        if: github.event.schedule == '0 6 * * 6' || inputs.retrain || github.event_name == 'schedule'
+      - name: Archive candles + build dataset
+        if: steps.gate.outputs.run == 'true'
         run: |
-          python niftyai/training/build_dataset.py \
-            --out niftyai/datasets/train.parquet
+          python niftyai/training/build_dataset.py --instrument ${{ matrix.instrument }}
 
       - name: Train
-        if: github.event.schedule == '0 6 * * 6' || inputs.retrain
-        run: python niftyai/training/train.py --data niftyai/datasets/train.parquet
-
-      - name: Predict
-        # Skipped rather than failed when no model is committed yet — the first
-        # scheduled run trains, the ones after it can predict.
+        # Weekly cron, or an explicit retrain, or whenever no model exists yet.
+        if: steps.gate.outputs.run == 'true'
         run: |
-          if [ -f niftyai/models_saved/hit_lgbm.txt ]; then
-            python niftyai/prediction/predict.py \
-              --legs "${{ inputs.legs || '24200:PE:40.58,24500:CE:34.70' }}"
+          MODEL="niftyai/models_saved/${{ matrix.instrument }}_hit_lgbm.txt"
+          if [ "${{ github.event.schedule }}" = "0 6 * * 6" ] || \
+             [ "${{ inputs.retrain }}" = "true" ] || [ ! -f "$MODEL" ]; then
+            python niftyai/training/train.py --instrument ${{ matrix.instrument }}
           else
-            echo "no model committed yet — skipping predict (run with retrain=true first)"
+            echo "skipping train (model present, not a retrain run)"
           fi
 
-      - name: Commit results
+      - name: Predict
+        if: steps.gate.outputs.run == 'true' && inputs.legs != ''
+        run: |
+          python niftyai/prediction/predict.py \
+            --instrument ${{ matrix.instrument }} --legs "${{ inputs.legs }}"
+
+      - name: Commit
+        if: steps.gate.outputs.run == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A niftyai/datasets niftyai/models_saved niftyai/prediction || true
           if git diff --cached --quiet; then
-            echo "nothing to commit"
-          else
-            git commit -m "NiftyAI: prediction/dataset update $(date -u '+%Y-%m-%d %H:%M UTC')"
-            # The repo receives frequent automated commits (PCR log, caches),
-            # so rebase before pushing or this races them and fails.
-            for i in 1 2 3; do
-              git pull --rebase origin "${GITHUB_REF_NAME}" && \
-              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
-              echo "push attempt $i failed, retrying"
-              sleep 5
-            done
-            exit 1
+            echo "nothing to commit"; exit 0
           fi
+          git commit -m "NiftyAI ${{ matrix.instrument }}: archive/model update $(date -u '+%Y-%m-%d %H:%M UTC')"
+          # This repo takes frequent automated commits, so rebase-and-retry
+          # rather than assuming the push lands first time.
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && \
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            echo "push attempt $i failed, retrying"; sleep $((i * 5))
+          done
+          exit 1
