@@ -83,6 +83,18 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: pip install -q lightgbm pandas numpy requests pyarrow scikit-learn
 
+      - name: Import check
+        # Fails in 2s with a clear message instead of part-way through a data
+        # build. Added after the repo's bare `data/` gitignore rule silently
+        # excluded niftyai/data/ — the code ran locally and was simply absent
+        # from the checkout, surfacing as ModuleNotFoundError mid-run.
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          python -c "
+          import niftyai.config.settings, niftyai.data.upstox, niftyai.data.cache
+          import niftyai.features.engineer, niftyai.training.train
+          print('imports OK')"
+
       - name: Archive candles + build dataset
         if: steps.gate.outputs.run == 'true'
         run: |

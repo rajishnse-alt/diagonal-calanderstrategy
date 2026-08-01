@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 .env
 data/
+# ...but niftyai/data is SOURCE, not a data dir. The bare `data/`
+# rule above matches at any depth and silently excluded it, so CI
+# failed with ModuleNotFoundError while everything worked locally.
+!niftyai/data/
 
 # NiftyAI — built artefacts, not source
 niftyai/datasets/train.parquet
