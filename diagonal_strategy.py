@@ -5375,18 +5375,24 @@ def _fetch_strike_day_hl(inst_key):
     return _h, _l, bool(_h or _l)
 
 
-def _spcl_span(day_h, day_l, spcl, fmt_h=None, fmt_l=None):
+def _spcl_span(day_h, day_l, spcl, fmt_h=None, fmt_l=None,
+               strike=None, opt_type=None):
     """
     CeSPCL / PeSPCL cell: the original "day high | SPCL" pair kept as the first
-    line, with the reversal levels underneath in the canonical format:
+    line, with the reversal levels and the HMA underneath:
 
         109.60 | 95.29
         ▲ BOT REV [6.45-7.42]+15.04%
         ▼ TOP REV [95.29-109.60]−13.06%
+        HMA:39.97 ▲
 
     Shared by BOTH SPCL cards (projection card + TK table below it). Module
     level on purpose: the projection card defines its helpers inside an `if`,
     but the TK table renders outside it.
+
+    strike / opt_type identify the contract the HMA belongs to — the anchor ATM
+    for these rows, CE on the CeSPCL row and PE on the PeSPCL row. Omit them and
+    the HMA line is simply left off.
 
     fmt_h / fmt_l are the caller's own formatters (_tk_f vs _fmt_s) so each card
     keeps the look it already had for the leading pair.
@@ -5395,6 +5401,8 @@ def _spcl_span(day_h, day_l, spcl, fmt_h=None, fmt_l=None):
     _fl = fmt_l or _fmt_s
     _lead = f"{_fh(day_h)} | {_fl(spcl)}"
     _rev  = _rev_lines(day_h, day_l)
+    if strike and opt_type:
+        _rev += _hma_line(strike, opt_type).replace("<br>", "", 1)
     if not _rev:
         return _lead
     return (f"<div>{_lead}</div>"
@@ -5676,7 +5684,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_spcl_span(_spcl_ce_h, _spcl_ce_l, _ce_spcl)}</td>"
+        f"{_spcl_span(_spcl_ce_h, _spcl_ce_l, _ce_spcl, strike=_5m_spcl_atm, opt_type='CE')}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -5692,7 +5700,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;'>"
         f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-        f"{_spcl_span(_spcl_pe_h, _spcl_pe_l, _pe_spcl)}</td>"
+        f"{_spcl_span(_spcl_pe_h, _spcl_pe_l, _pe_spcl, strike=_5m_spcl_atm, opt_type='PE')}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
@@ -5940,7 +5948,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
     f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-    f"{_spcl_span(_spcl_ce_h, _spcl_ce_l, _ce_spcl, _tk_f, _fmt_s)}</td>"
+    f"{_spcl_span(_spcl_ce_h, _spcl_ce_l, _ce_spcl, _tk_f, _fmt_s, strike=_5m_spcl_atm, opt_type='CE')}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
     f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
@@ -5954,7 +5962,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;'>"
     f"<span style='color:var(--muted);font-size:9px;font-weight:400;'>{_5m_spcl_atm} </span>"
-    f"{_spcl_span(_spcl_pe_h, _spcl_pe_l, _pe_spcl, _tk_f, _fmt_s)}</td>"
+    f"{_spcl_span(_spcl_pe_h, _spcl_pe_l, _pe_spcl, _tk_f, _fmt_s, strike=_5m_spcl_atm, opt_type='PE')}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
