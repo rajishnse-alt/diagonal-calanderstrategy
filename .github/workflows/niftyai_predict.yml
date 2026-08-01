@@ -95,7 +95,7 @@ jobs:
           MODEL="niftyai/models_saved/${{ matrix.instrument }}_hit_lgbm.txt"
           if [ "${{ github.event.schedule }}" = "0 6 * * 6" ] || \
              [ "${{ inputs.retrain }}" = "true" ] || [ ! -f "$MODEL" ]; then
-            python niftyai/training/train.py --instrument ${{ matrix.instrument }}
+            python niftyai/training/train.py --instrument ${{ matrix.instrument }} --walk-forward 6
           else
             echo "skipping train (model present, not a retrain run)"
           fi

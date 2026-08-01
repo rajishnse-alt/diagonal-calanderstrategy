@@ -42,6 +42,32 @@ def load(path: str) -> pd.DataFrame:
     raise SystemExit(f"dataset not found: {path}")
 
 
+def auc_score(y, p) -> float:
+    """
+    Rank-based AUC with no sklearn dependency.
+
+    The sklearn import used to sit in a bare try/except, so on a runner without
+    scikit-learn every fold silently reported nan and the summary then crashed
+    on an empty array. Compute it directly instead of depending on an optional
+    package for a core metric.
+    """
+    y = np.asarray(y); p = np.asarray(p, dtype=float)
+    n1 = float(y.sum()); n0 = float(len(y) - n1)
+    if n1 == 0 or n0 == 0:
+        return float("nan")
+    order = np.argsort(p, kind="mergesort")
+    ranks = np.empty(len(p), dtype=float)
+    sp = p[order]
+    i = 0
+    while i < len(sp):                       # average ranks within ties
+        j = i
+        while j + 1 < len(sp) and sp[j + 1] == sp[i]:
+            j += 1
+        ranks[order[i:j + 1]] = (i + j) / 2.0 + 1.0
+        i = j + 1
+    return float((ranks[y == 1].sum() - n1 * (n1 + 1) / 2.0) / (n1 * n0))
+
+
 def brier(y, p):
     return float(np.mean((np.asarray(p) - np.asarray(y)) ** 2))
 
@@ -59,6 +85,67 @@ def calibration_table(y, p, bins=10):
     return rows
 
 
+def walk_forward(df, feats, folds, lgb):
+    """
+    Purged walk-forward validation.
+
+    One held-out window is a coin flip on this much data — NIFTY's single split
+    landed at AUC 0.42 and SENSEX's at 0.645, which says more about which three
+    days got held out than about the model. Expanding-window folds, each with
+    the same HORIZON purge, give a distribution instead of one draw.
+
+    Reported against the RIGHT baseline: a model is only useful if it beats
+    predicting the fold's own base rate, so Brier is shown next to that.
+    """
+    purge = pd.Timedelta(minutes=S.HORIZON_BARS * S.BAR_MINUTES)
+    edges = [df["ts"].quantile(q) for q in np.linspace(0.4, 1.0, folds + 1)]
+    print(f"\n{'='*72}\nWALK-FORWARD  ({folds} expanding folds, {purge} purge)\n{'='*72}")
+    print(f"{'fold':>4} {'train':>9} {'valid':>8} {'base':>7} {'AUC':>7} "
+          f"{'Brier':>8} {'vs base':>9}")
+    aucs, edges_beaten = [], 0
+    for k in range(folds):
+        v_lo, v_hi = edges[k], edges[k + 1]
+        tr = df[df["ts"] < v_lo - purge]
+        va = df[(df["ts"] >= v_lo) & (df["ts"] < v_hi)]
+        if len(tr) < 2000 or len(va) < 500:
+            print(f"{k:>4}  skipped (train={len(tr):,} valid={len(va):,})")
+            continue
+        b = lgb.train(S.LGBM_PARAMS, lgb.Dataset(tr[feats], tr["y"]),
+                      num_boost_round=S.NUM_BOOST_ROUND,
+                      valid_sets=[lgb.Dataset(va[feats], va["y"])],
+                      callbacks=[lgb.early_stopping(S.EARLY_STOPPING, verbose=False)])
+        p = b.predict(va[feats], num_iteration=b.best_iteration)
+        y = va["y"].to_numpy()
+        base = float(y.mean())
+        auc = auc_score(y, p)
+        bs, bs_base = brier(y, p), brier(y, np.full_like(p, base))
+        better = bs < bs_base
+        edges_beaten += better
+        aucs.append(auc)
+        print(f"{k:>4} {len(tr):>9,} {len(va):>8,} {base:>7.3f} {auc:>7.3f} "
+              f"{bs:>8.4f} {bs_base:>9.4f} {'BEAT' if better else 'worse'}")
+    arr = np.array([x for x in aucs if x == x])
+    if arr.size:
+        print(f"\nAUC across folds: mean {arr.mean():.3f}  sd {arr.std():.3f}  "
+              f"min {arr.min():.3f}  max {arr.max():.3f}")
+        print(f"folds beating the base rate on Brier: {edges_beaten}/{len(aucs)}")
+        # Fold-to-fold spread is large, so judge the MEAN against 0.5 with its
+        # standard error rather than celebrating a good fold or despairing at a
+        # bad one. A single split is one draw from this distribution.
+        se = arr.std(ddof=1) / np.sqrt(len(arr)) if len(arr) > 1 else float("nan")
+        lo, hi = arr.mean() - 1.96 * se, arr.mean() + 1.96 * se
+        print(f"mean AUC 95% CI: {lo:.3f} - {hi:.3f}")
+        if lo > 0.5:
+            print("VERDICT: edge is statistically distinguishable from random. "
+                  "Calibrate before using the probabilities as probabilities.")
+        elif arr.mean() > 0.5:
+            print("VERDICT: suggestive but NOT established — the CI still "
+                  "includes 0.5. Keep accumulating history; do not trade it yet.")
+        else:
+            print("VERDICT: no usable edge. Keep accumulating history.")
+    print("=" * 72)
+
+
 def main():
     import lightgbm as lgb
 
@@ -68,6 +155,10 @@ def main():
     ap.add_argument("--model-out", default=None)
     ap.add_argument("--meta-out", default=None)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--walk-forward", type=int, default=5,
+                    help="purged expanding folds; 0/1 disables")
+    ap.add_argument("--cv-only", action="store_true",
+                    help="report walk-forward and stop, do not save a model")
     a = ap.parse_args()
 
     inst = a.instrument.upper()
@@ -90,6 +181,11 @@ def main():
     if "f_req_move" not in feats:
         feats.append("f_req_move")
     feats = sorted(set(feats))
+
+    if a.walk_forward > 1:
+        walk_forward(df, feats, a.walk_forward, lgb)
+        if a.cv_only:
+            return
 
     # Time-ordered split with a PURGE GAP.
     #
@@ -121,14 +217,7 @@ def main():
 
     p = booster.predict(va[feats], num_iteration=booster.best_iteration)
     y = va["y"].to_numpy()
-    try:
-        from sklearn.metrics import roc_auc_score
-        auc = float(roc_auc_score(y, p))
-    except Exception:
-        order = np.argsort(p)
-        r = np.empty_like(order, dtype=float); r[order] = np.arange(len(p))
-        n1, n0 = y.sum(), len(y) - y.sum()
-        auc = float((r[y == 1].sum() - n1 * (n1 - 1) / 2) / (n1 * n0)) if n1 and n0 else float("nan")
+    auc = auc_score(y, p)
 
     base = float(y.mean())
     print(f"\nvalid AUC   = {auc:.4f}")
