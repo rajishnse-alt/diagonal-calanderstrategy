@@ -46,17 +46,49 @@ def parse_expiry(v):
         return None
 
 
-def load_instruments(force: bool = False) -> list:
+def load_instruments(force: bool = False, retries: int = 4) -> list:
+    """
+    The instrument dump, with the response actually checked.
+
+    The previous version passed the body straight to json.loads with no status
+    check. The CDN 403s intermittently — the retired per-exchange dump does so
+    permanently — and an error page is not gzip, so decompression was swallowed
+    by the bare except and json.loads then died on HTML with
+    "Expecting value: line 1 column 1 (char 0)". That killed the BANKNIFTY job
+    on 2026-08-03 while NIFTY and SENSEX, hitting the same URL seconds apart,
+    succeeded. Retries with backoff, and fails loudly if it truly cannot fetch.
+    """
     global _INSTRUMENTS
     if _INSTRUMENTS is not None and not force:
         return _INSTRUMENTS
-    raw = requests.get(CDN, timeout=180).content
-    try:
-        raw = gzip.decompress(raw)
-    except Exception:
-        pass                      # sometimes served already decompressed
-    _INSTRUMENTS = json.loads(raw)
-    return _INSTRUMENTS
+    last = ""
+    for attempt in range(retries):
+        try:
+            r = requests.get(CDN, timeout=180)
+            if r.status_code != 200:
+                last = f"HTTP {r.status_code}"
+            else:
+                raw = r.content
+                try:
+                    raw = gzip.decompress(raw)
+                except Exception:
+                    pass          # sometimes served already decompressed
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    # Not JSON => an error/HTML page slipped through.
+                    last = f"non-JSON body ({len(raw)} bytes): {raw[:80]!r}"
+                    data = None
+                if isinstance(data, list) and data:
+                    _INSTRUMENTS = data
+                    return _INSTRUMENTS
+                if data is not None:
+                    last = f"unexpected payload type {type(data).__name__}"
+        except requests.RequestException as e:
+            last = f"{type(e).__name__}: {e}"
+        if attempt < retries - 1:
+            time.sleep(3 * (attempt + 1))
+    raise SystemExit(f"instrument dump unavailable after {retries} attempts: {last}")
 
 
 def option_contracts(instrument: str,
