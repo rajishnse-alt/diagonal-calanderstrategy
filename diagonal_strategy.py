@@ -3312,17 +3312,23 @@ def _hma_line(strike_int, option_type):
             f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>")
 
 
-def _strike_5m_close(strike_int, option_type):
+def _strike_first_5m_close(strike_int, option_type):
     """
-    Close of the LAST COMPLETED 5-min candle for one strike.
+    Close of the DAY'S FIRST 5-min candle (09:15-09:19) for one strike.
 
-    Today's session via v3 intraday, else the previous session's dated candles —
-    the same today/past split used everywhere here, because intraday serves only
-    the current day and dated endpoints exclude it. Cached per 5-min slot.
+    The first candle, not the latest one — same anchor the rest of this file
+    uses (_nifty_5m_close, atm_5m_c). It is fixed for the whole session, so the
+    suggestion does not drift as the day moves.
+
+    Candles come back NEWEST-first, so the first bar of the day is element[-1].
+    Today's session via v3 intraday; otherwise the previous session's dated
+    candles, since intraday serves only the current day and dated endpoints
+    exclude it. Cached per 5-min slot.
     """
     if not strike_int or not token:
         return None
-    _ck = f"s5c_{_today_str}_{_inst_choice}_{near_exp}_{int(strike_int)}_{option_type}_{_spcl_slot}"
+    _ck = (f"s5f_{_today_str}_{_inst_choice}_{near_exp}_"
+           f"{int(strike_int)}_{option_type}_{_spcl_slot}")
     if _ck in st.session_state:
         return st.session_state[_ck]
     _inst = _opt_inst_key(strike_int, option_type)
@@ -3331,38 +3337,35 @@ def _strike_5m_close(strike_int, option_type):
         _enc = urllib.parse.quote(_inst, safe="")
         _V3  = "https://api.upstox.com/v3/historical-candle"
 
-        def _last(url):
+        def _first(url):
             try:
                 _r = requests.get(url, headers=hdr(token), timeout=5)
                 _c = (_r.json().get("data") or {}).get("candles") or []
             except requests.RequestException:
                 return None
-            # newest-first; skip the still-forming bucket while the market is live
-            if not _c:
-                return None
-            _cands = _c[1:] if _mkt_open and len(_c) > 1 else _c
-            return float(_cands[0][4]) if _cands and len(_cands[0]) > 4 else None
+            # newest-first -> [-1] is 09:15, the day's opening 5-min bar
+            return float(_c[-1][4]) if _c and len(_c[-1]) > 4 else None
 
         if _mkt_open or _after_close:
-            _val = _last(f"{_V3}/intraday/{_enc}/minutes/5")
+            _val = _first(f"{_V3}/intraday/{_enc}/minutes/5")
         if _val is None:
             _p = _prev_biz_day().strftime("%Y-%m-%d")
-            _val = _last(f"{_V3}/{_enc}/minutes/5/{_p}/{_p}")
+            _val = _first(f"{_V3}/{_enc}/minutes/5/{_p}/{_p}")
     st.session_state[_ck] = _val
     return _val
 
 
 def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
     """
-    Suggest the strike whose 5-min candle CLOSE sits nearest the L↔H midpoint.
+    Suggest the strike whose DAY'S FIRST 5-min close sits nearest the L↔H midpoint.
 
     mid = (proj_low + proj_high) / 2 — the centre of the projected band.
 
     Two stages so this costs a handful of requests, not one per strike: rank
     every chain strike by |chain LTP - mid| to shortlist the closest n_probe,
-    then fetch the actual 5-min close only for those and pick the true nearest.
-    The chain LTP is a live tick; the decision is made on the candle close, as
-    asked.
+    then fetch the first-5-min close only for those and pick the true nearest.
+    The chain LTP is a live tick used ONLY to narrow the field; the decision is
+    made on the day's opening 5-min candle close.
     """
     if not proj_low or not proj_high or not ltp_map:
         return ""
@@ -3380,7 +3383,7 @@ def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
     _cands.sort()
     _best = None
     for _, _si in _cands[:n_probe]:
-        _c5 = _strike_5m_close(_si, option_type)
+        _c5 = _strike_first_5m_close(_si, option_type)
         if _c5 is None or _c5 <= 0:
             continue
         _d = abs(_c5 - _mid)
@@ -3392,7 +3395,7 @@ def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
     _col = "var(--pe)" if option_type == "PE" else "var(--ce)"
     return (f"<br><span style='color:var(--muted);font-size:8px;'>≈mid {_mid:,.2f} </span>"
             f"<span style='color:{_col};font-weight:700;font-size:10px;'>{_si}</span>"
-            f"<span style='color:var(--muted);font-size:8px;'> 5mC </span>"
+            f"<span style='color:var(--muted);font-size:8px;'> 1st5mC </span>"
             f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_c5:,.2f}</span>"
             f"<span style='color:var(--muted);font-size:8px;'> Δ{_c5 - _mid:+.2f}</span>")
 
