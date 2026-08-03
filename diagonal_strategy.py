@@ -30,6 +30,23 @@ the code. Every entry was reproduced before fixing; none are speculative.
           stated IP is 96.87, so the mean is TRUNCATED to 2dp.
                                              -> search "fetch_ideal_premium"
 
+[HMA-2026-08-04c]  ROOT CAUSE — candle order was assumed, not checked
+    The fetch did list(reversed(candles)) on the assumption that the API always
+    returns newest-first. Where that does not hold, reversing puts the OLDEST
+    bar last and the HMA reports a price from ~10 days back. On these series
+    that is severe: 24450 PE spans 13.65 .. 549.20 over the window, so the
+    wrong end is unrecognisable as the current premium. This is why the card
+    read 119.72 where the true value is 18.72, while my own runs — hitting the
+    same endpoint unauthenticated and getting newest-first — always looked
+    correct, and why the maths kept validating against TradingView.
+    Now sorted on the TIMESTAMP, correct under either ordering, with
+    non-positive closes dropped and the last bar's time rendered (@15:35) so
+    the series end is visible instead of assumed.
+    All four disputed cells now match independent calculation:
+        24450PE 119.72 -> 18.72     24550CE 26.29  -> 73.32
+        24550PE 108.52 -> 45.37     24800CE 3.52   -> 5.65 (= TradingView)
+    Cache 5 -> 6.                        -> search "_fetch_opt_5m_closes"
+
 [BAND-2026-08-04]  SPCL "day high" silently degrading to the LTP
     The fallback chain for _spcl_ce_h / _spcl_pe_h ended in near_ce/near_pe —
     the LTP, which is not a high at all. Pre-market no day high exists, so the
@@ -3337,7 +3354,7 @@ def _calc_spcl(ce_h: float, pe_h: float):
 _HMA_LENGTH    = 50   # Pine hmaLength
 _HMA_TREND_LEN = 3    # Pine hmaTrendLength
 _HMA_TF        = 5    # Pine hmaTF ("5")
-_HMA_CACHE_V   = 5    # bump to invalidate cached HMA results (see _hma_line)
+_HMA_CACHE_V   = 6    # bump to invalidate cached HMA results (see _hma_line)
 
 
 def _wma(vals, n):
@@ -3380,12 +3397,24 @@ def _hma_series(closes, length=_HMA_LENGTH, count=1):
 
 def _fetch_opt_5m_closes(inst_key, days=10):
     """
-    5-min closes for an option, oldest→newest.
-    Dated endpoint for history (it EXCLUDES the current day), plus intraday for
-    today's live session — the same split verified for every other fetch here.
+    5-min closes for an option, OLDEST→NEWEST, sorted on the timestamp.
+
+    Sorts explicitly instead of trusting the response order. The previous
+    version did list(reversed(...)) on the assumption that candles always
+    arrive newest-first; if that ever does not hold, reversing puts the OLDEST
+    bar last and the HMA then reports a price from ~10 days ago. On this series
+    that is not a subtle error — 24450 PE ranges 13.65 to 549.20 over the
+    window, so the wrong end of it produces a number with no relation to the
+    current premium. Sorting by time is correct under either ordering.
+
+    Also drops non-positive closes: a zero print would drag the average toward
+    zero and is never a real premium.
+
+    Returns (closes, last_ts) so the caller can show WHICH bar the value ends
+    on — provenance beats assumption for a number that has been disputed.
     """
     if not inst_key:
-        return []
+        return [], ""
     _enc = urllib.parse.quote(inst_key, safe="")
     _V3  = "https://api.upstox.com/v3/historical-candle"
 
@@ -3398,11 +3427,22 @@ def _fetch_opt_5m_closes(inst_key, days=10):
 
     _to   = datetime.now(IST).date()
     _from = _to - timedelta(days=days)
-    _c    = _get(f"{_V3}/{_enc}/minutes/{_HMA_TF}/{_to}/{_from}")   # newest-first
-    _c    = list(reversed(_c))                                      # → oldest-first
+    _raw  = _get(f"{_V3}/{_enc}/minutes/{_HMA_TF}/{_to}/{_from}")
     if _mkt_open or _after_close:
-        _c += list(reversed(_get(f"{_V3}/intraday/{_enc}/minutes/{_HMA_TF}")))
-    return [float(x[4]) for x in _c if len(x) > 4 and x[4] is not None]
+        _raw += _get(f"{_V3}/intraday/{_enc}/minutes/{_HMA_TF}")
+
+    _rows = {}
+    for _c in _raw:
+        if not _c or len(_c) < 5 or _c[4] is None:
+            continue
+        try:
+            _v = float(_c[4])
+        except (TypeError, ValueError):
+            continue
+        if _v > 0:
+            _rows[str(_c[0])] = _v          # de-dup: intraday can overlap dated
+    _ts = sorted(_rows)                      # ISO timestamps sort chronologically
+    return [_rows[t] for t in _ts], (_ts[-1][:16] if _ts else "")
 
 
 def _opt_inst_key(strike_int, option_type):
@@ -3491,7 +3531,7 @@ def _hma_line(strike_int, option_type):
     _hit = st.session_state.get(_hk)
     # dir 0 == "no direction found"; never let that stick — recompute instead
     if _hit is None or (_hit[0] and not _hit[1]):
-        _cl = _fetch_opt_5m_closes(_opt_inst_key(strike_int, option_type))
+        _cl, _bar_ts = _fetch_opt_5m_closes(_opt_inst_key(strike_int, option_type))
         # As many HMA values as the data supports (capped), not just the last 4
         _cap = len(_cl) - _HMA_LENGTH - int(round(math.sqrt(_HMA_LENGTH))) + 2
         _cnt = max(_HMA_TREND_LEN + 1, min(250, _cap))
@@ -3520,12 +3560,13 @@ def _hma_line(strike_int, option_type):
             return ""
         _t, _real, _prob = _hma_trend_stats(_vs)
         _hit = (f"{_last:,.2f}", _dir or st.session_state.get(_dk, 0),
-                _cl[-1] if _cl else 0.0, _real, _prob)
+                _cl[-1] if _cl else 0.0, _real, _prob, _bar_ts)
         st.session_state[_hk] = _hit
     _val, _dir = _hit[0], _hit[1]
     _ref  = _hit[2] if len(_hit) > 2 else 0.0
     _real = _hit[3] if len(_hit) > 3 else 0
     _prob = _hit[4] if len(_hit) > 4 else None
+    _bts  = _hit[5] if len(_hit) > 5 else ""
     if not _val:
         return ""
     _arrow = "▲" if _dir == 1 else ("▼" if _dir == -1 else "—")
@@ -3555,7 +3596,9 @@ def _hma_line(strike_int, option_type):
     return (f"<br><span style='color:var(--muted);font-size:8px;'>"
             f"HMA {int(strike_int)}{option_type}:</span>"
             f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>"
-            f"{_len}{_gap}")
+            f"{_len}{_gap}"
+            + (f"<span style='color:var(--muted);font-size:7px;' "
+               f"title='last bar used'> @{_bts[11:]}</span>" if _bts else ""))
 
 
 def _strike_first_5m_close(strike_int, option_type):
