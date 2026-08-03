@@ -8,6 +8,86 @@ Strategy:
               where LTP ≈ 50% of the sold strike LTP
 
 Run:  streamlit run diagonal_strategy.py
+
+════════════════════════════════════════════════════════════════════════════
+FIX LOG — cross-reference index. Newest first. Search the marker to jump to
+the code. Every entry was reproduced before fixing; none are speculative.
+════════════════════════════════════════════════════════════════════════════
+
+[IP-2026-08-03]  Ideal Premium — three defects
+    Definition: strike_a = LAST strike where CE LTP > PE LTP, strike_b = the
+    very next strike; IP = mean of those FOUR previous-day lows.
+      (a) Crossover scan broke on the first PE>CE seen after any CE>PE, so one
+          stale mid-chain quote ended it early. Injecting a noisy 23875
+          returned (23850, 23875) instead of (23950, 24000). Now takes the
+          LAST index where CE>PE outright.        -> search "_ip_last_i"
+      (b) Averaged `len(lows) >= 2` legs and divided by however many arrived.
+          A single failed leg produced a 3-leg mean displayed as if it were
+          the IP — 104.98 against the correct 96.87. Now requires all four.
+      (c) NSE lookup hardcoded symbol "NIFTY", so BANKNIFTY/SENSEX fetched
+          NIFTY's lows. Now takes `symbol` from the selection.
+      (d) round() gave 96.88 on the exact half 96.875 (half-to-even); the
+          stated IP is 96.87, so the mean is TRUNCATED to 2dp.
+                                             -> search "fetch_ideal_premium"
+
+[STAR-2026-08-03]  Blinking setup star on the SPCL card
+    Fires only when BOTH hold: anchor LTP below its SPCL band AND the
+    suggested cross-leg strike above BOTH its →L and →H.
+      (a) First version tested "above →L" only, so it lit with 24700 at 19.90
+          — over →CE L 17.36 but UNDER →CE H 19.97. Clearing the low means
+          "not collapsed"; clearing the HIGH is the breakout. -> "_spcl_star"
+      (b) Blink faded to opacity .12 at 13px, so for half of every cycle (and
+          in any screenshot) the star was invisible. Now floors at .55 and
+          pulses size/glow.                              -> "spclStarBlink"
+
+[MID-2026-08-02]  Strike suggestion nearest the →L/→H midpoint
+    Uses the DAY'S FIRST 5-min candle close (09:15), not the latest bar.
+    Candles arrive NEWEST-first, so the opening bar is element[-1]; [0] would
+    silently give the last bar.        -> "_strike_first_5m_close", "_mid_match"
+
+[HMA-2026-08-01]  HMA trend arrow
+    Direction is latched by walking EVERY bar, mirroring Pine's `var`.
+    Evaluating only the final bar left any strike whose last 4 HMA values were
+    not monotonic showing "—". Cache key carries _HMA_CACHE_V because a stale
+    session_state entry survived the fix and kept rendering the old value.
+                                                  -> "_hma_line", "_rev_lines"
+
+[INST-2026-08-01]  Multi-instrument correctness
+    (a) First-5-min anchor and fetch_nifty_extreme_close hardcoded
+        "NSE_INDEX|Nifty 50", so selecting SENSEX showed spot 78,894 with ATM
+        24,400 and every SPCL cell empty. Now follow INSTRUMENT_KEY.
+    (b) No session cache carried the instrument, so NIFTY and SENSEX shared
+        entries. _inst_choice added to all of them.
+    (c) SENSEX options live on BSE_FO, not NSE_FO.       -> "_inst_choice"
+
+[EXP-2026-08-01]  Expiry-aware caches
+    Every option-scoped cache keyed on date+ATM+slot but NOT the expiry, so
+    changing Current Expiry re-read the previous expiry's numbers. near_exp
+    added to all 9 keys.                        -> "spcl_hl_", "proj_hl_"
+
+[CANDLE-2026-07-29]  Upstox endpoint rules — the root of the "—" cells
+    All calls return HTTP 200; the failures were silent EMPTY payloads, so
+    assert on candle COUNT, never status.
+      • v2 historical EXCLUDES the current day (0 bars for today, 375 for
+        yesterday). After close, _5m_date_used is today, so v2 can never
+        answer — this is why a plain revert to v2 did not fix it.
+      • v3 intraday DOES serve NSE_INDEX (375 x 1m, 75 x 5m), contradicting a
+        comment this file carried for weeks.
+      • Rule: today -> v3 intraday; any past date -> v3 dated /{to}/{from}.
+      • Pre-market (before 09:15) intraday is empty for EVERYTHING, so REV
+        cells fall back to the previous session and are tagged "ᵖ".
+                                        -> "ENDPOINT RULES", "_fetch_strike_day_hl"
+
+[FUT-2026-07-29]  Futures instrument keys — "all 3 paths failed"
+    (a) Per-exchange NSE_FO.json.gz dump is RETIRED (S3 403); complete.json.gz
+        is live.
+    (b) Filtered underlying_symbol == "NIFTY 50", but real rows carry
+        underlying_symbol "NIFTY" and "Nifty 50" only in underlying_key — 0 of
+        640 rows matched. Now matches underlying_key, which also excludes
+        NIFTYNXT50.
+    (c) expiry in the dump is epoch MILLISECONDS, not ISO; strptime raised on
+        every row.                    -> "_parse_upstox_expiry", "_get_nifty_fut_tokens"
+════════════════════════════════════════════════════════════════════════════
 """
 
 import streamlit as st
@@ -790,9 +870,20 @@ def fetch_nse_fo_hist(expiry_str, strike, option_type):
         return None
 
 
-def fetch_ideal_premium(expiry_str, strike_a, strike_b, tok=None, chain_data=None):
+def fetch_ideal_premium(expiry_str, strike_a, strike_b, tok=None, chain_data=None,
+                        symbol="NIFTY"):
     """
     Ideal Premium (IP) — crossover-strike method.
+
+        strike_a = last strike where CE LTP > PE LTP
+        strike_b = the very next strike (first where PE > CE)
+        IP       = mean of those four PREVIOUS-DAY lows
+
+    e.g. 23950 CE 125.05, 23950 PE 72.55, 24000 CE 103.05, 24000 PE 86.85
+         -> (125.05 + 72.55 + 103.05 + 86.85) / 4 = 96.87
+
+    `symbol` must follow the selected instrument — it was hardcoded "NIFTY",
+    so on BANKNIFTY or SENSEX this returned NIFTY's lows.
     Fetches prev-day LOWs for 4 legs: strike_a CE/PE + strike_b CE/PE.
     Primary: NSE FO historical (one shared session).
     Fallback: Upstox daily candle (same source as SPP).
@@ -826,7 +917,7 @@ def fetch_ideal_premium(expiry_str, strike_a, strike_b, tok=None, chain_data=Non
                     _NSE_FO_HIST,
                     params={
                         "from": date_str, "to": date_str,
-                        "instrumentType": "OPTIDX", "symbol": "NIFTY",
+                        "instrumentType": "OPTIDX", "symbol": symbol,
                         "expiryDate": expiry_nse,
                         "optionType": otype,
                         "strikePrice": str(int(strike)),
@@ -852,9 +943,20 @@ def fetch_ideal_premium(expiry_str, strike_a, strike_b, tok=None, chain_data=Non
             if lv and lv > 0:
                 lows[f"{int(strike)} {otype}"] = lv
 
-        if len(lows) >= 2:
-            ip = sum(lows.values()) / len(lows)
-            return round(ip, 2), lows, f"{date_label} ({src})"
+        # IP is the average of exactly FOUR prev-day lows:
+        #   strike_a CE, strike_a PE, strike_b CE, strike_b PE
+        #   e.g. (125.05 + 72.55 + 103.05 + 86.85) / 4 = 96.87
+        # This used to accept `len(lows) >= 2` and divide by whatever it got.
+        # A single failed leg then produced a 3-leg mean that is NOT the Ideal
+        # Premium, displayed with no indication it was partial. Averaging 3 of
+        # those 4 gives 100.22 against the correct 96.87 — wrong, and silently.
+        # Better to show nothing than a number that looks right.
+        if len(lows) == 4:
+            # TRUNCATE, do not round. The worked example is an exact half:
+            # 387.50 / 4 = 96.875, and round() uses half-to-even -> 96.88,
+            # whereas the stated Ideal Premium is 96.87.
+            ip = math.floor(sum(lows.values()) / 4.0 * 100) / 100.0
+            return ip, lows, f"{date_label} ({src})"
         return None, lows, date_label
     except Exception:
         return None, {}, ""
@@ -5020,19 +5122,22 @@ with pb3:
 _ip_cross_low  = None
 _ip_cross_high = None
 try:
-    _ip_strikes = sorted(s for s in set(near_ce) | set(near_pe)
-                         if near_ce.get(s, 0) > 0 and near_pe.get(s, 0) > 0)
-    _ip_found_cross = False
-    for _s in _ip_strikes:
-        _ce_l = near_ce.get(_s, 0)
-        _pe_l = near_pe.get(_s, 0)
-        if _ce_l > _pe_l:
-            _ip_cross_low   = int(_s)
-            _ip_found_cross = False
-        elif _pe_l > _ce_l and _ip_cross_low is not None and not _ip_found_cross:
-            _ip_cross_high  = int(_s)
-            _ip_found_cross = True
-            break
+    # The definition is: the LAST strike where CE > PE, and the very next
+    # listed strike. Take the last such index outright rather than breaking on
+    # the first PE > CE seen after any CE > PE — one stale or wide-spread quote
+    # mid-chain used to end the scan early. With a single noisy strike injected
+    # at 23875, the old loop returned (23850, 23875) instead of (23950, 24000).
+    _ip_strikes = sorted(
+        s for s in set(near_ce) | set(near_pe)
+        if float(near_ce.get(s, 0) or 0) > 0 and float(near_pe.get(s, 0) or 0) > 0
+    )
+    _ip_last_i = None
+    for _i, _s in enumerate(_ip_strikes):
+        if float(near_ce[_s]) > float(near_pe[_s]):
+            _ip_last_i = _i
+    if _ip_last_i is not None and _ip_last_i + 1 < len(_ip_strikes):
+        _ip_cross_low  = int(_ip_strikes[_ip_last_i])
+        _ip_cross_high = int(_ip_strikes[_ip_last_i + 1])
 except Exception:
     pass
 
@@ -5050,7 +5155,8 @@ _ip_date_lbl  = _ip_cached.get("date_lbl", "")
 
 if _ip_val is None and _ip_cross_low and _ip_cross_high:
     _ip_v, _ip_ls, _ip_dl = fetch_ideal_premium(
-        near_exp, _ip_cross_low, _ip_cross_high, tok=token, chain_data=near_raw)
+        near_exp, _ip_cross_low, _ip_cross_high, tok=token, chain_data=near_raw,
+        symbol=SYMBOL)
     if _ip_v is not None:
         _ip_entry = {
             "ip":       _ip_v,
