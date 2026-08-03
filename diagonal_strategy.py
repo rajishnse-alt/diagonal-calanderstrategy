@@ -73,11 +73,18 @@ st.markdown(f"""
   :root {{ {_theme_vars} --mono:'JetBrains Mono',monospace; --hdr:'Syne',sans-serif; }}
   html,body,.stApp {{ background:var(--bg)!important; color:var(--text); }}
   /* Blinking setup star — SPCL band break + cross-leg holding its projected low */
-  @keyframes spclStarBlink {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.12; }} }}
+  /* Never fade below .55: the first version dipped to .12, so for half of every
+     cycle — and in any screenshot — the star was effectively not there. Pulse
+     size and glow instead of hiding it. */
+  @keyframes spclStarBlink {{
+    0%,100% {{ opacity:1;   transform:scale(1.12); box-shadow:0 0 10px 2px var(--gold); }}
+    50%     {{ opacity:.55; transform:scale(.94);  box-shadow:0 0 3px 0 var(--gold); }}
+  }}
   .spcl-star {{
-    display:inline-block; margin-left:5px; font-size:13px; line-height:1;
-    color:var(--gold); text-shadow:0 0 6px var(--gold);
-    animation:spclStarBlink 1s ease-in-out infinite;
+    display:inline-block; margin-left:6px; padding:1px 5px; border-radius:4px;
+    font-size:16px; line-height:1.15; font-weight:900;
+    color:#111; background:var(--gold); border:1px solid #fff6;
+    animation:spclStarBlink .9s ease-in-out infinite;
   }}
   /* Respect a reduced-motion preference: keep the star, drop the flashing. */
   @media (prefers-reduced-motion: reduce) {{
@@ -3404,35 +3411,40 @@ def _mid_match(option_type, proj_low, proj_high, ltp_map, n_probe=5):
     return {"strike": _si, "close_5m": _c5, "ltp": _lf, "mid": _mid, "delta": _c5 - _mid}
 
 
-def _spcl_star(anchor_ltp, spcl_band_lo, cross_low, cross_match):
+def _spcl_star(anchor_ltp, spcl_band_lo, cross_low, cross_high, cross_match):
     """
     Blinking ★ when BOTH legs of the setup line up:
 
       1. the anchor's LTP has broken BELOW its SPCL band  (24550 CE under
          96.00 | 83.46 — the band's lower edge is the SPCL value), and
-      2. the suggested cross-leg strike is holding ABOVE its projected low
-         (24400 PE over →PE L 18.52).
+      2. the suggested cross-leg strike is ABOVE ITS PROJECTED BAND, i.e. above
+         BOTH →L and →H. Since H > L, clearing H is the binding test.
 
-    One side collapsing while the other holds its floor is the whole signal, so
-    the star only lights when both are true — never on either alone.
+    The second test used to be "above →L" only. That fired a star on the CE row
+    when 24700's LTP was 19.90 — over →CE L 17.36 but UNDER →CE H 19.97, so it
+    had not actually cleared the band. Clearing the LOW just means not collapsed;
+    clearing the HIGH is what makes it a breakout.
 
-    Returns "" (no star) whenever any input is missing, rather than guessing.
+    One side collapsing while the other breaks out is the whole signal, so the
+    star needs both — never either alone. Missing input yields no star.
     """
     try:
-        _a  = float(anchor_ltp) if anchor_ltp else None
-        _lo = float(spcl_band_lo) if spcl_band_lo else None
-        _cl = float(cross_low) if cross_low else None
+        _a  = float(anchor_ltp)     if anchor_ltp     else None
+        _lo = float(spcl_band_lo)   if spcl_band_lo   else None
+        _cl = float(cross_low)      if cross_low      else None
+        _ch = float(cross_high)     if cross_high     else None
     except (TypeError, ValueError):
         return ""
-    if _a is None or _lo is None or _cl is None or not cross_match:
+    if _a is None or _lo is None or _cl is None or _ch is None or not cross_match:
         return ""
-    _cross_ltp = cross_match.get("ltp")
-    if not _cross_ltp:
+    _x = cross_match.get("ltp")
+    if not _x:
         return ""
-    if _a < _lo and float(_cross_ltp) > _cl:
+    _x = float(_x)
+    if _a < _lo and _x > _ch and _x > _cl:
         return (f"<span class='spcl-star' title='anchor {_a:,.2f} &lt; SPCL {_lo:,.2f}"
-                f"  &amp;&amp;  {cross_match['strike']} LTP {float(_cross_ltp):,.2f}"
-                f" &gt; low {_cl:,.2f}'>★</span>")
+                f"  &amp;&amp;  {cross_match['strike']} LTP {_x:,.2f}"
+                f" &gt; H {_ch:,.2f} (and &gt; L {_cl:,.2f})'>★</span>")
     return ""
 
 
@@ -5761,8 +5773,8 @@ if True:  # always render — individual cells show "—" if data missing
     # strike from the one shown.
     _pe_match = _mid_match("PE", _proj_pe_low, _proj_pe_high, near_pe)
     _ce_match = _mid_match("CE", _proj_ce_low, _proj_ce_high, near_ce)
-    _pe_star  = _spcl_star(_ce_ltp_atm, _ce_spcl, _proj_pe_low, _pe_match)
-    _ce_star  = _spcl_star(_pe_ltp_atm, _pe_spcl, _proj_ce_low, _ce_match)
+    _pe_star  = _spcl_star(_ce_ltp_atm, _ce_spcl, _proj_pe_low, _proj_pe_high, _pe_match)
+    _ce_star  = _spcl_star(_pe_ltp_atm, _pe_spcl, _proj_ce_low, _proj_ce_high, _ce_match)
 
     _ce_fc_lbl  = _fc_label(_ce_ltp_atm, _spcl_ce_h, _ce_spcl)
     _pe_fc_lbl  = _fc_label(_pe_ltp_atm, _spcl_pe_h, _pe_spcl)
