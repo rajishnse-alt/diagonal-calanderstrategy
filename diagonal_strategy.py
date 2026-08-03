@@ -3312,6 +3312,91 @@ def _hma_line(strike_int, option_type):
             f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>")
 
 
+def _strike_5m_close(strike_int, option_type):
+    """
+    Close of the LAST COMPLETED 5-min candle for one strike.
+
+    Today's session via v3 intraday, else the previous session's dated candles —
+    the same today/past split used everywhere here, because intraday serves only
+    the current day and dated endpoints exclude it. Cached per 5-min slot.
+    """
+    if not strike_int or not token:
+        return None
+    _ck = f"s5c_{_today_str}_{_inst_choice}_{near_exp}_{int(strike_int)}_{option_type}_{_spcl_slot}"
+    if _ck in st.session_state:
+        return st.session_state[_ck]
+    _inst = _opt_inst_key(strike_int, option_type)
+    _val = None
+    if _inst:
+        _enc = urllib.parse.quote(_inst, safe="")
+        _V3  = "https://api.upstox.com/v3/historical-candle"
+
+        def _last(url):
+            try:
+                _r = requests.get(url, headers=hdr(token), timeout=5)
+                _c = (_r.json().get("data") or {}).get("candles") or []
+            except requests.RequestException:
+                return None
+            # newest-first; skip the still-forming bucket while the market is live
+            if not _c:
+                return None
+            _cands = _c[1:] if _mkt_open and len(_c) > 1 else _c
+            return float(_cands[0][4]) if _cands and len(_cands[0]) > 4 else None
+
+        if _mkt_open or _after_close:
+            _val = _last(f"{_V3}/intraday/{_enc}/minutes/5")
+        if _val is None:
+            _p = _prev_biz_day().strftime("%Y-%m-%d")
+            _val = _last(f"{_V3}/{_enc}/minutes/5/{_p}/{_p}")
+    st.session_state[_ck] = _val
+    return _val
+
+
+def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
+    """
+    Suggest the strike whose 5-min candle CLOSE sits nearest the L↔H midpoint.
+
+    mid = (proj_low + proj_high) / 2 — the centre of the projected band.
+
+    Two stages so this costs a handful of requests, not one per strike: rank
+    every chain strike by |chain LTP - mid| to shortlist the closest n_probe,
+    then fetch the actual 5-min close only for those and pick the true nearest.
+    The chain LTP is a live tick; the decision is made on the candle close, as
+    asked.
+    """
+    if not proj_low or not proj_high or not ltp_map:
+        return ""
+    _mid = (float(proj_low) + float(proj_high)) / 2.0
+    _cands = []
+    for _s, _l in ltp_map.items():
+        try:
+            _si, _lf = int(float(_s)), float(_l)
+        except (TypeError, ValueError):
+            continue
+        if _lf > 0:
+            _cands.append((abs(_lf - _mid), _si))
+    if not _cands:
+        return ""
+    _cands.sort()
+    _best = None
+    for _, _si in _cands[:n_probe]:
+        _c5 = _strike_5m_close(_si, option_type)
+        if _c5 is None or _c5 <= 0:
+            continue
+        _d = abs(_c5 - _mid)
+        if _best is None or _d < _best[0]:
+            _best = (_d, _si, _c5)
+    if _best is None:
+        return ""
+    _, _si, _c5 = _best
+    _col = "var(--pe)" if option_type == "PE" else "var(--ce)"
+    return (f"<br><span style='color:var(--muted);font-size:8px;'>≈mid {_mid:,.2f} </span>"
+            f"<span style='color:{_col};font-weight:700;font-size:10px;'>{_si}</span>"
+            f"<span style='color:var(--muted);font-size:8px;'> 5mC </span>"
+            f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_c5:,.2f}</span>"
+            f"<span style='color:var(--muted);font-size:8px;'> Δ{_c5 - _mid:+.2f}</span>")
+
+
 def _tar_line(proj_high):
     """
     Tg — the projected target sitting above →PE H / →CE H:
@@ -5690,7 +5775,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -5704,7 +5789,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
@@ -5954,7 +6039,7 @@ st.markdown(
     f"→PE L {_tk_low}<br>{_fmt_s(_proj_pe_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
     f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-    f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}</td>"
+    f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}</td>"
     f"</tr>"
     f"<tr>"
     f"<td style='color:var(--muted);font-size:10px;padding:4px 8px;white-space:nowrap;'>"
@@ -5966,7 +6051,7 @@ st.markdown(
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
     f"padding:4px 8px;'>→CE L {_tk_low}<br>{_fmt_s(_proj_ce_low)}</td>"
     f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-    f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}</td>"
+    f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}</td>"
     f"</tr>"
     f"</tbody></table></div>",
     unsafe_allow_html=True)
