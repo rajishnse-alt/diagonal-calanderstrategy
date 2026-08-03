@@ -30,6 +30,23 @@ the code. Every entry was reproduced before fixing; none are speculative.
           stated IP is 96.87, so the mean is TRUNCATED to 2dp.
                                              -> search "fetch_ideal_premium"
 
+[HMA-2026-08-04]  HMA showing values unrelated to the contract
+    Reported as "24450 PE HMA is bullshit wrong": HMA 108.52 next to a PE band
+    of 33.38-38.40. Measured on the real series (24450 PE, exp 2026-08-04):
+      • the 10-day input window spans closes 13.65 .. 549.20 — a 40x collapse.
+        HMA(50) on 5-min covers ~57 bars = 285 min = 0.76 of a SESSION, so it
+        reaches into the previous session and lags a price regime that no
+        longer exists. Arithmetically right, useless next to today's band.
+      • worse, the series itself ranged -4.80 .. 261.45. A Hull MA is
+        2*wma(n/2) - wma(n), which UNDERSHOOTS below zero on a steep decay —
+        and a negative average of a premium was being rendered as a number.
+    Fixes: non-positive HMA drops the line entirely; a gap past 1.5x (or under
+    0.667x) the last close is labelled "N.N×LTP" so a lagging value can never
+    be mistaken for the current premium. Cache version 2 -> 3 so entries
+    written before this are discarded.
+    Verified live: 24450 PE now 18.72 ▼ and CE 146.34 ▼, both matching the HMA
+    computed independently from the same closes.        -> search "_hma_line"
+
 [STAR-2026-08-03]  Blinking setup star on the SPCL card
     Fires only when BOTH hold: anchor LTP below its SPCL band AND the
     suggested cross-leg strike above BOTH its →L and →H.
@@ -3296,7 +3313,7 @@ def _calc_spcl(ce_h: float, pe_h: float):
 _HMA_LENGTH    = 50   # Pine hmaLength
 _HMA_TREND_LEN = 3    # Pine hmaTrendLength
 _HMA_TF        = 5    # Pine hmaTF ("5")
-_HMA_CACHE_V   = 2    # bump to invalidate cached HMA results (see _hma_line)
+_HMA_CACHE_V   = 3    # bump to invalidate cached HMA results (see _hma_line)
 
 
 def _wma(vals, n):
@@ -3421,15 +3438,38 @@ def _hma_line(strike_int, option_type):
                 _dir = -1
         if _dir:
             st.session_state[_dk] = _dir
-        _hit = (f"{_vs[-1]:,.2f}", _dir or st.session_state.get(_dk, 0))
+        # A Hull MA can UNDERSHOOT below zero: hma = 2*wma(n/2) - wma(n), and on
+        # a steep decay the short WMA falls far under the long one. Measured on
+        # 24450 PE (expiry 2026-08-04): the series ranges -4.80 .. 261.45 while
+        # the closes range 13.65 .. 549.20. A negative average of a premium is
+        # not a number worth showing, so drop the line instead.
+        _last = _vs[-1]
+        if _last <= 0:
+            st.session_state[_hk] = ("", 0)
+            return ""
+        _hit = (f"{_last:,.2f}", _dir or st.session_state.get(_dk, 0), _cl[-1] if _cl else 0.0)
         st.session_state[_hk] = _hit
-    _val, _dir = _hit
+    _val, _dir = _hit[0], _hit[1]
+    _ref = _hit[2] if len(_hit) > 2 else 0.0
     if not _val:
         return ""
     _arrow = "▲" if _dir == 1 else ("▼" if _dir == -1 else "—")
     _col   = "var(--bull)" if _dir == 1 else ("var(--bear)" if _dir == -1 else "var(--muted)")
+    # HMA(50) on 5-min bars spans ~57 bars = 285 min = 0.76 of a session, so it
+    # reaches into the PREVIOUS session. On a weekly decaying 10x that leaves it
+    # far from the current premium — arithmetically right, and badly misleading
+    # sitting next to today's band unless the gap is stated. Flag it past 1.5x.
+    _gap = ""
+    try:
+        _r = float(_val.replace(",", "")) / float(_ref) if _ref else 0.0
+        if _r and (_r > 1.5 or _r < 0.667):
+            _gap = (f"<span style='color:var(--gold);font-size:8px;font-weight:700;'>"
+                    f" {_r:.1f}×LTP</span>")
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
     return (f"<br><span style='color:var(--muted);font-size:8px;'>HMA:</span>"
-            f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>")
+            f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>"
+            f"{_gap}")
 
 
 def _strike_first_5m_close(strike_int, option_type):
