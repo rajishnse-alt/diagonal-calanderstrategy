@@ -30,6 +30,16 @@ the code. Every entry was reproduced before fixing; none are speculative.
           stated IP is 96.87, so the mean is TRUNCATED to 2dp.
                                              -> search "fetch_ideal_premium"
 
+[BAND-2026-08-04]  SPCL "day high" silently degrading to the LTP
+    The fallback chain for _spcl_ce_h / _spcl_pe_h ended in near_ce/near_pe —
+    the LTP, which is not a high at all. Pre-market no day high exists, so the
+    band became LTP-derived and EVERYTHING off it (SPCL, TOP REV, the four
+    projections, Tg) was computed from the wrong number with no indication.
+    Measured 2026-08-04 pre-market: 24550 CE rendered "78.35 | 68.12" where
+    78.35 is its LAST CLOSE and the real prev-day high is 96.00.
+    Fallback kept — a degraded card beats an empty one — but now recorded and
+    marked: ˡ = LTP-derived, ᶜ = chain OHLC.        -> search "_spcl_h_src"
+
 [HMA-2026-08-04b]  ChartPrime "Trend Duration Forecast" — validated + extended
     HMA implementation CONFIRMED CORRECT against TradingView's own plot
     (the amber axis label):
@@ -3327,7 +3337,7 @@ def _calc_spcl(ce_h: float, pe_h: float):
 _HMA_LENGTH    = 50   # Pine hmaLength
 _HMA_TREND_LEN = 3    # Pine hmaTrendLength
 _HMA_TF        = 5    # Pine hmaTF ("5")
-_HMA_CACHE_V   = 4    # bump to invalidate cached HMA results (see _hma_line)
+_HMA_CACHE_V   = 5    # bump to invalidate cached HMA results (see _hma_line)
 
 
 def _wma(vals, n):
@@ -3539,7 +3549,11 @@ def _hma_line(strike_int, option_type):
         _p = f"/{_prob:.0f}" if _prob else ""
         _len = (f"<span style='color:var(--muted);font-size:8px;'> "
                 f"{_real}{_p}b</span>")
-    return (f"<br><span style='color:var(--muted);font-size:8px;'>HMA:</span>"
+    # Provenance: the value is disputed, so it names the contract it came from.
+    # If a CE row ever shows a PE-magnitude HMA, the label makes it obvious
+    # instead of leaving it to be guessed at from the numbers.
+    return (f"<br><span style='color:var(--muted);font-size:8px;'>"
+            f"HMA {int(strike_int)}{option_type}:</span>"
             f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>"
             f"{_len}{_gap}")
 
@@ -5538,12 +5552,26 @@ if (not _spcl_ce_h or not _spcl_pe_h or not _spcl_ce_l or not _spcl_pe_l) and to
             st.session_state[_spcl_hl_key + "_peh"] = _fh_pe_h
 
 # Fallback to chain OHLC / LTP
+# The LAST fallback here is the LTP, not a high at all. Pre-market no day high
+# exists yet, so the "day high" silently became the LTP and EVERY value derived
+# from it — SPCL, TOP REV, the four projections, Tg — was computed off the wrong
+# number with nothing saying so. Measured 2026-08-04 pre-market: 24550 CE showed
+# 78.35 (its last close) where the real prev-day high was 96.00.
+# Keep the fallback (a degraded number beats an empty card) but RECORD it, so
+# the card can mark the band as LTP-derived.
+_spcl_h_src = {"CE": "day", "PE": "day"}
 if not _spcl_ce_h:
-    _spcl_ce_h = (near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
-                  or near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm))
+    _spcl_ce_h = near_ce_high.get(float(_5m_spcl_atm)) or near_ce_high.get(_5m_spcl_atm)
+    _spcl_h_src["CE"] = "chain"
+    if not _spcl_ce_h:
+        _spcl_ce_h = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
+        _spcl_h_src["CE"] = "ltp"
 if not _spcl_pe_h:
-    _spcl_pe_h = (near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
-                  or near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm))
+    _spcl_pe_h = near_pe_high.get(float(_5m_spcl_atm)) or near_pe_high.get(_5m_spcl_atm)
+    _spcl_h_src["PE"] = "chain"
+    if not _spcl_pe_h:
+        _spcl_pe_h = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
+        _spcl_h_src["PE"] = "ltp"
 if not _spcl_ce_l:
     _spcl_ce_l = near_ce_low.get(float(_5m_spcl_atm)) or near_ce_low.get(_5m_spcl_atm)
 if not _spcl_pe_l:
@@ -5777,7 +5805,12 @@ def _spcl_span(day_h, day_l, spcl, fmt_h=None, fmt_l=None,
     """
     _fh = fmt_h or _fmt_s
     _fl = fmt_l or _fmt_s
-    _lead = f"{_fh(day_h)} | {_fl(spcl)}"
+    _src = (_spcl_h_src or {}).get(opt_type or "", "day") if "_spcl_h_src" in globals() else "day"
+    _tag = ("" if _src == "day" else
+            f"<span style='color:var(--gold);font-size:8px;' title='no day high available"
+            f" — this is the {'chain OHLC high' if _src=='chain' else 'LTP'}, not a day high'>"
+            f"{'ᶜ' if _src=='chain' else 'ˡ'}</span>")
+    _lead = f"{_fh(day_h)}{_tag} | {_fl(spcl)}"
     _rev  = _rev_lines(day_h, day_l)
     if strike and opt_type:
         _rev += _hma_line(strike, opt_type).replace("<br>", "", 1)
