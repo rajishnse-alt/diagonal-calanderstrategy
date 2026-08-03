@@ -30,6 +30,20 @@ the code. Every entry was reproduced before fixing; none are speculative.
           stated IP is 96.87, so the mean is TRUNCATED to 2dp.
                                              -> search "fetch_ideal_premium"
 
+[HMA-2026-08-04b]  ChartPrime "Trend Duration Forecast" — validated + extended
+    HMA implementation CONFIRMED CORRECT against TradingView's own plot
+    (the amber axis label):
+        24800 CE  mine 5.65  vs TV 5.65   exact
+        24450 PE  mine 18.72 vs TV 18.68  +0.04, TV had 1-2 more bars
+    So the earlier 108.52 was a STALE CACHED value, not bad maths — which is
+    why the cache version exists. Bumped 3 -> 4 with this change.
+    Added the script's trend-duration half: Real Length (bars the current run
+    has lasted) and Probable Length (mean of past runs in that direction, last
+    10 samples), walked bar-by-bar in Pine's exact order — update trend,
+    increment, then on a flip push the ENDED run's count and reset to 0.
+    Probable Length for 24450 PE computes 24, matching the chart's
+    "Probable Length 24" label.                  -> search "_hma_trend_stats"
+
 [HMA-2026-08-04]  HMA showing values unrelated to the contract
     Reported as "24450 PE HMA is bullshit wrong": HMA 108.52 next to a PE band
     of 33.38-38.40. Measured on the real series (24450 PE, exp 2026-08-04):
@@ -3313,7 +3327,7 @@ def _calc_spcl(ce_h: float, pe_h: float):
 _HMA_LENGTH    = 50   # Pine hmaLength
 _HMA_TREND_LEN = 3    # Pine hmaTrendLength
 _HMA_TF        = 5    # Pine hmaTF ("5")
-_HMA_CACHE_V   = 3    # bump to invalidate cached HMA results (see _hma_line)
+_HMA_CACHE_V   = 4    # bump to invalidate cached HMA results (see _hma_line)
 
 
 def _wma(vals, n):
@@ -3393,6 +3407,53 @@ def _opt_inst_key(strike_int, option_type):
     return None
 
 
+def _hma_trend_stats(vs, trend_len=None, samples=10):
+    """
+    Trend direction + Real Length + Probable Length — port of ChartPrime's
+    "Trend Duration Forecast", walked bar by bar over the HMA series.
+
+    Pine, faithfully:
+        if ta.rising(hma, trendLength):  trend := true
+        if ta.falling(hma, trendLength): trend := false
+        TrendCount += 1                       (only once trend is no longer na)
+        on a flip:
+            trend now UP   -> bearishCount.push(TrendCount)   # the DOWN run ended
+            trend now DOWN -> bullishCount.push(TrendCount)   # the UP run ended
+            TrendCount := 0
+    Probable Length is the mean of PAST runs in the CURRENT direction, capped
+    at `samples` most recent (Pine shifts the array once it exceeds samples).
+
+    Returns (trend, real_len, probable_len); trend is True/False/None.
+    """
+    _tl = trend_len or _HMA_TREND_LEN
+    if not vs or len(vs) < _tl + 2:
+        return None, 0, None
+    _trend, _count = None, 0
+    _bull, _bear = [], []          # durations of completed UP / DOWN runs
+    for _i in range(_tl, len(vs)):
+        _w = vs[_i - _tl: _i + 1]                      # trend_len+1 values
+        _rising  = all(_w[j] > _w[j - 1] for j in range(1, len(_w)))
+        _falling = all(_w[j] < _w[j - 1] for j in range(1, len(_w)))
+        _prev = _trend
+        if _rising:
+            _trend = True
+        if _falling:
+            _trend = False
+        if _trend is not None:
+            _count += 1
+        if _prev is not None and _trend is not None and _trend != _prev:
+            # the run that just ENDED was the opposite of the new direction
+            (_bear if _trend else _bull).append(_count)
+            if len(_bull) > samples:
+                _bull.pop(0)
+            if len(_bear) > samples:
+                _bear.pop(0)
+            _count = 0
+    _past = _bull if _trend else _bear
+    _prob = (sum(_past) / len(_past)) if _past else None
+    return _trend, _count, _prob
+
+
 def _hma_line(strike_int, option_type):
     """
     "HMA:39.97 ▲" for one strike's own contract, coloured by trend.
@@ -3447,10 +3508,14 @@ def _hma_line(strike_int, option_type):
         if _last <= 0:
             st.session_state[_hk] = ("", 0)
             return ""
-        _hit = (f"{_last:,.2f}", _dir or st.session_state.get(_dk, 0), _cl[-1] if _cl else 0.0)
+        _t, _real, _prob = _hma_trend_stats(_vs)
+        _hit = (f"{_last:,.2f}", _dir or st.session_state.get(_dk, 0),
+                _cl[-1] if _cl else 0.0, _real, _prob)
         st.session_state[_hk] = _hit
     _val, _dir = _hit[0], _hit[1]
-    _ref = _hit[2] if len(_hit) > 2 else 0.0
+    _ref  = _hit[2] if len(_hit) > 2 else 0.0
+    _real = _hit[3] if len(_hit) > 3 else 0
+    _prob = _hit[4] if len(_hit) > 4 else None
     if not _val:
         return ""
     _arrow = "▲" if _dir == 1 else ("▼" if _dir == -1 else "—")
@@ -3467,9 +3532,16 @@ def _hma_line(strike_int, option_type):
                     f" {_r:.1f}×LTP</span>")
     except (TypeError, ValueError, ZeroDivisionError):
         pass
+    # Real / Probable length, same meaning as the ChartPrime labels: bars the
+    # current trend has run, against the mean of past runs in that direction.
+    _len = ""
+    if _real:
+        _p = f"/{_prob:.0f}" if _prob else ""
+        _len = (f"<span style='color:var(--muted);font-size:8px;'> "
+                f"{_real}{_p}b</span>")
     return (f"<br><span style='color:var(--muted);font-size:8px;'>HMA:</span>"
             f"<span style='color:{_col};font-weight:700;font-size:9px;'>{_val} {_arrow}</span>"
-            f"{_gap}")
+            f"{_len}{_gap}")
 
 
 def _strike_first_5m_close(strike_int, option_type):
