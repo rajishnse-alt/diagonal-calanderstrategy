@@ -72,6 +72,17 @@ st.markdown(f"""
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@700;800&display=swap');
   :root {{ {_theme_vars} --mono:'JetBrains Mono',monospace; --hdr:'Syne',sans-serif; }}
   html,body,.stApp {{ background:var(--bg)!important; color:var(--text); }}
+  /* Blinking setup star — SPCL band break + cross-leg holding its projected low */
+  @keyframes spclStarBlink {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.12; }} }}
+  .spcl-star {{
+    display:inline-block; margin-left:5px; font-size:13px; line-height:1;
+    color:var(--gold); text-shadow:0 0 6px var(--gold);
+    animation:spclStarBlink 1s ease-in-out infinite;
+  }}
+  /* Respect a reduced-motion preference: keep the star, drop the flashing. */
+  @media (prefers-reduced-motion: reduce) {{
+    .spcl-star {{ animation:none; }}
+  }}
   .block-container  {{ padding:.75rem 1.2rem 1rem!important; }}
   h1,h2,h3          {{ font-family:var(--hdr); color:var(--text); }}
   .sec-hdr {{
@@ -3355,6 +3366,76 @@ def _strike_first_5m_close(strike_int, option_type):
     return _val
 
 
+def _mid_match(option_type, proj_low, proj_high, ltp_map, n_probe=5):
+    """
+    Pick the strike whose DAY'S FIRST 5-min close is nearest the L↔H midpoint.
+
+    Split out from the renderer so the star condition can reuse the SAME chosen
+    strike — if the two computed it separately they could disagree, and a star
+    would point at a strike the row is not showing.
+
+    Returns {strike, close_5m, ltp, mid, delta} or None.
+    """
+    if not proj_low or not proj_high or not ltp_map:
+        return None
+    _mid = (float(proj_low) + float(proj_high)) / 2.0
+    _cands = []
+    for _s, _l in ltp_map.items():
+        try:
+            _si, _lf = int(float(_s)), float(_l)
+        except (TypeError, ValueError):
+            continue
+        if _lf > 0:
+            _cands.append((abs(_lf - _mid), _si, _lf))
+    if not _cands:
+        return None
+    _cands.sort()
+    _best = None
+    for _, _si, _lf in _cands[:n_probe]:
+        _c5 = _strike_first_5m_close(_si, option_type)
+        if _c5 is None or _c5 <= 0:
+            continue
+        _d = abs(_c5 - _mid)
+        if _best is None or _d < _best[0]:
+            _best = (_d, _si, _c5, _lf)
+    if _best is None:
+        return None
+    _d, _si, _c5, _lf = _best
+    return {"strike": _si, "close_5m": _c5, "ltp": _lf, "mid": _mid, "delta": _c5 - _mid}
+
+
+def _spcl_star(anchor_ltp, spcl_band_lo, cross_low, cross_match):
+    """
+    Blinking ★ when BOTH legs of the setup line up:
+
+      1. the anchor's LTP has broken BELOW its SPCL band  (24550 CE under
+         96.00 | 83.46 — the band's lower edge is the SPCL value), and
+      2. the suggested cross-leg strike is holding ABOVE its projected low
+         (24400 PE over →PE L 18.52).
+
+    One side collapsing while the other holds its floor is the whole signal, so
+    the star only lights when both are true — never on either alone.
+
+    Returns "" (no star) whenever any input is missing, rather than guessing.
+    """
+    try:
+        _a  = float(anchor_ltp) if anchor_ltp else None
+        _lo = float(spcl_band_lo) if spcl_band_lo else None
+        _cl = float(cross_low) if cross_low else None
+    except (TypeError, ValueError):
+        return ""
+    if _a is None or _lo is None or _cl is None or not cross_match:
+        return ""
+    _cross_ltp = cross_match.get("ltp")
+    if not _cross_ltp:
+        return ""
+    if _a < _lo and float(_cross_ltp) > _cl:
+        return (f"<span class='spcl-star' title='anchor {_a:,.2f} &lt; SPCL {_lo:,.2f}"
+                f"  &amp;&amp;  {cross_match['strike']} LTP {float(_cross_ltp):,.2f}"
+                f" &gt; low {_cl:,.2f}'>★</span>")
+    return ""
+
+
 def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
     """
     Suggest the strike whose DAY'S FIRST 5-min close sits nearest the L↔H midpoint.
@@ -3367,31 +3448,10 @@ def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
     The chain LTP is a live tick used ONLY to narrow the field; the decision is
     made on the day's opening 5-min candle close.
     """
-    if not proj_low or not proj_high or not ltp_map:
+    _m = _mid_match(option_type, proj_low, proj_high, ltp_map, n_probe)
+    if not _m:
         return ""
-    _mid = (float(proj_low) + float(proj_high)) / 2.0
-    _cands = []
-    for _s, _l in ltp_map.items():
-        try:
-            _si, _lf = int(float(_s)), float(_l)
-        except (TypeError, ValueError):
-            continue
-        if _lf > 0:
-            _cands.append((abs(_lf - _mid), _si))
-    if not _cands:
-        return ""
-    _cands.sort()
-    _best = None
-    for _, _si in _cands[:n_probe]:
-        _c5 = _strike_first_5m_close(_si, option_type)
-        if _c5 is None or _c5 <= 0:
-            continue
-        _d = abs(_c5 - _mid)
-        if _best is None or _d < _best[0]:
-            _best = (_d, _si, _c5)
-    if _best is None:
-        return ""
-    _, _si, _c5 = _best
+    _si, _c5, _mid = _m["strike"], _m["close_5m"], _m["mid"]
     _col = "var(--pe)" if option_type == "PE" else "var(--ce)"
     return (f"<br><span style='color:var(--muted);font-size:8px;'>≈mid {_mid:,.2f} </span>"
             f"<span style='color:{_col};font-weight:700;font-size:10px;'>{_si}</span>"
@@ -5693,6 +5753,17 @@ if True:  # always render — individual cells show "—" if data missing
     # i.e. the two numbers shown in the card: "137.20 | 119.28"
     _ce_ltp_atm = near_ce.get(float(_5m_spcl_atm)) or near_ce.get(_5m_spcl_atm)
     _pe_ltp_atm = near_pe.get(float(_5m_spcl_atm)) or near_pe.get(_5m_spcl_atm)
+    # ── Blinking-star setup ─────────────────────────────────────────────────
+    # Row 1 (CeSPCL): CE anchor breaks below its band while the suggested PE
+    #                 strike holds above →PE L  → star on the PE side.
+    # Row 2 (PeSPCL): mirror image → star on the CE side.
+    # Same _mid_match the row renders, so the star can never name a different
+    # strike from the one shown.
+    _pe_match = _mid_match("PE", _proj_pe_low, _proj_pe_high, near_pe)
+    _ce_match = _mid_match("CE", _proj_ce_low, _proj_ce_high, near_ce)
+    _pe_star  = _spcl_star(_ce_ltp_atm, _ce_spcl, _proj_pe_low, _pe_match)
+    _ce_star  = _spcl_star(_pe_ltp_atm, _pe_spcl, _proj_ce_low, _ce_match)
+
     _ce_fc_lbl  = _fc_label(_ce_ltp_atm, _spcl_ce_h, _ce_spcl)
     _pe_fc_lbl  = _fc_label(_pe_ltp_atm, _spcl_pe_h, _pe_spcl)
     # Projection cells: best strike LTP vs proj low/high range
@@ -5778,7 +5849,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -5792,7 +5863,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
