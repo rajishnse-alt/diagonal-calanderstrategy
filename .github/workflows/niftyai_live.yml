@@ -1,0 +1,125 @@
+name: NiftyAI live capture + scan
+
+# The two wrappers, running on GitHub — NOT on a local machine, and NOT
+# dependent on anyone having the Streamlit app open.
+#
+# WHY THIS CAN RUN UNATTENDED
+#   PCR needs open interest, and the option-chain endpoint requires a token.
+#   But OI is column 6 of the PUBLIC historical-candle response:
+#     ['2026-08-03T15:35:00+05:30', 14.85, 16.3, 13.5, 14.45, 2651675, 5685290]
+#   so PCR = sum(PE OI)/sum(CE OI) needs no login. Verified across all three
+#   instruments: NIFTY 0.9048, BANKNIFTY 0.6228, SENSEX 0.6682.
+#   That is the whole reason the old PCR log is patchy — it only wrote while
+#   someone had the app running (2026-08-03 has 3 rows, 2026-07-22 has 109).
+
+on:
+  schedule:
+    # Every 15 min across the Indian session. 03:30 UTC = 09:00 IST,
+    # 10:00 UTC = 15:30 IST. GitHub cron drifts, so the job also checks the
+    # clock itself and exits quietly outside market hours.
+    - cron: "*/15 3-10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      instruments:
+        description: "Comma-separated"
+        default: "NIFTY,BANKNIFTY,SENSEX"
+      force:
+        description: "Run even outside market hours"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: niftyai-live
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q requests
+
+      - name: Market-hours gate
+        id: gate
+        run: |
+          # IST = UTC+5:30. Session 09:15-15:30 IST; start capturing at 09:00.
+          NOW=$(TZ=Asia/Kolkata date +%H%M)
+          DOW=$(TZ=Asia/Kolkata date +%u)
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$DOW" -ge 6 ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "weekend ($DOW) — skip"
+          elif [ "$NOW" -ge 900 ] && [ "$NOW" -le 1535 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "in session ($NOW IST)"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "outside hours ($NOW IST) — skip"
+          fi
+
+      - name: Wrapper 1 — capture PCR + state
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          python niftyai/collector/snapshot.py \
+            --instruments "${{ inputs.instruments || 'NIFTY,BANKNIFTY,SENSEX' }}"
+
+      - name: Wrapper 2 — scan all instruments, rank by reward:risk
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          python niftyai/agent/scan.py \
+            --instruments "${{ inputs.instruments || 'NIFTY,BANKNIFTY,SENSEX' }}" --write
+
+      - name: Commit
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A niftyai/data_log niftyai/agent/decisions || true
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git commit -m "NiftyAI capture $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
+          # Runs every 15 min alongside the repo's other bots — rebase, retry.
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && \
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep $((i * 5))
+          done
+          exit 1
+
+  learn:
+    # After the close: fold the day's trades into the parameters.
+    needs: capture
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q requests
+      - name: Daily learning pass
+        run: |
+          NOW=$(TZ=Asia/Kolkata date +%H%M)
+          if [ "$NOW" -ge 1530 ] || [ "${{ inputs.force }}" = "true" ]; then
+            python niftyai/agent/learn.py --instrument NIFTY || true
+          else
+            echo "not after close ($NOW IST) — skip"
+          fi
+      - name: Commit learned parameters
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A niftyai/agent/params.json niftyai/agent/learning_log.md \
+                     niftyai/journal || true
+          git diff --cached --quiet && exit 0
+          git commit -m "NiftyAI learning $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && \
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep $((i * 5))
+          done
+          exit 1
