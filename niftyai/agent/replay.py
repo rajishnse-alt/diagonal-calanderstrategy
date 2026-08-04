@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from niftyai.agent import journal as J, paper as P, rules as R   # noqa: E402
+from niftyai.agent import journal as J, paper as P, params as PR, rules as R  # noqa: E402
 
 IST = timezone(timedelta(hours=5, minutes=30))
 H   = {"Accept": "application/json"}
@@ -158,6 +158,7 @@ def main():
             cand_series[(strike, typ)] = candles(cand_keys[(strike, typ)], day, frm)
         return cand_series[(strike, typ)]
 
+    PARAMS = PR.load()
     trades, open_t, last_pcr = [], None, None
     day_bars = [c for c in series[("anchor", "CE")] if str(c[0])[:10] == day]
     print(f"anchor bars today: {len(day_bars)}\n")
@@ -259,7 +260,11 @@ def main():
 
         if (sig and sig.triggered and open_t is None
                 and len(trades) < a.max_trades and sig.candidate.day_low):
-            open_t = P.open_trade(sig, ts, sig.candidate.day_low)
+            _crows = [c for c in bars(sig.candidate.strike, sig.candidate.opt_type)
+                      if str(c[0]) <= ts]
+            _catr = P.atr(_crows)
+            open_t = P.open_trade(sig, ts, sig.candidate.day_low,
+                                  atr_val=_catr, params=PARAMS)
             print(f"        ENTER {open_t.strike}{open_t.opt_type} {open_t.lots} lots "
                   f"@ {open_t.entry:.2f}  SL {open_t.sl:.2f}  Tg {open_t.target:.2f}"
                   f"  (risk {open_t.risk_per_lot:.2f}/lot, 1:3 needs "

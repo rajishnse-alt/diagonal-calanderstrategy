@@ -1,0 +1,26 @@
+{
+  "_bounds": {
+    "atr_stop_mult": [
+      0.8,
+      3.0
+    ],
+    "atr_trail_mult": [
+      1.0,
+      4.0
+    ],
+    "book_fraction": [
+      0.5,
+      0.9
+    ]
+  },
+  "_meta": {
+    "by_regime": {},
+    "last_update": null,
+    "note": "reset \u2014 the 3-trade demo run was below the 5-trade floor",
+    "trades_seen": 0
+  },
+  "atr_stop_mult": 1.5,
+  "atr_trail_mult": 1.5,
+  "book_fraction": 0.8,
+  "rr_target": 3.0
+}

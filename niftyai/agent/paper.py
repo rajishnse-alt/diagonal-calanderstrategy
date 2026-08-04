@@ -141,16 +141,40 @@ class Trade:
         return asdict(self)
 
 
-def initial_stop(day_low: float) -> float:
-    """Day's low - 0.11%."""
-    return round(float(day_low) * (1 - SL_DAY_LOW_PCT), 2)
+def initial_stop(day_low: float, entry: float | None = None,
+                 atr_val: float | None = None, k: float | None = None) -> float:
+    """
+    The TIGHTER of the day-low rule and a volatility-scaled stop:
+
+        max(day_low x (1 - 0.11%),  entry - k x ATR)
+
+    The day-low rule still caps how far the stop can sit, so the original
+    intent survives — but on a breakout entry the day low is often 50% below
+    price, which made the risk so large that Tg could never reach 1:3
+    (measured: risk 9.71 on a 20.00 entry against a 5.19 reward = 0.53R).
+    Taking the tighter of the two scales risk to the volatility present.
+    """
+    dl = float(day_low) * (1 - SL_DAY_LOW_PCT)
+    if entry and atr_val and k:
+        vol = float(entry) - float(k) * float(atr_val)
+        if vol > dl:                       # tighter, and still below entry
+            dl = vol
+    return round(dl, 2)
 
 
-def open_trade(sig, ts, day_low, target=None) -> Trade:
+def open_trade(sig, ts, day_low, target=None, atr_val=None, params=None) -> Trade:
     c = sig.candidate
-    return Trade(
+    entry = float(c.ltp)
+    k = None
+    if params is not None and atr_val:
+        from niftyai.agent import params as PR
+        k = PR.stop_mult_for(params, atr_val / entry if entry else None)
+    t = Trade(
         instrument=sig.instrument, side=sig.side, strike=c.strike,
-        opt_type=c.opt_type, entry_ts=str(ts), entry=float(c.ltp),
+        opt_type=c.opt_type, entry_ts=str(ts), entry=entry,
         target=float(target if target is not None else c.target),
-        init_sl=initial_stop(day_low),
+        init_sl=initial_stop(day_low, entry, atr_val, k),
     )
+    t.notes.append(f"atr={atr_val and round(atr_val,2)} k={k} "
+                   f"atr_pct={atr_val and entry and round(atr_val/entry,4)}")
+    return t
