@@ -116,11 +116,10 @@ def main():
     ap.add_argument("--instruments", default="NIFTY,BANKNIFTY,SENSEX")
     ap.add_argument("--write", action="store_true")
     a = ap.parse_args()
-    params = PR.load()
     out = []
     for name in [x.strip().upper() for x in a.instruments.split(",") if x.strip()]:
         try:
-            r = evaluate(name, params)
+            r = evaluate(name, PR.load(name))
         except Exception as e:
             r = {"instrument": name, "error": f"{type(e).__name__}: {e}"}
         if r:

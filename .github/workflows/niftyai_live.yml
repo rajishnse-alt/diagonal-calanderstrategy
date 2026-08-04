@@ -80,7 +80,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A niftyai/data_log niftyai/agent/decisions || true
+          git add -A niftyai/data_log niftyai/agent/decisions pcr_data || true
           if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
           git commit -m "NiftyAI capture $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
           # Runs every 15 min alongside the repo's other bots — rebase, retry.
@@ -105,7 +105,13 @@ jobs:
         run: |
           NOW=$(TZ=Asia/Kolkata date +%H%M)
           if [ "$NOW" -ge 1530 ] || [ "${{ inputs.force }}" = "true" ]; then
-            python niftyai/agent/learn.py --instrument NIFTY || true
+            # EVERY index, not just NIFTY. params/journal are already keyed per
+            # instrument, so each learns from its own trades — BANKNIFTY's
+            # monthly-expiry behaviour should not tune NIFTY's weekly stop.
+            for I in NIFTY BANKNIFTY SENSEX; do
+              echo "--- $I ---"
+              python niftyai/agent/learn.py --instrument "$I" || true
+            done
           else
             echo "not after close ($NOW IST) — skip"
           fi
@@ -113,7 +119,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A niftyai/agent/params.json niftyai/agent/learning_log.md \
+          git add -A niftyai/agent/params_*.json niftyai/agent/learning_log_*.md \
                      niftyai/journal || true
           git diff --cached --quiet && exit 0
           git commit -m "NiftyAI learning $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"

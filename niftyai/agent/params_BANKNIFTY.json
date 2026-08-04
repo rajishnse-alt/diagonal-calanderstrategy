@@ -16,7 +16,6 @@
   "_meta": {
     "by_regime": {},
     "last_update": null,
-    "note": "reset \u2014 the 3-trade demo run was below the 5-trade floor",
     "trades_seen": 0
   },
   "atr_stop_mult": 1.5,

@@ -143,6 +143,7 @@ def snapshot(instrument, band_steps=12):
     ce_oi = pe_oi = 0.0
     n_str = 0
     anchor = {"CE": (None, None), "PE": (None, None)}
+    atm_oi = {"CE": 0.0, "PE": 0.0}
     for r in near:
         b = bars(r["key"], to, frm)
         if not b:
@@ -158,6 +159,7 @@ def snapshot(instrument, band_steps=12):
         if int(r["strike"]) == atm:
             hi = max(float(x[2]) for x in today_b)
             anchor[r["type"]] = (round(hi, 2), float(last[4]))
+            atm_oi[r["type"]] = oi
 
     pcr = round(pe_oi / ce_oi, 4) if ce_oi else None
     return {
@@ -168,8 +170,50 @@ def snapshot(instrument, band_steps=12):
         "spot_hma": round(hma(closes), 2) if hma(closes) else None,
         "anchor_ce_h": anchor["CE"][0], "anchor_ce_ltp": anchor["CE"][1],
         "anchor_pe_h": anchor["PE"][0], "anchor_pe_ltp": anchor["PE"][1],
+        "atm_ce_oi": atm_oi["CE"], "atm_pe_oi": atm_oi["PE"],
+        "pcr_atm": (round(atm_oi["PE"] / atm_oi["CE"], 4) if atm_oi["CE"] else None),
         "source": "public-candle-OI",
     }
+
+
+# The app's own PCR log, one file per instrument. Written here too so the
+# EXISTING history keeps growing for every index instead of only whichever one
+# happened to be selected in the UI — measured before this change:
+#   nifty 2,775 rows (current) | sensex 613 (stale 2026-07-09) | banknifty 7.
+APP_LOG = {"NIFTY": "pcr_data/pcr_log_nifty.csv",
+           "BANKNIFTY": "pcr_data/pcr_log_banknifty.csv",
+           "SENSEX": "pcr_data/pcr_log_sensex.csv"}
+APP_FIELDS = ["timestamp", "date", "expiry_type", "expiry", "spot", "atm",
+              "pcr_range", "pcr_atm", "ce_oi_L", "pe_oi_L", "atm_ce_oi_L",
+              "atm_pe_oi_L", "pcr_chg", "vix_open", "vix_curr", "spcl"]
+
+
+def write_app_log(row):
+    """Append in the app's existing schema so both sources share one history."""
+    path = APP_LOG.get(row["instrument"])
+    if not path:
+        return None
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rec = {
+        "timestamp": row["ts"][:16].replace("T", " "),
+        "date": row["ts"][:10], "expiry_type": "near", "expiry": row["expiry"],
+        "spot": row["spot"], "atm": row["atm"],
+        "pcr_range": row["pcr"], "pcr_atm": row.get("pcr_atm"),
+        # the app stores OI in LAKHS
+        "ce_oi_L": round(row["ce_oi"] / 1e5, 3), "pe_oi_L": round(row["pe_oi"] / 1e5, 3),
+        "atm_ce_oi_L": (round(row["atm_ce_oi"] / 1e5, 3) if row.get("atm_ce_oi") else ""),
+        "atm_pe_oi_L": (round(row["atm_pe_oi"] / 1e5, 3) if row.get("atm_pe_oi") else ""),
+        # left blank on purpose: VIX and SPCL need the authenticated app, and a
+        # fabricated value would be worse than an empty cell.
+        "pcr_chg": "", "vix_open": "", "vix_curr": "", "spcl": "",
+    }
+    new = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=APP_FIELDS)
+        if new:
+            w.writeheader()
+        w.writerow(rec)
+    return path
 
 
 def write(row):
@@ -204,6 +248,7 @@ def main():
               f"({row['strikes']} strikes, CE {row['ce_oi']:,} PE {row['pe_oi']:,})")
         if not a.dry_run:
             print(f"   -> {write(row)}")
+            print(f"   -> {write_app_log(row)}")
 
 
 if __name__ == "__main__":

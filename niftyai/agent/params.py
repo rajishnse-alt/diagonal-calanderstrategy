@@ -19,7 +19,15 @@ from __future__ import annotations
 import json
 import os
 
-PATH = "niftyai/agent/params.json"
+# PER INSTRUMENT. A single shared file would have the three learn passes
+# overwrite each other — BANKNIFTY's monthly-expiry behaviour tuning NIFTY's
+# weekly stop, last writer winning. They have different volatility regimes and
+# must not share a k.
+DIR = "niftyai/agent"
+
+
+def path(instrument: str = "NIFTY") -> str:
+    return f"{DIR}/params_{instrument.upper()}.json"
 
 DEFAULTS = {
     "atr_stop_mult": 1.5,     # entry - k*ATR
@@ -35,10 +43,11 @@ DEFAULTS = {
 }
 
 
-def load() -> dict:
-    if os.path.exists(PATH):
+def load(instrument: str = "NIFTY") -> dict:
+    _p = path(instrument)
+    if os.path.exists(_p):
         try:
-            p = json.load(open(PATH))
+            p = json.load(open(_p))
             for k, v in DEFAULTS.items():
                 p.setdefault(k, v)
             return p
@@ -47,9 +56,10 @@ def load() -> dict:
     return json.loads(json.dumps(DEFAULTS))
 
 
-def save(p: dict) -> None:
-    os.makedirs(os.path.dirname(PATH), exist_ok=True)
-    with open(PATH, "w") as f:
+def save(p: dict, instrument: str = "NIFTY") -> None:
+    _p = path(instrument)
+    os.makedirs(os.path.dirname(_p), exist_ok=True)
+    with open(_p, "w") as f:
         json.dump(p, f, indent=2, sort_keys=True)
 
 

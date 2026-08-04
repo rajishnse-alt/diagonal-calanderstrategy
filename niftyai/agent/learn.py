@@ -32,7 +32,7 @@ from niftyai.agent import journal as J, params as PR      # noqa: E402
 MIN_TRADES     = 5      # below this, report only
 MAX_STEP       = 0.15   # most k may move in one pass
 MAX_STOP_RATE  = 0.55   # stop-outs above this = k is too tight
-LOG = "niftyai/agent/learning_log.md"
+LOG_FMT = "niftyai/agent/learning_log_{}.md"
 
 
 def _rows(instrument):
@@ -79,7 +79,7 @@ def analyse(instrument):
 
 
 def update(instrument, apply=True, min_trades=None):
-    p = PR.load()
+    p = PR.load(instrument)
     a = analyse(instrument)
     note = []
     _floor = MIN_TRADES if min_trades is None else min_trades
@@ -112,7 +112,7 @@ def update(instrument, apply=True, min_trades=None):
         meta = p.setdefault("_meta", {})
         meta["trades_seen"] = a["trades"]
         meta["last_update"] = datetime.now().isoformat(timespec="seconds")
-        PR.save(p)
+        PR.save(p, instrument)
     a["action"] = "updated" if apply else "dry_run"
     a["k_before"], a["k_after"] = round(cur, 3), round(new_k, 3)
     _log(instrument, a, p, note)
@@ -120,6 +120,7 @@ def update(instrument, apply=True, min_trades=None):
 
 
 def _log(instrument, a, p, notes):
+    LOG = LOG_FMT.format(instrument.upper())
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     prev = open(LOG).read() if os.path.exists(LOG) else ""
     hdr = "# Agent learning log\n"
