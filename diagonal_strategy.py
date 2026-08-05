@@ -7977,7 +7977,11 @@ with st.sidebar:
                   f"open {_open_vix:.2f} · cur {_curr_vix:.2f}")
         st.metric("1σ move", f"±{_exp_1s:,.0f} pts", f"{_steps_1s} steps OTM")
     st.divider()
-    refresh_secs = st.slider("🔄 Auto-refresh (sec)", min_value=15, max_value=120, value=30, step=5)
+    # The seconds slider is gone: it only fed the blocking time.sleep loop that
+    # froze the page. Cadence is set by the "🔄 Refresh" selectbox (minutes) at
+    # the top, which drives the non-blocking st_autorefresh component. Leaving a
+    # second, dead control would just invite someone to change it and wonder
+    # why nothing happened.
     st.caption(f"Updated {now.strftime('%H:%M:%S IST')}")
     st.divider()
     if st.button("🔓 Logout"):
@@ -8094,5 +8098,26 @@ with _ag_tabs[-1]:
 # ─────────────────────────────────────────────
 # AUTO-REFRESH — live prices + scheduler tick
 # ─────────────────────────────────────────────
-time.sleep(refresh_secs)
-st.rerun()
+# There is NO sleep here on purpose.
+#
+# This used to end with:
+#       time.sleep(refresh_secs)
+#       st.rerun()
+# which froze the ENTIRE page for the whole interval, not just while data
+# reloaded. time.sleep blocks Streamlit's script thread, so every button,
+# dropdown, tab and slider was dead until it expired — the app only looked
+# alive for the instant between finishing a run and hitting the sleep.
+#
+# It was also a SECOND, competing refresh loop: st_autorefresh is already
+# wired at the top of the page (see _st_autorefresh, ~line 3250) driving the
+# "🔄 Refresh" selectbox in minutes. That component reruns from the browser
+# side, so the server thread stays free and the UI stays interactive between
+# reruns. The two fought each other — the sidebar slider defaulted to 30s
+# while the selectbox defaulted to 3 min, so the page reran on whichever
+# fired first and blocked for 30s each time regardless.
+#
+# Dropping the sleep leaves exactly one refresh mechanism, the non-blocking
+# one. Values still update on the same cadence; the page no longer freezes.
+if _AUTOREFRESH_OK:
+    st.caption(f"live · auto-refreshing every {_refresh_mins} min "
+               f"(page stays interactive between updates)")
