@@ -24,7 +24,7 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from niftyai.agent import paper as P, params as PR, rules as R   # noqa: E402
+from niftyai.agent import paper as P, params as PR, portfolio as PF, rules as R  # noqa: E402
 from niftyai.collector import snapshot as SNAP                    # noqa: E402
 from niftyai.config import settings as S                          # noqa: E402
 
@@ -96,7 +96,15 @@ def evaluate(instrument, params):
     sl = P.initial_stop(cand.day_low, cand.ltp, a, k)
     risk = max(cand.ltp - sl, 1e-9)
     exp_r = (cand.target - cand.ltp) / risk
+    # Capital gate. Portfolio-wide: if NIFTY has consumed the Rs 1.2L, the
+    # other indices cannot trade until something closes.
+    _pf = PF.load()
+    _lots, _sz = PF.can_open(_pf, instrument, cand.ltp, sl,
+                             S.cfg(instrument).get("lot_size", 1))
     return {
+        "lots": _lots, "deploy": _sz.get("deploy"), "capital_risk": _sz.get("risk"),
+        "binding": _sz.get("binding"), "capital_note": _sz.get("reason"),
+        "available": _sz.get("available"),
         "instrument": instrument, "side": side, "pcr": pcr, "spot": spot,
         "spot_hma": s_hma, "expiry": str(exp),
         "strike": cand.strike, "opt_type": typ, "ltp": round(cand.ltp, 2),
@@ -106,7 +114,7 @@ def evaluate(instrument, params):
         "stop": sl, "risk_per_lot": round(risk, 2),
         "expected_r": round(exp_r, 2),
         "armed": sig.armed, "triggered": sig.triggered,
-        "tradeable": bool(sig.triggered and exp_r >= MIN_RR),
+        "tradeable": bool(sig.triggered and exp_r >= MIN_RR and _lots >= PF.MIN_LOTS),
         "reasons": sig.reasons,
     }
 
@@ -127,15 +135,22 @@ def main():
 
     ranked = sorted([r for r in out if r.get("expected_r") is not None],
                     key=lambda r: -r["expected_r"])
+    _pf = PF.load()
+    _s = PF.summary(_pf)
+    print(f"capital Rs {_s['capital']:,.0f} | deployed Rs {_s['deployed']:,.0f} "
+          f"({_s['utilisation_pct']}%) | available Rs {_s['available']:,.0f} | "
+          f"open {_s['open_positions']}")
     print(f"{'instrument':<11}{'side':<9}{'PCR':>7}{'strike':>8}{'ltp':>8}"
-          f"{'stop':>8}{'expR':>7}  state")
+          f"{'stop':>8}{'expR':>7}{'lots':>6}{'deploy':>10}  state")
     for r in ranked:
         state = ("TRADE" if r["tradeable"] else
                  "triggered/lowRR" if r["triggered"] else
                  "armed" if r["armed"] else "no setup")
         print(f"{r['instrument']:<11}{r['side'] or '-':<9}{r['pcr']:>7.4f}"
               f"{r['strike']:>8}{r['ltp']:>8.2f}{r['stop']:>8.2f}"
-              f"{r['expected_r']:>7.2f}  {state}")
+              f"{r['expected_r']:>7.2f}{r.get('lots',0):>6}"
+              f"{(r.get('deploy') or 0):>10,.0f}  {state}"
+              + (f"  [{r['capital_note']}]" if r.get('capital_note') else ""))
     for r in out:
         if r.get("expected_r") is None:
             print(f"{r['instrument']:<11}{'-':<9}{'':>7}{'':>8}{'':>8}{'':>8}{'':>7}  "

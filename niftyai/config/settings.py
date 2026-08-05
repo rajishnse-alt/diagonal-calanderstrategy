@@ -33,6 +33,7 @@ history becomes unreachable. That is why the archive exists.
 # a single hardcoded segment silently returns ZERO contracts for it.
 INSTRUMENTS = {
     "NIFTY": {
+        "lot_size":       75,   # capital per lot = premium x lot_size
         "underlying_key": "NSE_INDEX|Nifty 50",
         "segment":        "NSE_FO",
         "strike_step":    50,
@@ -40,6 +41,7 @@ INSTRUMENTS = {
         "expiries":       2,
     },
     "BANKNIFTY": {
+        "lot_size":       15,   # capital per lot = premium x lot_size
         "underlying_key": "NSE_INDEX|Nifty Bank",
         "segment":        "NSE_FO",
         "strike_step":    100,
@@ -50,6 +52,7 @@ INSTRUMENTS = {
         "expiries":       6,
     },
     "SENSEX": {
+        "lot_size":       10,   # capital per lot = premium x lot_size
         "underlying_key": "BSE_INDEX|SENSEX",
         "segment":        "BSE_FO",
         "strike_step":    100,
