@@ -142,6 +142,11 @@ jobs:
               echo "--- $I ---"
               python niftyai/agent/learn.py --instrument "$I" || true
             done
+            # Compare the derived PCR against the app's on rows captured at the
+            # same minute. This is the only way to calibrate them: expired
+            # contracts leave the instrument dump, so past rows cannot be
+            # recomputed and the overlap has to be caught while both are live.
+            python niftyai/collector/reconcile.py --all || true
           else
             echo "not after close ($NOW IST) — skip"
           fi
@@ -150,7 +155,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A niftyai/agent/params_*.json niftyai/agent/learning_log_*.md \
-                     niftyai/journal || true
+                     niftyai/journal niftyai/collector/pcr_reconciliation.json || true
           git diff --cached --quiet && exit 0
           git commit -m "NiftyAI learning $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
           for i in 1 2 3; do

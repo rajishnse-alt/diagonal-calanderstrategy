@@ -1,0 +1,55 @@
+{
+  "NIFTY": {
+    "instrument": "NIFTY",
+    "pairs": 3,
+    "app_rows": 1451,
+    "derived_rows": 3,
+    "generated": "2026-08-05T19:43:57",
+    "samples": [
+      {
+        "ts": "2026-08-05T13:34",
+        "app": 0.4767,
+        "derived": 0.6203,
+        "ratio": 0.7685,
+        "gap_min": 4.4
+      },
+      {
+        "ts": "2026-08-05T13:40",
+        "app": 0.4716,
+        "derived": 0.6203,
+        "ratio": 0.7603,
+        "gap_min": 1.6
+      },
+      {
+        "ts": "2026-08-05T13:46",
+        "app": 0.4527,
+        "derived": 0.6203,
+        "ratio": 0.7298,
+        "gap_min": 7.6
+      }
+    ],
+    "ratio_mean": 0.7529,
+    "ratio_median": 0.7603,
+    "ratio_min": 0.7298,
+    "ratio_max": 0.7685,
+    "verdict": "derived differs by x0.7603 \u2014 thresholds calibrated on the app's scale must NOT be applied to it"
+  },
+  "BANKNIFTY": {
+    "instrument": "BANKNIFTY",
+    "pairs": 0,
+    "app_rows": 3,
+    "derived_rows": 3,
+    "generated": "2026-08-05T19:43:57",
+    "samples": [],
+    "verdict": "no overlapping rows yet \u2014 the app must log at least once while the collector is also running"
+  },
+  "SENSEX": {
+    "instrument": "SENSEX",
+    "pairs": 0,
+    "app_rows": 306,
+    "derived_rows": 3,
+    "generated": "2026-08-05T19:43:57",
+    "samples": [],
+    "verdict": "no overlapping rows yet \u2014 the app must log at least once while the collector is also running"
+  }
+}
