@@ -7985,6 +7985,113 @@ with st.sidebar:
         st.rerun()
 
 # ─────────────────────────────────────────────
+# AGENT TRADES — every virtual trade the agent has taken
+# ─────────────────────────────────────────────
+# Reads what the GitHub Actions agent commits, so this panel works whether the
+# trades were taken by a CI run or a local replay. Placed BEFORE the
+# auto-refresh block on purpose: everything after st.rerun() never renders.
+st.markdown("<div class='sec-hdr'>🤖 Agent Trades</div>", unsafe_allow_html=True)
+
+_AG_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
+
+
+def _ag_read_trades(inst):
+    """Closed trades from niftyai/journal/<INST>_trades.csv."""
+    _p = f"niftyai/journal/{inst}_trades.csv"
+    if not os.path.exists(_p):
+        return []
+    try:
+        with open(_p, newline="") as _f:
+            return list(csv.DictReader(_f))
+    except Exception:
+        return []
+
+
+def _ag_latest_decision():
+    """Most recent line from the scanner's decision log."""
+    _d = "niftyai/agent/decisions"
+    if not os.path.isdir(_d):
+        return None
+    _files = sorted(f for f in os.listdir(_d) if f.endswith(".jsonl"))
+    if not _files:
+        return None
+    try:
+        with open(os.path.join(_d, _files[-1])) as _f:
+            _lines = [l for l in _f.read().splitlines() if l.strip()]
+        return json.loads(_lines[-1]) if _lines else None
+    except Exception:
+        return None
+
+
+_ag_c1, _ag_c2 = st.columns([1, 4])
+with _ag_c1:
+    if st.button("🔄 Reload trades", key="ag_reload"):
+        st.rerun()
+
+_ag_dec = _ag_latest_decision()
+with _ag_c2:
+    if _ag_dec:
+        _pick = _ag_dec.get("pick")
+        _msg = (f"**{_pick['instrument']} {_pick['strike']}{_pick['opt_type']}** "
+                f"· expR {_pick['expected_r']}" if _pick else
+                "**stand aside** — nothing triggered")
+        st.caption(f"last scan {_ag_dec.get('ts','')[:16].replace('T',' ')} → {_msg}")
+    else:
+        st.caption("no scan recorded yet — the agent writes one per run from 09:00 IST")
+
+_ag_tabs = st.tabs([f"{_i}" for _i in _AG_INSTRUMENTS] + ["Last scan"])
+for _ti, _inst in enumerate(_AG_INSTRUMENTS):
+    with _ag_tabs[_ti]:
+        _rows = _ag_read_trades(_inst)
+        if not _rows:
+            st.info(f"No {_inst} trades yet. The agent only enters when every "
+                    f"gate passes — PCR, floating anchor, spot vs HMA, and the "
+                    f"option clearing both its →H and its own HMA.")
+            continue
+        # headline stats first — R against INITIAL risk is what the 1:3 mandate
+        # is judged on, not raw P&L, so a green trade can still be a miss.
+        _rs = [float(r["r_multiple"]) for r in _rows
+               if r.get("r_multiple") not in (None, "", "None")]
+        if _rs:
+            _w = sum(1 for r in _rs if r > 0)
+            _m = sum(1 for r in _rs if r >= 3)
+            _k1, _k2, _k3, _k4 = st.columns(4)
+            _k1.metric("Trades", len(_rs))
+            _k2.metric("Avg R", f"{sum(_rs)/len(_rs):+.2f}")
+            _k3.metric("Win rate", f"{_w/len(_rs)*100:.0f}%")
+            _k4.metric("Met 1:3", f"{_m}/{len(_rs)}")
+        st.dataframe(
+            [{"date": r.get("date"), "strike": f"{r.get('strike')}{r.get('opt_type')}",
+              "side": r.get("side"), "entry": r.get("entry"), "SL": r.get("init_sl"),
+              "target": r.get("target"), "risk": r.get("risk_per_lot"),
+              "P&L/lot": r.get("pnl_per_lot"), "R": r.get("r_multiple"),
+              "1:3": "✅" if str(r.get("met_1_3")).lower() == "true" else "—",
+              "exits": r.get("exits")} for r in reversed(_rows)],
+            use_container_width=True, hide_index=True)
+
+with _ag_tabs[-1]:
+    if not _ag_dec:
+        st.info("No scan yet.")
+    else:
+        st.caption(f"{_ag_dec.get('ts','')}  ·  ranked by expected R = "
+                   f"(Tg − entry) / (k × ATR)")
+        _rk = _ag_dec.get("ranked") or []
+        if _rk:
+            st.dataframe(
+                [{"instrument": r.get("instrument"), "side": r.get("side"),
+                  "PCR": r.get("pcr"), "strike": f"{r.get('strike')}{r.get('opt_type')}",
+                  "LTP": r.get("ltp"), "→H": r.get("proj_high"), "Tg": r.get("target"),
+                  "HMA": r.get("hma"), "stop": r.get("stop"),
+                  "exp R": r.get("expected_r"),
+                  "state": ("TRADE" if r.get("tradeable") else
+                            "triggered/lowRR" if r.get("triggered") else
+                            "armed" if r.get("armed") else "no setup")}
+                 for r in _rk],
+                use_container_width=True, hide_index=True)
+        else:
+            st.write("nothing rankable in the last scan")
+
+# ─────────────────────────────────────────────
 # AUTO-REFRESH — live prices + scheduler tick
 # ─────────────────────────────────────────────
 time.sleep(refresh_secs)
