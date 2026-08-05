@@ -29,6 +29,45 @@ from niftyai.collector import snapshot as SNAP                    # noqa: E402
 from niftyai.config import settings as S                          # noqa: E402
 
 RET, LOW, HIGH, TAR = 0.1306, 0.1929, 0.1504, 0.2611
+APP_PCR = {"NIFTY": "pcr_data/pcr_log_nifty.csv",
+           "BANKNIFTY": "pcr_data/pcr_log_banknifty.csv",
+           "SENSEX": "pcr_data/pcr_log_sensex.csv"}
+PCR_FRESH_MIN = 40          # an app row older than this is not "current"
+
+
+def app_pcr(instrument):
+    """
+    THE APP'S OWN pcr_range, not a re-derivation.
+
+    The collector computes PCR independently from public OI, and on 2026-08-05
+    the two disagreed badly: mine 0.59-0.65 against the app's logged 1.11-1.12
+    for a comparable session. That gap parked NIFTY under the 0.90 bearish
+    threshold all day and made the >1.02 bullish gate unreachable, so the agent
+    hunted PEs while the 24350 CE ran. Different strike band and expiry
+    aggregation - and rather than reverse-engineer it, use the number the app
+    already publishes and treat mine as a fallback only.
+
+    Returns (pcr, source). source is "app" when a fresh logged row exists.
+    """
+    _p = APP_PCR.get(instrument)
+    if not _p or not os.path.exists(_p):
+        return None, None
+    try:
+        import csv as _csv
+        rows = [r for r in _csv.DictReader(open(_p))
+                if r.get("expiry_type") == "near" and r.get("pcr_range")]
+    except Exception:
+        return None, None
+    if not rows:
+        return None, None
+    last = rows[-1]
+    try:
+        ts = datetime.strptime(last["timestamp"], "%Y-%m-%d %H:%M").replace(tzinfo=SNAP.IST)
+        age = (datetime.now(SNAP.IST) - ts).total_seconds() / 60
+        val = float(last["pcr_range"])
+    except (ValueError, KeyError):
+        return None, None
+    return (val, f"app@{last['timestamp'][11:16]}") if age <= PCR_FRESH_MIN else (val, f"app-stale({age/60:.1f}h)")
 MIN_RR = 1.5          # below this the setup is not worth the risk
 DECISIONS = "niftyai/agent/decisions"
 
@@ -44,7 +83,14 @@ def evaluate(instrument, params):
     snap = SNAP.snapshot(instrument)
     if not snap or snap.get("pcr") is None or snap.get("spot_hma") is None:
         return None
-    pcr, spot, s_hma, atm = snap["pcr"], snap["spot"], snap["spot_hma"], snap["atm"]
+    # Prefer the app's published pcr_range; fall back to the derived one only
+    # when the app has not logged recently.
+    _app_pcr, _src = app_pcr(instrument)
+    if _app_pcr is not None and _src and _src.startswith("app@"):
+        pcr, pcr_src = _app_pcr, _src
+    else:
+        pcr, pcr_src = snap["pcr"], ("derived" + (f" ({_src})" if _src else ""))
+    spot, s_hma, atm = snap["spot"], snap["spot_hma"], snap["atm"]
     step = S.cfg(instrument)["strike_step"]
 
     ce_b = R.Band(snap["anchor_ce_h"], round((snap["anchor_ce_h"] or 0) * (1 - RET), 2),
@@ -56,8 +102,8 @@ def evaluate(instrument, params):
 
     side = "BULLISH" if pcr > R.PCR_BULL else ("BEARISH" if pcr < R.PCR_BEAR else None)
     if side is None:
-        return {"instrument": instrument, "pcr": pcr, "side": None,
-                "reason": f"PCR {pcr} between {R.PCR_BEAR} and {R.PCR_BULL}"}
+        return {"instrument": instrument, "pcr": pcr, "pcr_src": pcr_src, "side": None,
+                "reason": f"PCR {pcr} ({pcr_src}) between {R.PCR_BEAR} and {R.PCR_BULL}"}
 
     typ = "CE" if side == "BULLISH" else "PE"
     anchor_h = pe_b.high if side == "BULLISH" else ce_b.high
@@ -118,7 +164,8 @@ def evaluate(instrument, params):
         "lots": _lots, "deploy": _sz.get("deploy"), "capital_risk": _sz.get("risk"),
         "binding": _sz.get("binding"), "capital_note": _sz.get("reason"),
         "available": _sz.get("available"),
-        "instrument": instrument, "side": side, "pcr": pcr, "spot": spot,
+        "instrument": instrument, "side": side, "pcr": pcr, "pcr_src": pcr_src,
+        "spot": spot,
         "spot_hma": s_hma, "expiry": str(exp),
         "strike": cand.strike, "opt_type": typ, "ltp": round(cand.ltp, 2),
         "proj_high": cand.proj_high, "target": cand.target,
@@ -153,14 +200,14 @@ def main():
     print(f"capital Rs {_s['capital']:,.0f} | deployed Rs {_s['deployed']:,.0f} "
           f"({_s['utilisation_pct']}%) | available Rs {_s['available']:,.0f} | "
           f"open {_s['open_positions']}")
-    print(f"{'instrument':<11}{'side':<9}{'PCR':>7}{'strike':>8}{'ltp':>8}"
+    print(f"{'instrument':<11}{'side':<9}{'PCR':>7}{'src':>14}{'strike':>8}{'ltp':>8}"
           f"{'stop':>8}{'expR':>7}{'lots':>6}{'deploy':>10}  state")
     for r in ranked:
         state = ("TRADE" if r["tradeable"] else
                  "triggered/lowRR" if r["triggered"] else
                  "armed" if r["armed"] else "no setup")
         print(f"{r['instrument']:<11}{r['side'] or '-':<9}{r['pcr']:>7.4f}"
-              f"{r['strike']:>8}{r['ltp']:>8.2f}{r['stop']:>8.2f}"
+              f"{str(r.get('pcr_src','?')):>14}{r['strike']:>8}{r['ltp']:>8.2f}{r['stop']:>8.2f}"
               f"{r['expected_r']:>7.2f}{r.get('lots',0):>6}"
               f"{(r.get('deploy') or 0):>10,.0f}  {state}"
               + (f"  [{r['capital_note']}]" if r.get('capital_note') else ""))
