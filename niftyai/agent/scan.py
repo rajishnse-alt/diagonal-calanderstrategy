@@ -70,19 +70,32 @@ def evaluate(instrument, params):
     if not rows:
         return None
     exp = min(r["expiry"] for r in rows)
-    best = None
+
+    # STRIKE SELECTION — must match the card's ↑ strike, which is the one to
+    # trade. This previously picked by "1st-5m close nearest the L↔H midpoint",
+    # i.e. the ≈mid suggestion, so the agent would have traded a DIFFERENT
+    # contract from the one the card shows the HMA and entry levels for. On the
+    # card those are the same strike (HMA 24600CE / ↑24600) while ≈mid names
+    # another (24650) — the ≈mid line is an extra hint, not the trade.
+    #
+    # The app's rule (_best_strike): prefer strikes whose LTP sits INSIDE the
+    # projected low→high band and take the highest such LTP; if none qualify,
+    # fall back to the strike whose LTP is nearest proj_high.
+    _quotes = []
     for r in [x for x in rows if x["expiry"] == exp]:
         b = _series(r["key"])
         if len(b) < 60:
             continue
         today = [x for x in b if str(x[0])[:10] == str(datetime.now(SNAP.IST).date())]
-        first5 = float((today or b)[0][4])
-        d = abs(first5 - mid)
-        if best is None or d < best[0]:
-            best = (d, r, b, today or b[-75:])
-    if best is None:
+        _quotes.append((r, b, today or b[-75:], float(b[-1][4])))
+    if not _quotes:
         return None
-    _, r, b, today = best
+    _in_band = [q for q in _quotes if lo <= q[3] <= hi]
+    if _in_band:
+        best = max(_in_band, key=lambda q: q[3])          # highest LTP in band
+    else:
+        best = min(_quotes, key=lambda q: abs(q[3] - hi))  # nearest proj_high
+    r, b, today, _ltp = best
     closes = [float(x[4]) for x in b]
     cand = R.Candidate(strike=int(r["strike"]), opt_type=typ, ltp=closes[-1],
                        proj_high=round(hi, 2), target=round(hi * (1 + TAR), 2),
