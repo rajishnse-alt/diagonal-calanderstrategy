@@ -7997,31 +7997,66 @@ with st.sidebar:
 st.markdown("<div class='sec-hdr'>🤖 Agent Trades</div>", unsafe_allow_html=True)
 
 _AG_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
+_AG_RAW = "https://raw.githubusercontent.com/rajishnse-alt/diagonal-calanderstrategy/main/"
+
+
+def _ag_fetch(relpath, ttl=60):
+    """
+    Read an agent file from GITHUB first, local checkout second.
+
+    The agent runs in Actions and commits there; this app reads a local working
+    copy that is only as fresh as the last `git pull`. Reading local-only is why
+    the panel showed a scan from the previous evening while the market was open.
+    Cached per ttl so a rerun does not refetch on every refresh tick.
+    """
+    _key = f"_agf_{relpath}"
+    _hit = st.session_state.get(_key)
+    if _hit and (time.time() - _hit[0]) < ttl:
+        return _hit[1]
+    _txt = None
+    try:
+        _r = requests.get(_AG_RAW + relpath, timeout=6)
+        if _r.status_code == 200:
+            _txt = _r.text
+    except requests.RequestException:
+        pass
+    if _txt is None and os.path.exists(relpath):
+        try:
+            _txt = open(relpath).read()
+        except Exception:
+            _txt = None
+    st.session_state[_key] = (time.time(), _txt)
+    return _txt
 
 
 def _ag_read_trades(inst):
-    """Closed trades from niftyai/journal/<INST>_trades.csv."""
-    _p = f"niftyai/journal/{inst}_trades.csv"
-    if not os.path.exists(_p):
+    """Closed trades from niftyai/journal/<INST>_trades.csv (GitHub, then local)."""
+    _t = _ag_fetch(f"niftyai/journal/{inst}_trades.csv")
+    if not _t:
         return []
     try:
-        with open(_p, newline="") as _f:
-            return list(csv.DictReader(_f))
+        return list(csv.DictReader(_t.splitlines()))
     except Exception:
         return []
 
 
 def _ag_latest_decision():
-    """Most recent line from the scanner's decision log."""
-    _d = "niftyai/agent/decisions"
-    if not os.path.isdir(_d):
-        return None
-    _files = sorted(f for f in os.listdir(_d) if f.endswith(".jsonl"))
-    if not _files:
+    """Most recent line of today's decision log, else the newest local one."""
+    _today = datetime.now(IST).strftime("%Y-%m-%d")
+    _t = _ag_fetch(f"niftyai/agent/decisions/{_today}.jsonl", ttl=45)
+    if not _t:
+        _d = "niftyai/agent/decisions"
+        if os.path.isdir(_d):
+            _f = sorted(x for x in os.listdir(_d) if x.endswith(".jsonl"))
+            if _f:
+                try:
+                    _t = open(os.path.join(_d, _f[-1])).read()
+                except Exception:
+                    _t = None
+    if not _t:
         return None
     try:
-        with open(os.path.join(_d, _files[-1])) as _f:
-            _lines = [l for l in _f.read().splitlines() if l.strip()]
+        _lines = [l for l in _t.splitlines() if l.strip()]
         return json.loads(_lines[-1]) if _lines else None
     except Exception:
         return None
@@ -8039,7 +8074,20 @@ with _ag_c2:
         _msg = (f"**{_pick['instrument']} {_pick['strike']}{_pick['opt_type']}** "
                 f"· expR {_pick['expected_r']}" if _pick else
                 "**stand aside** — nothing triggered")
-        st.caption(f"last scan {_ag_dec.get('ts','')[:16].replace('T',' ')} → {_msg}")
+        _ts = _ag_dec.get("ts", "")
+        _age = None
+        try:
+            _age = (datetime.now(IST) - datetime.fromisoformat(_ts)).total_seconds() / 60
+        except Exception:
+            pass
+        _line = f"last scan {_ts[:16].replace('T', ' ')} → {_msg}"
+        # An old scan during market hours means the agent is not running — say
+        # so instead of presenting stale numbers as current.
+        if _age is not None and _age > 45 and _mkt_open:
+            st.warning(f"⚠️ {_line}  ·  **{_age/60:.1f}h old** — the agent has not "
+                       f"reported recently. Check the NiftyAI live workflow.")
+        else:
+            st.caption(_line + (f"  ·  {_age:.0f} min ago" if _age is not None else ""))
     else:
         st.caption("no scan recorded yet — the agent writes one per run from 09:00 IST")
 

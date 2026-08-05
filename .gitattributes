@@ -1,0 +1,11 @@
+# Append-only logs: both sides' new lines are wanted, never one instead of the
+# other. The `union` merge driver concatenates both, which is exactly right here
+# and removes the conflict class entirely.
+#
+# Measured 2026-08-05: the live capture job ran fine but FAILED to commit —
+# concurrent appends from the app and the other bots produced a rebase conflict,
+# and every retry then died with "Pulling is not possible because you have
+# unmerged files" because nothing aborted the rebase. A day's captures were
+# computed and thrown away.
+*.csv    merge=union
+*.jsonl  merge=union

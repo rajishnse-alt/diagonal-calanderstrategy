@@ -14,10 +14,15 @@ name: NiftyAI live capture + scan
 
 on:
   schedule:
-    # Every 15 min across the Indian session. 03:30 UTC = 09:00 IST,
-    # 10:00 UTC = 15:30 IST. GitHub cron drifts, so the job also checks the
-    # clock itself and exits quietly outside market hours.
-    - cron: "*/15 3-10 * * 1-5"
+    # MEASURED 2026-08-05: a "*/15" schedule produced ZERO runs on a live
+    # market day, while this repo's other workflow fired 2 HOURS late
+    # (scheduled 10:15 UTC, ran 12:19 UTC). GitHub drops high-frequency
+    # schedules first under load, so 32 slots/day is the least reliable shape
+    # possible. Fewer slots, each one self-sufficient, and each run LOOPS
+    # internally to cover the gap rather than depending on the next firing.
+    - cron: "5 3 * * 1-5"     # ~08:35 IST — session opener, loops the morning
+    - cron: "5 7 * * 1-5"     # ~12:35 IST — midday, in case the first was dropped
+    - cron: "35 9 * * 1-5"    # ~15:05 IST — close + learning pass
   workflow_dispatch:
     inputs:
       instruments:
@@ -38,7 +43,7 @@ concurrency:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -63,17 +68,42 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"; echo "outside hours ($NOW IST) — skip"
           fi
 
-      - name: Wrapper 1 — capture PCR + state
+      - name: Capture + scan on a loop until the session ends
         if: steps.gate.outputs.run == 'true'
+        # ONE firing covers a stretch of the session instead of trusting 32
+        # separate cron slots to land. Capture+scan takes ~52s, so a 15-min
+        # cadence is comfortable. Stops at 15:31 IST or when the job budget is
+        # nearly spent, whichever comes first, and commits as it goes so a
+        # timeout never loses the day's captures.
         run: |
-          python niftyai/collector/snapshot.py \
-            --instruments "${{ inputs.instruments || 'NIFTY,BANKNIFTY,SENSEX' }}"
-
-      - name: Wrapper 2 — scan all instruments, rank by reward:risk
-        if: steps.gate.outputs.run == 'true'
-        run: |
-          python niftyai/agent/scan.py \
-            --instruments "${{ inputs.instruments || 'NIFTY,BANKNIFTY,SENSEX' }}" --write
+          INSTR="${{ inputs.instruments || 'NIFTY,BANKNIFTY,SENSEX' }}"
+          END=$(( $(date +%s) + 5*3600 ))          # under the 6h job ceiling
+          while : ; do
+            NOW=$(TZ=Asia/Kolkata date +%H%M)
+            python niftyai/collector/snapshot.py --instruments "$INSTR" || true
+            python niftyai/agent/scan.py --instruments "$INSTR" --write || true
+            git add -A niftyai/data_log niftyai/agent/decisions pcr_data || true
+            if ! git diff --cached --quiet; then
+              git -c user.name=github-actions[bot] \
+                  -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+                  commit -q -m "NiftyAI capture $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST')"
+              for i in 1 2 3 4 5; do
+                # Always clear a half-finished rebase before retrying, or every
+                # later attempt dies with "unmerged files" and the data is lost.
+                git rebase --abort >/dev/null 2>&1 || true
+                if git pull -q --rebase origin "${GITHUB_REF_NAME}" && \
+                   git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
+                  echo "pushed on attempt $i"; break
+                fi
+                echo "push attempt $i failed"; sleep $((i * 5))
+              done
+              git rebase --abort >/dev/null 2>&1 || true
+            fi
+            [ "${{ inputs.force }}" = "true" ] && break
+            [ "$NOW" -ge 1531 ] && break
+            [ "$(date +%s)" -ge "$END" ] && break
+            sleep 900
+          done
 
       - name: Commit
         if: steps.gate.outputs.run == 'true'
