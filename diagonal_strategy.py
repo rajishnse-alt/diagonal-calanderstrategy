@@ -4480,6 +4480,10 @@ if (_nifty_5m_high is None or _nifty_5m_close is None or _nifty_5m_low is None) 
     except Exception:
         pass
 
+_idx_day_high = None      # index DAY high/low — feeds the √ support/resistance row
+_idx_day_low  = None
+_idx_day_prev = False     # True when these are the PREVIOUS session's values
+
 # Guaranteed close fetch — separate try so high-fetch failures don't block this.
 # Try v3 intraday first (has today's data live AND after-close); fall back to v2 historical.
 if _nifty_5m_close is None and token:
@@ -4516,7 +4520,37 @@ if _nifty_5m_close is None and token:
             if _cv > 0:
                 _nifty_5m_close = _cv
                 st.session_state[_5m_close_key] = _cv
+            # Index DAY high/low, from the same candles — no extra request.
+            _dh = max((float(c[2]) for c in _cn if len(c) > 2 and c[2]), default=0)
+            _dl = min((float(c[3]) for c in _cn if len(c) > 3 and c[3] and float(c[3]) > 0),
+                      default=0)
+            if _dh > 0:
+                _idx_day_high = _dh
+            if _dl > 0:
+                _idx_day_low = _dl
     except Exception:
+        pass
+
+# Day H/L fallback: pre-market (and any session with no bars yet) has nothing
+# for today, so fall back to the PREVIOUS session and mark it. Showing an empty
+# row would lose the levels entirely; showing yesterday's unlabelled would be
+# worse — they would read as today's.
+if (_idx_day_high is None or _idx_day_low is None) and token:
+    try:
+        _pd = _prev_biz_day().strftime("%Y-%m-%d")
+        _pe = urllib.parse.quote(INSTRUMENT_KEY, safe="")
+        _pr = requests.get(
+            f"https://api.upstox.com/v3/historical-candle/{_pe}/minutes/5/{_pd}/{_pd}",
+            headers={"Accept": "application/json",
+                     "Authorization": f"Bearer {token}"}, timeout=5)
+        _pc = (_pr.json().get("data") or {}).get("candles") or []
+        if _pc:
+            _ph = max((float(c[2]) for c in _pc if len(c) > 2 and c[2]), default=0)
+            _pl = min((float(c[3]) for c in _pc if len(c) > 3 and c[3] and float(c[3]) > 0),
+                      default=0)
+            if _ph > 0 and _pl > 0:
+                _idx_day_high, _idx_day_low, _idx_day_prev = _ph, _pl, True
+    except requests.RequestException:
         pass
 
 # Critical Resistance = first 5-min HIGH + 0.2611%
@@ -4559,6 +4593,43 @@ else:
         "</div>"
     )
 
+# ── Day H/L √ support & resistance ───────────────────────────────────────────
+#   Best support    = Day HIGH − √(Day HIGH)
+#   Best resistance = Day LOW  + √(Day LOW)
+# Cross-derived on purpose: support comes off the HIGH and resistance off the
+# LOW, which is how it was specified — not a transposition.
+_sq_sup = (_idx_day_high - math.sqrt(_idx_day_high)) if _idx_day_high else None
+_sq_res = (_idx_day_low + math.sqrt(_idx_day_low)) if _idx_day_low else None
+if _sq_sup or _sq_res:
+    _sup_col = "var(--bull)" if (spot and _sq_sup and spot > _sq_sup) else "var(--bear)"
+    _res_col = "var(--bear)" if (spot and _sq_res and spot < _sq_res) else "var(--bull)"
+    _dhl_html = (
+        "<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+        "<div style='font-size:8px;font-weight:700;letter-spacing:.07em;"
+        "color:var(--muted);margin-bottom:4px;'>DAY H/L · √ SUPPORT &amp; RESISTANCE"
+        + ("<span style='color:var(--gold);font-weight:400;margin-left:5px;'>"
+           "ᵖ prev session</span>" if _idx_day_prev else "") + "</div>"
+        "<div style='display:flex;align-items:center;gap:8px;flex-wrap:nowrap;'>"
+        + (f"<span style='font-family:var(--mono);font-size:13px;font-weight:900;"
+           f"color:{_sup_col};'>{_sq_sup:,.2f}</span>"
+           f"<span style='font-size:8px;color:var(--muted);'>"
+           f"H {_idx_day_high:,.2f}−√</span>" if _sq_sup else "")
+        + "<span style='font-size:14px;color:var(--muted);'>←</span>"
+        + f"<span style='font-size:8px;color:var(--muted);'>spot</span>"
+        + f"<span style='font-family:var(--mono);font-size:12px;font-weight:700;"
+          f"color:var(--text);'>{spot:,.2f}</span>"
+        + "<span style='font-size:14px;color:var(--muted);'>→</span>"
+        + (f"<span style='font-family:var(--mono);font-size:13px;font-weight:900;"
+           f"color:{_res_col};'>{_sq_res:,.2f}</span>"
+           f"<span style='font-size:8px;color:var(--muted);'>"
+           f"L {_idx_day_low:,.2f}+√</span>" if _sq_res else "")
+        + "</div></div>"
+    )
+else:
+    _dhl_html = ("<div style='margin-top:8px;border-top:1px solid var(--border);"
+                 "padding-top:7px;'><span style='font-size:9px;color:var(--muted);"
+                 "font-style:italic;'>day H/L unavailable</span></div>")
+
 # Row 1 — Spot + ATM
 r1c1, r1c2 = st.columns(2)
 with r1c1:
@@ -4576,6 +4647,8 @@ with r1c1:
         f"</div>"
         # 5-min critical resistance
         + _5m_html
+        # Day H/L √ support & resistance
+        + _dhl_html
         # Futures build-up (always show section; show error hint if no data)
         + f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
         + f"<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>FUTURES BUILD-UP</div>"
