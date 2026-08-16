@@ -1,0 +1,2294 @@
+{
+  "instrument": "NIFTY",
+  "day": "2026-08-05",
+  "future": "NSE_FO|58072",
+  "future_expiry": "2026-08-25",
+  "scanned": 75,
+  "candles": [
+    {
+      "ts": "2026-08-05T09:15",
+      "matches": 2,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 82.9,
+      "spot": {
+        "O": 24669.2,
+        "H": 24677.6,
+        "L": 24616.95,
+        "C": 24636.2
+      },
+      "fut": {
+        "O": 24715.0,
+        "H": 24725.0,
+        "L": 24676.1,
+        "C": 24719.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": true,
+        "F.C": false,
+        "S.O": false,
+        "S.H": true,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:20",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 81.9,
+      "spot": {
+        "O": 24636.5,
+        "H": 24642.15,
+        "L": 24621.05,
+        "C": 24626.1
+      },
+      "fut": {
+        "O": 24719.1,
+        "H": 24726.0,
+        "L": 24700.8,
+        "C": 24708.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:25",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 86.6,
+      "spot": {
+        "O": 24624.0,
+        "H": 24628.2,
+        "L": 24611.0,
+        "C": 24621.4
+      },
+      "fut": {
+        "O": 24706.7,
+        "H": 24709.9,
+        "L": 24691.2,
+        "C": 24708.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:30",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 90.35,
+      "spot": {
+        "O": 24622.2,
+        "H": 24624.05,
+        "L": 24605.2,
+        "C": 24610.65
+      },
+      "fut": {
+        "O": 24710.0,
+        "H": 24710.8,
+        "L": 24686.2,
+        "C": 24701.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:35",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 84.75,
+      "spot": {
+        "O": 24612.8,
+        "H": 24622.6,
+        "L": 24604.6,
+        "C": 24622.25
+      },
+      "fut": {
+        "O": 24700.0,
+        "H": 24710.0,
+        "L": 24688.9,
+        "C": 24707.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:40",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 81.95,
+      "spot": {
+        "O": 24622.75,
+        "H": 24635.95,
+        "L": 24620.45,
+        "C": 24628.05
+      },
+      "fut": {
+        "O": 24707.0,
+        "H": 24715.0,
+        "L": 24699.0,
+        "C": 24710.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:45",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 89.3,
+      "spot": {
+        "O": 24629.85,
+        "H": 24631.7,
+        "L": 24621.6,
+        "C": 24629.5
+      },
+      "fut": {
+        "O": 24713.9,
+        "H": 24718.8,
+        "L": 24699.0,
+        "C": 24718.8
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:50",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 89.9,
+      "spot": {
+        "O": 24629.05,
+        "H": 24630.5,
+        "L": 24591.15,
+        "C": 24592.1
+      },
+      "fut": {
+        "O": 24718.0,
+        "H": 24718.8,
+        "L": 24682.0,
+        "C": 24682.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T09:55",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 93.15,
+      "spot": {
+        "O": 24592.55,
+        "H": 24595.3,
+        "L": 24581.55,
+        "C": 24594.25
+      },
+      "fut": {
+        "O": 24682.1,
+        "H": 24687.4,
+        "L": 24670.2,
+        "C": 24687.4
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:00",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 86.85,
+      "spot": {
+        "O": 24595.05,
+        "H": 24620.6,
+        "L": 24595.05,
+        "C": 24612.15
+      },
+      "fut": {
+        "O": 24687.4,
+        "H": 24714.9,
+        "L": 24683.0,
+        "C": 24699.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:05",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.4,
+      "spot": {
+        "O": 24612.2,
+        "H": 24614.75,
+        "L": 24588.45,
+        "C": 24605.6
+      },
+      "fut": {
+        "O": 24699.0,
+        "H": 24706.5,
+        "L": 24675.7,
+        "C": 24685.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:10",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 88.75,
+      "spot": {
+        "O": 24607.1,
+        "H": 24623.2,
+        "L": 24605.35,
+        "C": 24621.25
+      },
+      "fut": {
+        "O": 24685.0,
+        "H": 24710.0,
+        "L": 24684.9,
+        "C": 24710.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:15",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 80.3,
+      "spot": {
+        "O": 24621.75,
+        "H": 24621.75,
+        "L": 24601.7,
+        "C": 24610.8
+      },
+      "fut": {
+        "O": 24699.7,
+        "H": 24708.7,
+        "L": 24686.1,
+        "C": 24691.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:20",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 87.0,
+      "spot": {
+        "O": 24612.9,
+        "H": 24618.9,
+        "L": 24604.7,
+        "C": 24616.0
+      },
+      "fut": {
+        "O": 24697.0,
+        "H": 24704.1,
+        "L": 24685.9,
+        "C": 24703.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:25",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.85,
+      "spot": {
+        "O": 24616.1,
+        "H": 24616.8,
+        "L": 24580.45,
+        "C": 24582.15
+      },
+      "fut": {
+        "O": 24703.8,
+        "H": 24703.8,
+        "L": 24660.0,
+        "C": 24662.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:30",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.85,
+      "spot": {
+        "O": 24582.8,
+        "H": 24583.1,
+        "L": 24562.2,
+        "C": 24580.15
+      },
+      "fut": {
+        "O": 24661.0,
+        "H": 24661.0,
+        "L": 24640.0,
+        "C": 24660.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:35",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 78.8,
+      "spot": {
+        "O": 24580.4,
+        "H": 24591.2,
+        "L": 24575.1,
+        "C": 24581.5
+      },
+      "fut": {
+        "O": 24658.0,
+        "H": 24679.5,
+        "L": 24651.7,
+        "C": 24660.3
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:40",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 85.6,
+      "spot": {
+        "O": 24583.65,
+        "H": 24605.05,
+        "L": 24578.85,
+        "C": 24594.4
+      },
+      "fut": {
+        "O": 24659.1,
+        "H": 24696.0,
+        "L": 24659.0,
+        "C": 24680.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:45",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 85.5,
+      "spot": {
+        "O": 24596.25,
+        "H": 24610.4,
+        "L": 24593.9,
+        "C": 24609.5
+      },
+      "fut": {
+        "O": 24684.0,
+        "H": 24695.0,
+        "L": 24676.1,
+        "C": 24695.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:50",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 78.9,
+      "spot": {
+        "O": 24611.4,
+        "H": 24619.55,
+        "L": 24604.3,
+        "C": 24616.2
+      },
+      "fut": {
+        "O": 24694.0,
+        "H": 24704.0,
+        "L": 24686.0,
+        "C": 24695.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T10:55",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 78.5,
+      "spot": {
+        "O": 24618.2,
+        "H": 24644.75,
+        "L": 24615.4,
+        "C": 24643.5
+      },
+      "fut": {
+        "O": 24699.0,
+        "H": 24722.0,
+        "L": 24699.0,
+        "C": 24722.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:00",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 82.05,
+      "spot": {
+        "O": 24643.9,
+        "H": 24657.15,
+        "L": 24643.5,
+        "C": 24647.95
+      },
+      "fut": {
+        "O": 24722.0,
+        "H": 24740.0,
+        "L": 24720.0,
+        "C": 24730.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:05",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 86.6,
+      "spot": {
+        "O": 24650.4,
+        "H": 24662.6,
+        "L": 24625.65,
+        "C": 24626.2
+      },
+      "fut": {
+        "O": 24728.0,
+        "H": 24735.0,
+        "L": 24709.0,
+        "C": 24712.8
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:10",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 83.55,
+      "spot": {
+        "O": 24627.25,
+        "H": 24640.65,
+        "L": 24617.9,
+        "C": 24631.45
+      },
+      "fut": {
+        "O": 24712.5,
+        "H": 24719.9,
+        "L": 24695.7,
+        "C": 24715.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:15",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 77.6,
+      "spot": {
+        "O": 24631.2,
+        "H": 24637.65,
+        "L": 24622.05,
+        "C": 24622.4
+      },
+      "fut": {
+        "O": 24717.2,
+        "H": 24718.6,
+        "L": 24700.0,
+        "C": 24700.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:20",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 80.45,
+      "spot": {
+        "O": 24623.45,
+        "H": 24629.15,
+        "L": 24616.1,
+        "C": 24619.55
+      },
+      "fut": {
+        "O": 24700.0,
+        "H": 24709.9,
+        "L": 24695.9,
+        "C": 24700.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:25",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.15,
+      "spot": {
+        "O": 24620.25,
+        "H": 24621.15,
+        "L": 24608.0,
+        "C": 24610.95
+      },
+      "fut": {
+        "O": 24699.1,
+        "H": 24703.0,
+        "L": 24690.1,
+        "C": 24690.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:30",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 69.8,
+      "spot": {
+        "O": 24609.55,
+        "H": 24612.25,
+        "L": 24589.25,
+        "C": 24590.2
+      },
+      "fut": {
+        "O": 24690.0,
+        "H": 24694.0,
+        "L": 24660.0,
+        "C": 24660.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:35",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 73.9,
+      "spot": {
+        "O": 24591.05,
+        "H": 24599.3,
+        "L": 24586.5,
+        "C": 24598.2
+      },
+      "fut": {
+        "O": 24662.0,
+        "H": 24675.4,
+        "L": 24660.0,
+        "C": 24672.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:40",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 76.6,
+      "spot": {
+        "O": 24599.3,
+        "H": 24601.1,
+        "L": 24589.85,
+        "C": 24594.4
+      },
+      "fut": {
+        "O": 24673.5,
+        "H": 24685.0,
+        "L": 24665.0,
+        "C": 24671.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:45",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 77.65,
+      "spot": {
+        "O": 24595.75,
+        "H": 24595.75,
+        "L": 24583.05,
+        "C": 24583.65
+      },
+      "fut": {
+        "O": 24675.3,
+        "H": 24676.1,
+        "L": 24661.3,
+        "C": 24661.3
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:50",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 74.3,
+      "spot": {
+        "O": 24584.95,
+        "H": 24584.95,
+        "L": 24569.4,
+        "C": 24573.7
+      },
+      "fut": {
+        "O": 24662.0,
+        "H": 24665.9,
+        "L": 24645.0,
+        "C": 24648.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T11:55",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 83.35,
+      "spot": {
+        "O": 24575.85,
+        "H": 24575.85,
+        "L": 24561.5,
+        "C": 24570.05
+      },
+      "fut": {
+        "O": 24649.0,
+        "H": 24656.1,
+        "L": 24640.0,
+        "C": 24653.4
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:00",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 84.05,
+      "spot": {
+        "O": 24570.85,
+        "H": 24579.05,
+        "L": 24568.3,
+        "C": 24575.85
+      },
+      "fut": {
+        "O": 24652.4,
+        "H": 24663.9,
+        "L": 24646.0,
+        "C": 24659.9
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:05",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 74.6,
+      "spot": {
+        "O": 24576.35,
+        "H": 24578.6,
+        "L": 24571.9,
+        "C": 24576.4
+      },
+      "fut": {
+        "O": 24660.1,
+        "H": 24660.1,
+        "L": 24650.0,
+        "C": 24651.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:10",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 81.55,
+      "spot": {
+        "O": 24577.5,
+        "H": 24577.5,
+        "L": 24564.75,
+        "C": 24572.85
+      },
+      "fut": {
+        "O": 24650.0,
+        "H": 24655.0,
+        "L": 24641.8,
+        "C": 24654.4
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:15",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.5,
+      "spot": {
+        "O": 24573.75,
+        "H": 24580.35,
+        "L": 24566.3,
+        "C": 24566.5
+      },
+      "fut": {
+        "O": 24652.0,
+        "H": 24660.0,
+        "L": 24644.2,
+        "C": 24646.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:20",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 82.8,
+      "spot": {
+        "O": 24567.95,
+        "H": 24576.8,
+        "L": 24560.75,
+        "C": 24571.9
+      },
+      "fut": {
+        "O": 24649.9,
+        "H": 24655.0,
+        "L": 24640.0,
+        "C": 24654.7
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:25",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 78.1,
+      "spot": {
+        "O": 24573.1,
+        "H": 24576.15,
+        "L": 24564.1,
+        "C": 24566.9
+      },
+      "fut": {
+        "O": 24654.7,
+        "H": 24654.7,
+        "L": 24640.0,
+        "C": 24645.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:30",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.15,
+      "spot": {
+        "O": 24567.3,
+        "H": 24568.3,
+        "L": 24541.9,
+        "C": 24543.95
+      },
+      "fut": {
+        "O": 24645.0,
+        "H": 24650.0,
+        "L": 24614.0,
+        "C": 24623.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:35",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 80.0,
+      "spot": {
+        "O": 24544.3,
+        "H": 24545.3,
+        "L": 24530.05,
+        "C": 24540.0
+      },
+      "fut": {
+        "O": 24618.0,
+        "H": 24621.3,
+        "L": 24603.0,
+        "C": 24620.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:40",
+      "matches": 0,
+      "matches_adj": 7,
+      "qualifies": true,
+      "qualifies_adj": true,
+      "basis": 75.15,
+      "spot": {
+        "O": 24541.2,
+        "H": 24545.65,
+        "L": 24525.35,
+        "C": 24531.85
+      },
+      "fut": {
+        "O": 24620.0,
+        "H": 24624.9,
+        "L": 24600.5,
+        "C": 24607.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:45",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 75.15,
+      "spot": {
+        "O": 24533.6,
+        "H": 24535.1,
+        "L": 24520.6,
+        "C": 24523.85
+      },
+      "fut": {
+        "O": 24609.0,
+        "H": 24613.2,
+        "L": 24595.0,
+        "C": 24599.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:50",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 77.85,
+      "spot": {
+        "O": 24525.1,
+        "H": 24526.1,
+        "L": 24517.45,
+        "C": 24523.05
+      },
+      "fut": {
+        "O": 24600.0,
+        "H": 24604.7,
+        "L": 24590.1,
+        "C": 24600.9
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T12:55",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 74.85,
+      "spot": {
+        "O": 24524.55,
+        "H": 24528.5,
+        "L": 24515.6,
+        "C": 24516.35
+      },
+      "fut": {
+        "O": 24593.0,
+        "H": 24607.5,
+        "L": 24590.0,
+        "C": 24591.2
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:00",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 69.1,
+      "spot": {
+        "O": 24518.1,
+        "H": 24534.6,
+        "L": 24513.7,
+        "C": 24530.9
+      },
+      "fut": {
+        "O": 24590.0,
+        "H": 24607.1,
+        "L": 24585.0,
+        "C": 24600.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:05",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 75.25,
+      "spot": {
+        "O": 24532.3,
+        "H": 24536.9,
+        "L": 24508.45,
+        "C": 24536.65
+      },
+      "fut": {
+        "O": 24605.2,
+        "H": 24611.9,
+        "L": 24579.0,
+        "C": 24611.9
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:10",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 73.45,
+      "spot": {
+        "O": 24537.65,
+        "H": 24540.1,
+        "L": 24519.25,
+        "C": 24534.95
+      },
+      "fut": {
+        "O": 24611.9,
+        "H": 24615.0,
+        "L": 24599.0,
+        "C": 24608.4
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:15",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 71.6,
+      "spot": {
+        "O": 24535.85,
+        "H": 24548.5,
+        "L": 24530.55,
+        "C": 24547.3
+      },
+      "fut": {
+        "O": 24611.3,
+        "H": 24618.9,
+        "L": 24603.5,
+        "C": 24618.9
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:20",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 81.25,
+      "spot": {
+        "O": 24548.7,
+        "H": 24559.3,
+        "L": 24522.95,
+        "C": 24524.45
+      },
+      "fut": {
+        "O": 24618.9,
+        "H": 24623.5,
+        "L": 24603.0,
+        "C": 24605.7
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:25",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 77.85,
+      "spot": {
+        "O": 24526.05,
+        "H": 24532.05,
+        "L": 24515.75,
+        "C": 24528.55
+      },
+      "fut": {
+        "O": 24605.2,
+        "H": 24608.7,
+        "L": 24599.0,
+        "C": 24606.4
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:30",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 75.05,
+      "spot": {
+        "O": 24529.2,
+        "H": 24535.1,
+        "L": 24515.6,
+        "C": 24519.05
+      },
+      "fut": {
+        "O": 24606.4,
+        "H": 24606.8,
+        "L": 24592.0,
+        "C": 24594.1
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:35",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 71.9,
+      "spot": {
+        "O": 24520.8,
+        "H": 24528.1,
+        "L": 24516.9,
+        "C": 24520.1
+      },
+      "fut": {
+        "O": 24594.1,
+        "H": 24603.9,
+        "L": 24590.0,
+        "C": 24592.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:40",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 63.75,
+      "spot": {
+        "O": 24521.45,
+        "H": 24521.45,
+        "L": 24498.4,
+        "C": 24502.95
+      },
+      "fut": {
+        "O": 24591.2,
+        "H": 24594.4,
+        "L": 24565.0,
+        "C": 24566.7
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:45",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 75.55,
+      "spot": {
+        "O": 24503.7,
+        "H": 24528.0,
+        "L": 24502.1,
+        "C": 24527.45
+      },
+      "fut": {
+        "O": 24568.0,
+        "H": 24603.0,
+        "L": 24566.3,
+        "C": 24603.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:50",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 77.75,
+      "spot": {
+        "O": 24529.0,
+        "H": 24532.5,
+        "L": 24507.8,
+        "C": 24517.05
+      },
+      "fut": {
+        "O": 24602.0,
+        "H": 24605.8,
+        "L": 24585.7,
+        "C": 24594.8
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T13:55",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 79.05,
+      "spot": {
+        "O": 24517.3,
+        "H": 24517.45,
+        "L": 24506.5,
+        "C": 24514.45
+      },
+      "fut": {
+        "O": 24592.0,
+        "H": 24596.9,
+        "L": 24586.0,
+        "C": 24593.5
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:00",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 82.8,
+      "spot": {
+        "O": 24515.55,
+        "H": 24526.85,
+        "L": 24513.45,
+        "C": 24524.5
+      },
+      "fut": {
+        "O": 24593.5,
+        "H": 24610.0,
+        "L": 24593.0,
+        "C": 24607.3
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:05",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 83.6,
+      "spot": {
+        "O": 24525.9,
+        "H": 24534.3,
+        "L": 24522.25,
+        "C": 24523.7
+      },
+      "fut": {
+        "O": 24607.8,
+        "H": 24616.0,
+        "L": 24600.1,
+        "C": 24607.3
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:10",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 81.75,
+      "spot": {
+        "O": 24524.8,
+        "H": 24532.25,
+        "L": 24512.6,
+        "C": 24513.25
+      },
+      "fut": {
+        "O": 24606.0,
+        "H": 24616.4,
+        "L": 24595.0,
+        "C": 24595.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:15",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 86.45,
+      "spot": {
+        "O": 24514.0,
+        "H": 24515.8,
+        "L": 24497.95,
+        "C": 24507.45
+      },
+      "fut": {
+        "O": 24596.2,
+        "H": 24598.0,
+        "L": 24580.0,
+        "C": 24593.9
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:20",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 82.5,
+      "spot": {
+        "O": 24506.7,
+        "H": 24516.8,
+        "L": 24503.4,
+        "C": 24505.5
+      },
+      "fut": {
+        "O": 24589.7,
+        "H": 24598.9,
+        "L": 24586.1,
+        "C": 24588.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:25",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 84.25,
+      "spot": {
+        "O": 24505.9,
+        "H": 24513.05,
+        "L": 24501.1,
+        "C": 24504.75
+      },
+      "fut": {
+        "O": 24588.0,
+        "H": 24594.9,
+        "L": 24585.0,
+        "C": 24589.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:30",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 85.15,
+      "spot": {
+        "O": 24507.15,
+        "H": 24511.75,
+        "L": 24503.25,
+        "C": 24504.85
+      },
+      "fut": {
+        "O": 24588.8,
+        "H": 24597.0,
+        "L": 24585.8,
+        "C": 24590.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:35",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 84.35,
+      "spot": {
+        "O": 24506.1,
+        "H": 24520.35,
+        "L": 24501.5,
+        "C": 24516.65
+      },
+      "fut": {
+        "O": 24590.0,
+        "H": 24610.0,
+        "L": 24588.0,
+        "C": 24601.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:40",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 80.0,
+      "spot": {
+        "O": 24516.05,
+        "H": 24516.75,
+        "L": 24500.75,
+        "C": 24505.0
+      },
+      "fut": {
+        "O": 24601.0,
+        "H": 24601.0,
+        "L": 24585.0,
+        "C": 24585.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:45",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 85.5,
+      "spot": {
+        "O": 24506.1,
+        "H": 24520.8,
+        "L": 24503.85,
+        "C": 24517.1
+      },
+      "fut": {
+        "O": 24587.2,
+        "H": 24609.1,
+        "L": 24585.1,
+        "C": 24602.6
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:50",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 94.4,
+      "spot": {
+        "O": 24517.45,
+        "H": 24520.6,
+        "L": 24507.45,
+        "C": 24511.2
+      },
+      "fut": {
+        "O": 24602.3,
+        "H": 24610.0,
+        "L": 24594.0,
+        "C": 24605.6
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T14:55",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 86.2,
+      "spot": {
+        "O": 24512.5,
+        "H": 24530.8,
+        "L": 24506.2,
+        "C": 24523.8
+      },
+      "fut": {
+        "O": 24603.0,
+        "H": 24623.9,
+        "L": 24597.2,
+        "C": 24610.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T15:00",
+      "matches": 0,
+      "matches_adj": 7,
+      "qualifies": true,
+      "qualifies_adj": true,
+      "basis": 86.7,
+      "spot": {
+        "O": 24525.8,
+        "H": 24536.15,
+        "L": 24517.3,
+        "C": 24533.3
+      },
+      "fut": {
+        "O": 24615.0,
+        "H": 24625.0,
+        "L": 24604.0,
+        "C": 24620.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T15:05",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 92.25,
+      "spot": {
+        "O": 24533.55,
+        "H": 24548.95,
+        "L": 24518.6,
+        "C": 24540.75
+      },
+      "fut": {
+        "O": 24620.0,
+        "H": 24639.0,
+        "L": 24611.9,
+        "C": 24633.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T15:10",
+      "matches": 0,
+      "matches_adj": 6,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 84.8,
+      "spot": {
+        "O": 24542.25,
+        "H": 24575.75,
+        "L": 24528.5,
+        "C": 24570.2
+      },
+      "fut": {
+        "O": 24631.5,
+        "H": 24659.0,
+        "L": 24622.1,
+        "C": 24655.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T15:15",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 76.8,
+      "spot": {
+        "O": 24570.2,
+        "H": 24570.2,
+        "L": 24570.2,
+        "C": 24570.2
+      },
+      "fut": {
+        "O": 24656.6,
+        "H": 24675.0,
+        "L": 24604.1,
+        "C": 24647.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T15:20",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 74.8,
+      "spot": {
+        "O": 24570.2,
+        "H": 24570.2,
+        "L": 24570.2,
+        "C": 24570.2
+      },
+      "fut": {
+        "O": 24647.0,
+        "H": 24654.0,
+        "L": 24640.9,
+        "C": 24645.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    },
+    {
+      "ts": "2026-08-05T15:25",
+      "matches": 0,
+      "matches_adj": 5,
+      "qualifies": true,
+      "qualifies_adj": false,
+      "basis": 25.35,
+      "spot": {
+        "O": 24570.2,
+        "H": 24624.65,
+        "L": 24570.2,
+        "C": 24624.65
+      },
+      "fut": {
+        "O": 24645.0,
+        "H": 24655.0,
+        "L": 24629.2,
+        "C": 24650.0
+      },
+      "detail": {
+        "F.O": false,
+        "F.H": false,
+        "F.L": false,
+        "F.C": false,
+        "S.O": false,
+        "S.H": false,
+        "S.L": false,
+        "S.C": false
+      }
+    }
+  ],
+  "referral": {
+    "ts": "2026-08-05T09:15",
+    "matches": 2,
+    "matches_adj": 5,
+    "qualifies": true,
+    "qualifies_adj": false,
+    "basis": 82.9,
+    "spot": {
+      "O": 24669.2,
+      "H": 24677.6,
+      "L": 24616.95,
+      "C": 24636.2
+    },
+    "fut": {
+      "O": 24715.0,
+      "H": 24725.0,
+      "L": 24676.1,
+      "C": 24719.1
+    },
+    "detail": {
+      "F.O": false,
+      "F.H": false,
+      "F.L": true,
+      "F.C": false,
+      "S.O": false,
+      "S.H": true,
+      "S.L": false,
+      "S.C": false
+    },
+    "high": 24725.0,
+    "high_label": "FH",
+    "low": 24616.95,
+    "low_label": "SL",
+    "range": 108.05
+  }
+}
