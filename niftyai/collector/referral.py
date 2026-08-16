@@ -3,12 +3,14 @@ First 5-minute Spot vs Future referral candle.
 
 RULE
   1. 5-min candles for the SPOT and the FRONT-MONTH FUTURE.
-  2. Count "common points": each of the future's O/H/L/C that falls inside the
-     spot's L..H, plus each of the spot's O/H/L/C inside the future's L..H.
-     8 points total. A candle qualifies when the count is > 6 or < 3.
-  3. That candle is the referral candle for BOTH instruments. Mark the outer
-     envelope — the higher of the two highs and the lower of the two lows —
-     labelled by whichever side owns it: SH/FH and SL/FL.
+  2. Scan EVERY candle. Count "common points": each of the future's O/H/L/C
+     that falls inside the spot's L..H, plus each of the spot's O/H/L/C inside
+     the future's L..H. 8 points total. A candle qualifies at <=3 matches or
+     >=6 — inclusive at both edges, so only 4 and 5 are ignored.
+  3. Across ALL qualifying candles, mark the highest high and the lowest low
+     (spot and future together), labelled by whichever side owns each extreme:
+     SH/FH and SL/FL. The envelope is session-wide, not per candle — a later
+     qualifying candle that extends the range moves the level.
 
 THE BASIS PROBLEM — READ BEFORE TRUSTING THE RAW COUNT.
 Raw prices are compared, so the two ranges must be able to overlap at all. They
@@ -49,8 +51,11 @@ H   = {"Accept": "application/json"}
 V3  = "https://api.upstox.com/v3/historical-candle"
 CDN = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"
 
-MATCH_HIGH = 6      # strictly MORE than this
-MATCH_LOW  = 3      # strictly LESS than this
+# "3 or 2 matches, or 6 and above" -> n <= 3 OR n >= 6.
+# Note this is INCLUSIVE at both edges, which the earlier reading ("more than 6
+# / less than 3") was not: 3 and 6 now qualify, and only 4 and 5 do not.
+MATCH_HIGH = 6      # n >= this qualifies
+MATCH_LOW  = 3      # n <= this qualifies
 OUT = "niftyai/data_log/referral"
 
 _DUMP = None
@@ -148,22 +153,32 @@ def common_points(s, f):
 
 
 def qualifies(n):
-    return n > MATCH_HIGH or n < MATCH_LOW
+    """Qualifying = few matches (<=3) or many (>=6). Only 4 and 5 are ignored."""
+    return n <= MATCH_LOW or n >= MATCH_HIGH
 
 
-def levels(s, f):
-    """Outer envelope of both instruments, labelled by owner."""
-    if f["H"] >= s["H"]:
-        hi, hi_lbl = f["H"], "FH"
-    else:
-        hi, hi_lbl = s["H"], "SH"
-    if f["L"] <= s["L"]:
-        lo, lo_lbl = f["L"], "FL"
-    else:
-        lo, lo_lbl = s["L"], "SL"
-    return {"high": round(hi, 2), "high_label": hi_lbl,
-            "low": round(lo, 2), "low_label": lo_lbl,
-            "range": round(hi - lo, 2)}
+def levels(candles):
+    """
+    Highest high and lowest low ACROSS ALL qualifying candles, spot and future
+    together, labelled by whichever side owns each extreme.
+
+    Aggregated over every qualifying candle in the session, not just the first
+    one — "mark the highest high and lowest low among them". A single-candle
+    envelope would miss a later qualifying candle that extended the range.
+    """
+    if not candles:
+        return None
+    hi, hi_lbl, hi_ts = None, None, None
+    lo, lo_lbl, lo_ts = None, None, None
+    for c in candles:
+        for side, lbl in ((c["spot"], "S"), (c["fut"], "F")):
+            if hi is None or side["H"] > hi:
+                hi, hi_lbl, hi_ts = side["H"], lbl + "H", c["ts"]
+            if lo is None or side["L"] < lo:
+                lo, lo_lbl, lo_ts = side["L"], lbl + "L", c["ts"]
+    return {"high": round(hi, 2), "high_label": hi_lbl, "high_ts": hi_ts,
+            "low": round(lo, 2), "low_label": lo_lbl, "low_ts": lo_ts,
+            "range": round(hi - lo, 2), "from_candles": len(candles)}
 
 
 def find(instrument="NIFTY", day=None, scan_all=True):
@@ -186,7 +201,6 @@ def find(instrument="NIFTY", day=None, scan_all=True):
     fmap = {str(r[0])[:16]: r for r in fb}
     out = {"instrument": instrument, "day": day, "future": fkey,
            "future_expiry": str(fexp), "scanned": 0, "candles": []}
-    referral = None
     for srow in sb:
         ts = str(srow[0])[:16]
         frow = fmap.get(ts)
@@ -201,13 +215,13 @@ def find(instrument="NIFTY", day=None, scan_all=True):
                "basis": round(f["C"] - s["C"], 2),
                "spot": s, "fut": f, "detail": detail}
         out["candles"].append(rec)
-        if referral is None and qualifies(n):
-            referral = {**rec, **levels(s, f)}
-            if not scan_all:
-                break
         if not scan_all:
             break                          # only the first (09:15) candle
-    out["referral"] = referral
+    _q = [c for c in out["candles"] if c["qualifies"]]
+    _qa = [c for c in out["candles"] if c["qualifies_adj"]]
+    out["qualifying"] = [c["ts"] for c in _q]
+    out["levels"] = levels(_q)
+    out["levels_adj"] = levels(_qa)
     return out
 
 
@@ -238,15 +252,16 @@ def main():
               f"{c['spot']['H']:>9.2f}/{c['spot']['L']:<9.2f}  "
               f"{c['fut']['H']:>9.2f}/{c['fut']['L']:<9.2f}"
               f"{'   <-- REFERRAL' if c['qualifies'] else ''}")
-    ref = r.get("referral")
-    if ref:
-        print(f"\nREFERRAL CANDLE {ref['ts'][11:]}  ({ref['matches']} of 8 matches)")
-        print(f"   {ref['high_label']} {ref['high']:,.2f}   <- mark")
-        print(f"   {ref['low_label']} {ref['low']:,.2f}   <- mark")
-        print(f"   range {ref['range']:,.2f}")
-    else:
-        print(f"\nno referral candle — every paired candle scored "
-              f"{MATCH_LOW}..{MATCH_HIGH} matches")
+    for lbl, key in (("RAW", "levels"), ("BASIS-ADJUSTED", "levels_adj")):
+        L = r.get(key)
+        print(f"\n{lbl}: ", end="")
+        if not L:
+            print("no qualifying candles")
+            continue
+        print(f"{L['from_candles']} qualifying candles")
+        print(f"   {L['high_label']} {L['high']:,.2f}  (at {L['high_ts'][11:]})   <- mark")
+        print(f"   {L['low_label']} {L['low']:,.2f}  (at {L['low_ts'][11:]})   <- mark")
+        print(f"   range {L['range']:,.2f}")
     if a.write:
         os.makedirs(OUT, exist_ok=True)
         p = os.path.join(OUT, f"{r['instrument']}_{r['day']}.json")

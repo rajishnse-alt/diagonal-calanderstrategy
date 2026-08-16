@@ -40,7 +40,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 81.9,
       "spot": {
         "O": 24636.5,
@@ -130,7 +130,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 84.75,
       "spot": {
         "O": 24612.8,
@@ -160,7 +160,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 81.95,
       "spot": {
         "O": 24622.75,
@@ -250,7 +250,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 93.15,
       "spot": {
         "O": 24592.55,
@@ -370,7 +370,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 80.3,
       "spot": {
         "O": 24621.75,
@@ -400,7 +400,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 87.0,
       "spot": {
         "O": 24612.9,
@@ -490,7 +490,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 78.8,
       "spot": {
         "O": 24580.4,
@@ -550,7 +550,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 85.5,
       "spot": {
         "O": 24596.25,
@@ -580,7 +580,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 78.9,
       "spot": {
         "O": 24611.4,
@@ -700,7 +700,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 83.55,
       "spot": {
         "O": 24627.25,
@@ -760,7 +760,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 80.45,
       "spot": {
         "O": 24623.45,
@@ -790,7 +790,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 79.15,
       "spot": {
         "O": 24620.25,
@@ -850,7 +850,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 73.9,
       "spot": {
         "O": 24591.05,
@@ -880,7 +880,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 76.6,
       "spot": {
         "O": 24599.3,
@@ -1000,7 +1000,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 84.05,
       "spot": {
         "O": 24570.85,
@@ -1090,7 +1090,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 79.5,
       "spot": {
         "O": 24573.75,
@@ -1120,7 +1120,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 82.8,
       "spot": {
         "O": 24567.95,
@@ -1180,7 +1180,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 79.15,
       "spot": {
         "O": 24567.3,
@@ -1270,7 +1270,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 75.15,
       "spot": {
         "O": 24533.6,
@@ -1300,7 +1300,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 77.85,
       "spot": {
         "O": 24525.1,
@@ -1330,7 +1330,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 74.85,
       "spot": {
         "O": 24524.55,
@@ -1360,7 +1360,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 69.1,
       "spot": {
         "O": 24518.1,
@@ -1390,7 +1390,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 75.25,
       "spot": {
         "O": 24532.3,
@@ -1420,7 +1420,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 73.45,
       "spot": {
         "O": 24537.65,
@@ -1450,7 +1450,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 71.6,
       "spot": {
         "O": 24535.85,
@@ -1510,7 +1510,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 77.85,
       "spot": {
         "O": 24526.05,
@@ -1540,7 +1540,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 75.05,
       "spot": {
         "O": 24529.2,
@@ -1570,7 +1570,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 71.9,
       "spot": {
         "O": 24520.8,
@@ -1690,7 +1690,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 79.05,
       "spot": {
         "O": 24517.3,
@@ -1750,7 +1750,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 83.6,
       "spot": {
         "O": 24525.9,
@@ -1780,7 +1780,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 81.75,
       "spot": {
         "O": 24524.8,
@@ -1840,7 +1840,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 82.5,
       "spot": {
         "O": 24506.7,
@@ -1870,7 +1870,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 84.25,
       "spot": {
         "O": 24505.9,
@@ -1900,7 +1900,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 85.15,
       "spot": {
         "O": 24507.15,
@@ -1930,7 +1930,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 84.35,
       "spot": {
         "O": 24506.1,
@@ -2050,7 +2050,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 86.2,
       "spot": {
         "O": 24512.5,
@@ -2110,7 +2110,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 92.25,
       "spot": {
         "O": 24533.55,
@@ -2140,7 +2140,7 @@
       "matches": 0,
       "matches_adj": 6,
       "qualifies": true,
-      "qualifies_adj": false,
+      "qualifies_adj": true,
       "basis": 84.8,
       "spot": {
         "O": 24542.25,
@@ -2256,39 +2256,101 @@
       }
     }
   ],
-  "referral": {
-    "ts": "2026-08-05T09:15",
-    "matches": 2,
-    "matches_adj": 5,
-    "qualifies": true,
-    "qualifies_adj": false,
-    "basis": 82.9,
-    "spot": {
-      "O": 24669.2,
-      "H": 24677.6,
-      "L": 24616.95,
-      "C": 24636.2
-    },
-    "fut": {
-      "O": 24715.0,
-      "H": 24725.0,
-      "L": 24676.1,
-      "C": 24719.1
-    },
-    "detail": {
-      "F.O": false,
-      "F.H": false,
-      "F.L": true,
-      "F.C": false,
-      "S.O": false,
-      "S.H": true,
-      "S.L": false,
-      "S.C": false
-    },
-    "high": 24725.0,
+  "qualifying": [
+    "2026-08-05T09:15",
+    "2026-08-05T09:20",
+    "2026-08-05T09:25",
+    "2026-08-05T09:30",
+    "2026-08-05T09:35",
+    "2026-08-05T09:40",
+    "2026-08-05T09:45",
+    "2026-08-05T09:50",
+    "2026-08-05T09:55",
+    "2026-08-05T10:00",
+    "2026-08-05T10:05",
+    "2026-08-05T10:10",
+    "2026-08-05T10:15",
+    "2026-08-05T10:20",
+    "2026-08-05T10:25",
+    "2026-08-05T10:30",
+    "2026-08-05T10:35",
+    "2026-08-05T10:40",
+    "2026-08-05T10:45",
+    "2026-08-05T10:50",
+    "2026-08-05T10:55",
+    "2026-08-05T11:00",
+    "2026-08-05T11:05",
+    "2026-08-05T11:10",
+    "2026-08-05T11:15",
+    "2026-08-05T11:20",
+    "2026-08-05T11:25",
+    "2026-08-05T11:30",
+    "2026-08-05T11:35",
+    "2026-08-05T11:40",
+    "2026-08-05T11:45",
+    "2026-08-05T11:50",
+    "2026-08-05T11:55",
+    "2026-08-05T12:00",
+    "2026-08-05T12:05",
+    "2026-08-05T12:10",
+    "2026-08-05T12:15",
+    "2026-08-05T12:20",
+    "2026-08-05T12:25",
+    "2026-08-05T12:30",
+    "2026-08-05T12:35",
+    "2026-08-05T12:40",
+    "2026-08-05T12:45",
+    "2026-08-05T12:50",
+    "2026-08-05T12:55",
+    "2026-08-05T13:00",
+    "2026-08-05T13:05",
+    "2026-08-05T13:10",
+    "2026-08-05T13:15",
+    "2026-08-05T13:20",
+    "2026-08-05T13:25",
+    "2026-08-05T13:30",
+    "2026-08-05T13:35",
+    "2026-08-05T13:40",
+    "2026-08-05T13:45",
+    "2026-08-05T13:50",
+    "2026-08-05T13:55",
+    "2026-08-05T14:00",
+    "2026-08-05T14:05",
+    "2026-08-05T14:10",
+    "2026-08-05T14:15",
+    "2026-08-05T14:20",
+    "2026-08-05T14:25",
+    "2026-08-05T14:30",
+    "2026-08-05T14:35",
+    "2026-08-05T14:40",
+    "2026-08-05T14:45",
+    "2026-08-05T14:50",
+    "2026-08-05T14:55",
+    "2026-08-05T15:00",
+    "2026-08-05T15:05",
+    "2026-08-05T15:10",
+    "2026-08-05T15:15",
+    "2026-08-05T15:20",
+    "2026-08-05T15:25"
+  ],
+  "levels": {
+    "high": 24740.0,
     "high_label": "FH",
-    "low": 24616.95,
+    "high_ts": "2026-08-05T11:00",
+    "low": 24497.95,
     "low_label": "SL",
-    "range": 108.05
+    "low_ts": "2026-08-05T14:15",
+    "range": 242.05,
+    "from_candles": 75
+  },
+  "levels_adj": {
+    "high": 24726.0,
+    "high_label": "FH",
+    "high_ts": "2026-08-05T09:20",
+    "low": 24501.1,
+    "low_label": "SL",
+    "low_ts": "2026-08-05T14:25",
+    "range": 224.9,
+    "from_candles": 40
   }
 }
