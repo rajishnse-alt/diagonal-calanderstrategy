@@ -4593,6 +4593,62 @@ else:
         "</div>"
     )
 
+# ── Spot vs Future referral candles ──────────────────────────────────────────
+# Scans every 5-min candle of the session. A candle qualifies when the spot and
+# FRONT-MONTH future share <=3 or >=6 of the 8 OHLC "common points" (each value
+# inside the other's L..H). Across ALL qualifying candles, the highest high and
+# lowest low are marked — and watched on the OPPOSITE chart:
+#     up   -> the FUTURE crossing above the SPOT's high
+#     down -> the SPOT crossing below the FUTURE's low
+# 3 qualifies: the worked example scored exactly 3 and set levels off it.
+@st.cache_data(ttl=300, show_spinner=False)
+def _referral_levels(_inst, _day):
+    try:
+        import importlib
+        _rf = importlib.import_module("niftyai.collector.referral")
+        return _rf.find(_inst, _day, scan_all=True)
+    except Exception as _e:
+        return {"error": f"{type(_e).__name__}: {_e}"}
+
+
+_ref = _referral_levels(_inst_choice, str(_5m_date_used))
+_ref_html = ""
+if _ref and not _ref.get("error"):
+    _L = _ref.get("levels")
+    if _L:
+        _u, _d = _L["up_trigger"], _L["down_trigger"]
+        # Live: has either side crossed its trigger yet?
+        _up_hit = bool(spot and _u["watch"] == "SPOT" and spot > _u["cross_above"])
+        _dn_hit = bool(spot and _d["watch"] == "SPOT" and spot < _d["cross_below"])
+        _ref_html = (
+            "<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
+            "<div style='font-size:8px;font-weight:700;letter-spacing:.07em;"
+            "color:var(--muted);margin-bottom:4px;'>SPOT↔FUT REFERRAL"
+            f"<span style='font-weight:400;margin-left:5px;'>"
+            f"{_L['from_candles']} candles · {_L['state']} {_L['basis']:+.2f}</span></div>"
+            f"<div style='font-family:var(--mono);font-size:9px;'>"
+            f"<div><span style='color:var(--bull);font-weight:700;'>▲ UP</span>"
+            f"<span style='color:var(--muted);'> {_u['watch']} &gt; </span>"
+            f"<span style='color:var(--bull);font-weight:900;font-size:11px;'>"
+            f"{_u['cross_above']:,.2f}</span>"
+            f"<span style='color:var(--muted);font-size:8px;'> {_u['level']} "
+            f"@{_L['high_ts'][11:16]}</span>"
+            + ("<span style='color:var(--bull);font-weight:700;'> ✓ CROSSED</span>"
+               if _up_hit else "") + "</div>"
+            f"<div><span style='color:var(--bear);font-weight:700;'>▼ DN</span>"
+            f"<span style='color:var(--muted);'> {_d['watch']} &lt; </span>"
+            f"<span style='color:var(--bear);font-weight:900;font-size:11px;'>"
+            f"{_d['cross_below']:,.2f}</span>"
+            f"<span style='color:var(--muted);font-size:8px;'> {_d['level']} "
+            f"@{_L['low_ts'][11:16]}</span>"
+            + ("<span style='color:var(--bear);font-weight:700;'> ✓ CROSSED</span>"
+               if _dn_hit else "") + "</div></div></div>"
+        )
+    else:
+        _ref_html = ("<div style='margin-top:8px;border-top:1px solid var(--border);"
+                     "padding-top:7px;'><span style='font-size:9px;color:var(--muted);"
+                     "font-style:italic;'>no qualifying spot/fut candle yet</span></div>")
+
 # ── Day H/L √ support & resistance ───────────────────────────────────────────
 #   Best support    = Day HIGH − √(Day HIGH)
 #   Best resistance = Day LOW  + √(Day LOW)
@@ -4649,6 +4705,8 @@ with r1c1:
         + _5m_html
         # Day H/L √ support & resistance
         + _dhl_html
+        # Spot↔Future referral levels
+        + _ref_html
         # Futures build-up (always show section; show error hint if no data)
         + f"<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
         + f"<div style='font-size:8px;font-weight:700;letter-spacing:.07em;color:var(--muted);margin-bottom:4px;'>FUTURES BUILD-UP</div>"
