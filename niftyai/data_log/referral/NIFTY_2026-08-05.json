@@ -2341,7 +2341,19 @@
     "low_label": "SL",
     "low_ts": "2026-08-05T14:15",
     "range": 242.05,
-    "from_candles": 75
+    "from_candles": 75,
+    "basis": 25.35,
+    "state": "PREMIUM",
+    "up_trigger": {
+      "watch": "SPOT",
+      "cross_above": 24740.0,
+      "level": "FH"
+    },
+    "down_trigger": {
+      "watch": "FUTURE",
+      "cross_below": 24497.95,
+      "level": "SL"
+    }
   },
   "levels_adj": {
     "high": 24726.0,
@@ -2351,6 +2363,18 @@
     "low_label": "SL",
     "low_ts": "2026-08-05T14:25",
     "range": 224.9,
-    "from_candles": 40
+    "from_candles": 40,
+    "basis": 84.8,
+    "state": "PREMIUM",
+    "up_trigger": {
+      "watch": "SPOT",
+      "cross_above": 24726.0,
+      "level": "FH"
+    },
+    "down_trigger": {
+      "watch": "FUTURE",
+      "cross_below": 24501.1,
+      "level": "SL"
+    }
   }
 }

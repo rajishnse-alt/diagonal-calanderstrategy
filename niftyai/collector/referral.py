@@ -11,6 +11,19 @@ RULE
      (spot and future together), labelled by whichever side owns each extreme:
      SH/FH and SL/FL. The envelope is session-wide, not per candle — a later
      qualifying candle that extends the range moves the level.
+  4. THE LEVELS ARE WATCHED ON THE OPPOSITE CHART. A level set by one
+     instrument is a trigger for the OTHER one crossing it:
+         up move   -> the FUTURE crossing above the SPOT's high
+         down move -> the SPOT crossing below the FUTURE's low
+     So the spot-owned high is drawn on the FUTURE chart and the future-owned
+     low on the SPOT chart. Worked example, 09:45:
+         spot O 24170.60 H 24175.60 L 24157.50 C 24163.30
+         fut  O 24156.00 H 24164.10 L 24142.00 C 24146.90
+         3 common points -> qualifies
+         SH 24,175.60 -> line on the FUTURE chart (up trigger)
+         FL 24,142.00 -> line on the SPOT chart   (down trigger)
+     Future closed 16.40 under spot, i.e. at a DISCOUNT, which is the state
+     that example was in.
 
 THE BASIS PROBLEM — READ BEFORE TRUSTING THE RAW COUNT.
 Raw prices are compared, so the two ranges must be able to overlap at all. They
@@ -176,9 +189,20 @@ def levels(candles):
                 hi, hi_lbl, hi_ts = side["H"], lbl + "H", c["ts"]
             if lo is None or side["L"] < lo:
                 lo, lo_lbl, lo_ts = side["L"], lbl + "L", c["ts"]
-    return {"high": round(hi, 2), "high_label": hi_lbl, "high_ts": hi_ts,
-            "low": round(lo, 2), "low_label": lo_lbl, "low_ts": lo_ts,
-            "range": round(hi - lo, 2), "from_candles": len(candles)}
+    last = candles[-1]
+    basis = last["fut"]["C"] - last["spot"]["C"]
+    return {
+        "high": round(hi, 2), "high_label": hi_lbl, "high_ts": hi_ts,
+        "low": round(lo, 2), "low_label": lo_lbl, "low_ts": lo_ts,
+        "range": round(hi - lo, 2), "from_candles": len(candles),
+        "basis": round(basis, 2),
+        "state": "DISCOUNT" if basis < 0 else "PREMIUM",
+        # Cross-assigned: you watch the OTHER instrument cross the level.
+        "up_trigger":   {"watch": "FUTURE" if hi_lbl[0] == "S" else "SPOT",
+                         "cross_above": round(hi, 2), "level": hi_lbl},
+        "down_trigger": {"watch": "SPOT" if lo_lbl[0] == "F" else "FUTURE",
+                         "cross_below": round(lo, 2), "level": lo_lbl},
+    }
 
 
 def find(instrument="NIFTY", day=None, scan_all=True):
@@ -259,8 +283,12 @@ def main():
             print("no qualifying candles")
             continue
         print(f"{L['from_candles']} qualifying candles")
-        print(f"   {L['high_label']} {L['high']:,.2f}  (at {L['high_ts'][11:]})   <- mark")
-        print(f"   {L['low_label']} {L['low']:,.2f}  (at {L['low_ts'][11:]})   <- mark")
+        u, d = L["up_trigger"], L["down_trigger"]
+        print(f"   basis {L['basis']:+.2f} -> future at {L['state']}")
+        print(f"   UP  : {u['watch']} crosses ABOVE {u['cross_above']:,.2f} "
+              f"({u['level']}, set {L['high_ts'][11:]})  -> line on {u['watch']} chart")
+        print(f"   DOWN: {d['watch']} crosses BELOW {d['cross_below']:,.2f} "
+              f"({d['level']}, set {L['low_ts'][11:]})  -> line on {d['watch']} chart")
         print(f"   range {L['range']:,.2f}")
     if a.write:
         os.makedirs(OUT, exist_ok=True)
