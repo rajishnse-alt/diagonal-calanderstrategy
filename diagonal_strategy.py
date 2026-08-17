@@ -4646,49 +4646,42 @@ def _referral_levels(_inst, _day):
 _ref = _referral_levels(_inst_choice, str(_5m_date_used))
 _ref_html = ""
 if _ref and not _ref.get("error"):
-    # Use the count that actually DISCRIMINATES.
-    # Raw matching compares absolute prices, so once the basis exceeds a
-    # candle's own range no spot value can fall inside the future's range: the
-    # count pins at 0-2 and EVERY candle scores "<=3". Measured at +104 basis
-    # that was 75 of 75 candles qualifying, which made the envelope the whole
-    # day's range rather than the extremes of matching candles.
-    # The basis-adjusted count (future shifted onto spot by F.C - S.C) compares
-    # candle SHAPE and stays selective — 40 of 75 on 2026-08-05, 1 of 75 on
-    # 2026-08-14. Fall back to raw only when adjusted finds nothing.
-    _Lr, _La = _ref.get("levels"), _ref.get("levels_adj")
-    _degenerate = bool(_Lr and _ref.get("scanned")
-                       and _Lr["from_candles"] >= _ref["scanned"])
-    _L = _La if (_La and (_degenerate or _La["from_candles"] < (_Lr or {}).get(
-        "from_candles", 10 ** 9))) else _Lr
-    _basis_note = " · shape-matched" if (_L is _La and _La) else ""
+    # The LATEST qualifying candle pair. Marks are PER PAIR — the highest and
+    # lowest of that one candle's spot+future — not an envelope across the
+    # session. Aggregating across candles produced a band spanning the whole
+    # day, which is not what the rule says.
+    _lat = _ref.get("latest")
+    _L   = _lat["levels"] if _lat else None
+    _nq  = len(_ref.get("qualifying") or [])
     if _L:
         _u, _d = _L["up_trigger"], _L["down_trigger"]
-        # Live: has either side crossed its trigger yet?
+        # Live: has the watching side already taken its level out?
         _up_hit = bool(spot and _u["watch"] == "SPOT" and spot > _u["cross_above"])
         _dn_hit = bool(spot and _d["watch"] == "SPOT" and spot < _d["cross_below"])
+        _hdr = (f"{_lat['ts'][11:16]} · {_lat['matches']} matches · "
+                f"{_nq}/{_ref.get('scanned', '?')} qualified · "
+                f"{_L['state']} {_L['basis']:+.2f}")
+        _up_row = (f"<div><span style='color:var(--bull);font-weight:700;'>▲ UP</span>"
+                   f"<span style='color:var(--muted);'> {_u['watch']} &gt; </span>"
+                   f"<span style='color:var(--bull);font-weight:900;font-size:11px;'>"
+                   f"{_u['cross_above']:,.2f}</span>"
+                   f"<span style='color:var(--muted);font-size:8px;'> {_u['level']}</span>"
+                   + ("<span style='color:var(--bull);font-weight:700;'> ✓ CROSSED</span>"
+                      if _up_hit else "") + "</div>")
+        _dn_row = (f"<div><span style='color:var(--bear);font-weight:700;'>▼ DN</span>"
+                   f"<span style='color:var(--muted);'> {_d['watch']} &lt; </span>"
+                   f"<span style='color:var(--bear);font-weight:900;font-size:11px;'>"
+                   f"{_d['cross_below']:,.2f}</span>"
+                   f"<span style='color:var(--muted);font-size:8px;'> {_d['level']}</span>"
+                   + ("<span style='color:var(--bear);font-weight:700;'> ✓ CROSSED</span>"
+                      if _dn_hit else "") + "</div>")
         _ref_html = (
             "<div style='margin-top:8px;border-top:1px solid var(--border);padding-top:7px;'>"
             "<div style='font-size:8px;font-weight:700;letter-spacing:.07em;"
             "color:var(--muted);margin-bottom:4px;'>SPOT↔FUT REFERRAL"
-            f"<span style='font-weight:400;margin-left:5px;'>"
-            f"{_L['from_candles']}/{_ref.get('scanned','?')} candles · "f"{_L['state']} {_L['basis']:+.2f}{_basis_note}</span></div>"
-            f"<div style='font-family:var(--mono);font-size:9px;'>"
-            f"<div><span style='color:var(--bull);font-weight:700;'>▲ UP</span>"
-            f"<span style='color:var(--muted);'> {_u['watch']} &gt; </span>"
-            f"<span style='color:var(--bull);font-weight:900;font-size:11px;'>"
-            f"{_u['cross_above']:,.2f}</span>"
-            f"<span style='color:var(--muted);font-size:8px;'> {_u['level']} "
-            f"@{_L['high_ts'][11:16]}</span>"
-            + ("<span style='color:var(--bull);font-weight:700;'> ✓ CROSSED</span>"
-               if _up_hit else "") + "</div>"
-            f"<div><span style='color:var(--bear);font-weight:700;'>▼ DN</span>"
-            f"<span style='color:var(--muted);'> {_d['watch']} &lt; </span>"
-            f"<span style='color:var(--bear);font-weight:900;font-size:11px;'>"
-            f"{_d['cross_below']:,.2f}</span>"
-            f"<span style='color:var(--muted);font-size:8px;'> {_d['level']} "
-            f"@{_L['low_ts'][11:16]}</span>"
-            + ("<span style='color:var(--bear);font-weight:700;'> ✓ CROSSED</span>"
-               if _dn_hit else "") + "</div></div></div>"
+            f"<span style='font-weight:400;margin-left:5px;'>{_hdr}</span></div>"
+            f"<div style='font-family:var(--mono);font-size:9px;'>{_up_row}{_dn_row}</div>"
+            "</div>"
         )
     else:
         _ref_html = ("<div style='margin-top:8px;border-top:1px solid var(--border);"

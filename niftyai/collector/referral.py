@@ -70,7 +70,7 @@ CDN = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json
 # of five phrasings including the most recent, so 6 does NOT qualify.
 # Qualifying: 0 1 2 3 . . . 7 8      Ignored: 4 5 6
 MATCH_LOW  = 3      # n <= this qualifies
-MATCH_HIGH = 6      # n >  this qualifies
+MATCH_HIGH = 6      # n >= this qualifies
 OUT = "niftyai/data_log/referral"
 
 _DUMP = None
@@ -168,38 +168,30 @@ def common_points(s, f):
 
 
 def qualifies(n):
-    """Few matches (<=3) or many (>6). 4, 5 and 6 are ignored."""
-    return n <= MATCH_LOW or n > MATCH_HIGH
+    """3 or fewer matches, or 6 or more. Only 4 and 5 are ignored."""
+    return n <= MATCH_LOW or n >= MATCH_HIGH
 
 
-def levels(candles):
+def levels(spot, fut):
     """
-    Highest high and lowest low ACROSS ALL qualifying candles, spot and future
-    together, labelled by whichever side owns each extreme.
+    Highest and lowest of THIS ONE candle pair — spot and future together.
 
-    Aggregated over every qualifying candle in the session, not just the first
-    one — "mark the highest high and lowest low among them". A single-candle
-    envelope would miss a later qualifying candle that extended the range.
+    Per pair, not across the session. An earlier version aggregated the
+    extremes over every qualifying candle, which on a wide-basis day spanned
+    the whole session and produced a band far wider than any single candle.
+    The rule is: when a candle pair qualifies, mark the highest and the lowest
+    of that pair.
     """
-    if not candles:
-        return None
-    hi, hi_lbl, hi_ts = None, None, None
-    lo, lo_lbl, lo_ts = None, None, None
-    for c in candles:
-        for side, lbl in ((c["spot"], "S"), (c["fut"], "F")):
-            if hi is None or side["H"] > hi:
-                hi, hi_lbl, hi_ts = side["H"], lbl + "H", c["ts"]
-            if lo is None or side["L"] < lo:
-                lo, lo_lbl, lo_ts = side["L"], lbl + "L", c["ts"]
-    last = candles[-1]
-    basis = last["fut"]["C"] - last["spot"]["C"]
+    hi, hi_lbl = ((fut["H"], "FH") if fut["H"] >= spot["H"] else (spot["H"], "SH"))
+    lo, lo_lbl = ((fut["L"], "FL") if fut["L"] <= spot["L"] else (spot["L"], "SL"))
+    basis = fut["C"] - spot["C"]
     return {
-        "high": round(hi, 2), "high_label": hi_lbl, "high_ts": hi_ts,
-        "low": round(lo, 2), "low_label": lo_lbl, "low_ts": lo_ts,
-        "range": round(hi - lo, 2), "from_candles": len(candles),
+        "high": round(hi, 2), "high_label": hi_lbl,
+        "low": round(lo, 2), "low_label": lo_lbl,
+        "range": round(hi - lo, 2),
         "basis": round(basis, 2),
         "state": "DISCOUNT" if basis < 0 else "PREMIUM",
-        # Cross-assigned: you watch the OTHER instrument cross the level.
+        # Watched on the OPPOSITE chart — the level's owner is not its watcher.
         "up_trigger":   {"watch": "FUTURE" if hi_lbl[0] == "S" else "SPOT",
                          "cross_above": round(hi, 2), "level": hi_lbl},
         "down_trigger": {"watch": "SPOT" if lo_lbl[0] == "F" else "FUTURE",
@@ -243,11 +235,14 @@ def find(instrument="NIFTY", day=None, scan_all=True):
         out["candles"].append(rec)
         if not scan_all:
             break                          # only the first (09:15) candle
-    _q = [c for c in out["candles"] if c["qualifies"]]
-    _qa = [c for c in out["candles"] if c["qualifies_adj"]]
-    out["qualifying"] = [c["ts"] for c in _q]
-    out["levels"] = levels(_q)
-    out["levels_adj"] = levels(_qa)
+    # Every qualifying candle carries ITS OWN marks.
+    _q = []
+    for c in out["candles"]:
+        if c["qualifies"]:
+            c["levels"] = levels(c["spot"], c["fut"])
+            _q.append(c)
+    out["qualifying"] = _q
+    out["latest"] = _q[-1] if _q else None      # most recent qualifying pair
     return out
 
 
@@ -278,20 +273,18 @@ def main():
               f"{c['spot']['H']:>9.2f}/{c['spot']['L']:<9.2f}  "
               f"{c['fut']['H']:>9.2f}/{c['fut']['L']:<9.2f}"
               f"{'   <-- REFERRAL' if c['qualifies'] else ''}")
-    for lbl, key in (("RAW", "levels"), ("BASIS-ADJUSTED", "levels_adj")):
-        L = r.get(key)
-        print(f"\n{lbl}: ", end="")
-        if not L:
-            print("no qualifying candles")
-            continue
-        print(f"{L['from_candles']} qualifying candles")
+    q = r.get("qualifying") or []
+    print(f"\nqualifying candles: {len(q)} of {r['scanned']}")
+    for c in q[-6:]:
+        L = c["levels"]
         u, d = L["up_trigger"], L["down_trigger"]
-        print(f"   basis {L['basis']:+.2f} -> future at {L['state']}")
-        print(f"   UP  : {u['watch']} crosses ABOVE {u['cross_above']:,.2f} "
-              f"({u['level']}, set {L['high_ts'][11:]})  -> line on {u['watch']} chart")
-        print(f"   DOWN: {d['watch']} crosses BELOW {d['cross_below']:,.2f} "
-              f"({d['level']}, set {L['low_ts'][11:]})  -> line on {d['watch']} chart")
-        print(f"   range {L['range']:,.2f}")
+        print(f"  {c['ts'][11:]}  {c['matches']} matches  {L['state']} {L['basis']:+.2f}")
+        print(f"      high {L['high']:,.2f} ({L['high_label']})  ->  "
+              f"UP: {u['watch']} crosses above it")
+        print(f"      low  {L['low']:,.2f} ({L['low_label']})  ->  "
+              f"DOWN: {d['watch']} crosses below it")
+    if not q:
+        print("  none — no candle pair scored <=3 or >=6")
     if a.write:
         os.makedirs(OUT, exist_ok=True)
         p = os.path.join(OUT, f"{r['instrument']}_{r['day']}.json")
