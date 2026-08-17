@@ -4520,21 +4520,46 @@ if _nifty_5m_close is None and token:
             if _cv > 0:
                 _nifty_5m_close = _cv
                 st.session_state[_5m_close_key] = _cv
-            # Index DAY high/low, from the same candles — no extra request.
-            _dh = max((float(c[2]) for c in _cn if len(c) > 2 and c[2]), default=0)
-            _dl = min((float(c[3]) for c in _cn if len(c) > 3 and c[3] and float(c[3]) > 0),
-                      default=0)
-            if _dh > 0:
-                _idx_day_high = _dh
-            if _dl > 0:
-                _idx_day_low = _dl
     except Exception:
         pass
 
-# Day H/L fallback: pre-market (and any session with no bars yet) has nothing
-# for today, so fall back to the PREVIOUS session and mark it. Showing an empty
-# row would lose the levels entirely; showing yesterday's unlabelled would be
-# worse — they would read as today's.
+# Day H/L — computed INDEPENDENTLY, always.
+#
+# This used to be derived inside the "guaranteed close fetch" block above,
+# which only runs `if _nifty_5m_close is None`. Once the close was cached that
+# block was skipped entirely, so _idx_day_high/_low were never set and the row
+# fell back to "ᵖ prev session" on every subsequent rerun — showing yesterday's
+# levels during a live session. Own fetch, own cache, no shared condition.
+_dhl_key = f"idx_dayhl_{_inst_choice}_{_5m_date_used.isoformat()}_{_spcl_slot}"
+_dhl_hit = st.session_state.get(_dhl_key)
+if _dhl_hit:
+    _idx_day_high, _idx_day_low, _idx_day_prev = _dhl_hit
+elif token:
+    try:
+        _de = urllib.parse.quote(INSTRUMENT_KEY, safe="")
+        _dhdr = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        _dc = []
+        # TODAY first — intraday is the only endpoint that serves the current
+        # session; dated endpoints exclude it.
+        if _mkt_open or _after_close:
+            try:
+                _dc = (requests.get(
+                    f"https://api.upstox.com/v3/historical-candle/intraday/{_de}/minutes/5",
+                    headers=_dhdr, timeout=5).json().get("data") or {}).get("candles") or []
+            except requests.RequestException:
+                _dc = []
+        if _dc:
+            _hh = max((float(c[2]) for c in _dc if len(c) > 2 and c[2]), default=0)
+            _ll = min((float(c[3]) for c in _dc if len(c) > 3 and c[3] and float(c[3]) > 0),
+                      default=0)
+            if _hh > 0 and _ll > 0:
+                _idx_day_high, _idx_day_low, _idx_day_prev = _hh, _ll, False
+                st.session_state[_dhl_key] = (_hh, _ll, False)
+    except Exception:
+        pass
+
+# Only if today genuinely has no bars (pre-market, holiday) fall back to the
+# PREVIOUS session — and mark it, so yesterday's levels never read as today's.
 if (_idx_day_high is None or _idx_day_low is None) and token:
     try:
         _pd = _prev_biz_day().strftime("%Y-%m-%d")
@@ -4550,6 +4575,7 @@ if (_idx_day_high is None or _idx_day_low is None) and token:
                       default=0)
             if _ph > 0 and _pl > 0:
                 _idx_day_high, _idx_day_low, _idx_day_prev = _ph, _pl, True
+                st.session_state[_dhl_key] = (_ph, _pl, True)
     except requests.RequestException:
         pass
 
