@@ -64,11 +64,13 @@ H   = {"Accept": "application/json"}
 V3  = "https://api.upstox.com/v3/historical-candle"
 CDN = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"
 
-# "3 or 2 matches, or 6 and above" -> n <= 3 OR n >= 6.
-# Note this is INCLUSIVE at both edges, which the earlier reading ("more than 6
-# / less than 3") was not: 3 and 6 now qualify, and only 4 and 5 do not.
-MATCH_HIGH = 6      # n >= this qualifies
+# "3 or less than 3 common points; else more than 6" -> n <= 3 OR n > 6.
+# The low edge is INCLUSIVE (the 09:45 worked example scored exactly 3 and set
+# levels off it). The high edge is EXCLUSIVE — stated as "more than 6" in three
+# of five phrasings including the most recent, so 6 does NOT qualify.
+# Qualifying: 0 1 2 3 . . . 7 8      Ignored: 4 5 6
 MATCH_LOW  = 3      # n <= this qualifies
+MATCH_HIGH = 6      # n >  this qualifies
 OUT = "niftyai/data_log/referral"
 
 _DUMP = None
@@ -166,8 +168,8 @@ def common_points(s, f):
 
 
 def qualifies(n):
-    """Qualifying = few matches (<=3) or many (>=6). Only 4 and 5 are ignored."""
-    return n <= MATCH_LOW or n >= MATCH_HIGH
+    """Few matches (<=3) or many (>6). 4, 5 and 6 are ignored."""
+    return n <= MATCH_LOW or n > MATCH_HIGH
 
 
 def levels(candles):
