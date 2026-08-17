@@ -4530,7 +4530,13 @@ if _nifty_5m_close is None and token:
 # block was skipped entirely, so _idx_day_high/_low were never set and the row
 # fell back to "ᵖ prev session" on every subsequent rerun — showing yesterday's
 # levels during a live session. Own fetch, own cache, no shared condition.
-_dhl_key = f"idx_dayhl_{_inst_choice}_{_5m_date_used.isoformat()}_{_spcl_slot}"
+# Own 5-min slot, computed here. _spcl_slot is not defined until ~line 5716,
+# and referencing it at this point raised NameError on every run.
+_dhl_now  = datetime.now(IST)
+_dhl_slot = (_dhl_now.replace(second=0, microsecond=0)
+             .replace(minute=(_dhl_now.minute // 5) * 5).strftime("%H%M")
+             if _mkt_open else "final")
+_dhl_key = f"idx_dayhl_{_inst_choice}_{_5m_date_used.isoformat()}_{_dhl_slot}"
 _dhl_hit = st.session_state.get(_dhl_key)
 if _dhl_hit:
     _idx_day_high, _idx_day_low, _idx_day_prev = _dhl_hit
