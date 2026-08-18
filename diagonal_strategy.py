@@ -4658,21 +4658,26 @@ if _ref and not _ref.get("error"):
         # Live: has the watching side already taken its level out?
         _up_hit = bool(spot and _u["watch"] == "SPOT" and spot > _u["cross_above"])
         _dn_hit = bool(spot and _d["watch"] == "SPOT" and spot < _d["cross_below"])
-        _hdr = (f"{_lat['ts'][11:16]} · {_lat['matches']} matches · "
+        # Both marks come from the SAME candle pair, so the @time on each row is
+        # identical by construction — it names the pair the levels were taken
+        # from, not two separate events.
+        _hdr = (f"pair {_lat['ts'][11:16]} · {_lat['matches']} matches · "
                 f"{_nq}/{_ref.get('scanned', '?')} qualified · "
                 f"{_L['state']} {_L['basis']:+.2f}")
         _up_row = (f"<div><span style='color:var(--bull);font-weight:700;'>▲ UP</span>"
                    f"<span style='color:var(--muted);'> {_u['watch']} &gt; </span>"
                    f"<span style='color:var(--bull);font-weight:900;font-size:11px;'>"
                    f"{_u['cross_above']:,.2f}</span>"
-                   f"<span style='color:var(--muted);font-size:8px;'> {_u['level']}</span>"
+                   f"<span style='color:var(--muted);font-size:8px;'> {_u['level']}"
+                   f" @{_lat['ts'][11:16]}</span>"
                    + ("<span style='color:var(--bull);font-weight:700;'> ✓ CROSSED</span>"
                       if _up_hit else "") + "</div>")
         _dn_row = (f"<div><span style='color:var(--bear);font-weight:700;'>▼ DN</span>"
                    f"<span style='color:var(--muted);'> {_d['watch']} &lt; </span>"
                    f"<span style='color:var(--bear);font-weight:900;font-size:11px;'>"
                    f"{_d['cross_below']:,.2f}</span>"
-                   f"<span style='color:var(--muted);font-size:8px;'> {_d['level']}</span>"
+                   f"<span style='color:var(--muted);font-size:8px;'> {_d['level']}"
+                   f" @{_lat['ts'][11:16]}</span>"
                    + ("<span style='color:var(--bear);font-weight:700;'> ✓ CROSSED</span>"
                       if _dn_hit else "") + "</div>")
         _ref_html = (
