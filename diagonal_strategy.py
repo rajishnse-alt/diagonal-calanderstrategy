@@ -229,6 +229,43 @@ st.markdown(f"""
     .spcl-star {{ animation:none; }}
   }}
   .block-container  {{ padding:.75rem 1.2rem 1rem!important; }}
+
+  /* ── NARROW SCREENS ───────────────────────────────────────────────────────
+     Keyed on VIEWPORT WIDTH, not device type. Streamlit cannot detect the
+     device server-side without a JS round-trip, and device sniffing gets a
+     tablet, a split window and a desktop at 50% zoom all wrong anyway. Width
+     is the thing that actually decides whether a 4-column card fits.
+
+     The SPCL cards are 4-column tables whose cells carry white-space:nowrap,
+     so on a phone the columns squeeze to unreadable slivers and the page
+     scrolls sideways. Below 820px each cell becomes a full-width block, so the
+     card reads top-to-bottom instead. */
+  @media (max-width: 820px) {{
+    .block-container {{ padding:.5rem .6rem .6rem!important; }}
+    .card table, .card tbody, .card tr, .card td {{
+      display:block!important; width:100%!important; max-width:100%!important;
+    }}
+    .card td {{
+      padding:6px 8px!important;
+      border-bottom:1px solid var(--border)!important;
+      text-align:left!important;
+    }}
+    .card tr:last-child td:last-child {{ border-bottom:none!important; }}
+    /* nowrap is what forces the sideways scroll — let it wrap when narrow */
+    .card td, .card td * {{ white-space:normal!important; word-break:break-word; }}
+    /* stacked cells with no content leave dead rows */
+    .card td:empty {{ display:none!important; }}
+    .sec-hdr {{ font-size:10px!important; letter-spacing:1px!important; }}
+  }}
+
+  /* Phones: tighten further so the mono figures still fit one line. */
+  @media (max-width: 480px) {{
+    .card {{ padding:.5rem!important; }}
+    .card td {{ font-size:10px!important; }}
+    .val-big {{ font-size:20px!important; }}
+  }}
+
+  /* Nothing above this width changes — desktop layout is untouched. */
   h1,h2,h3          {{ font-family:var(--hdr); color:var(--text); }}
   .sec-hdr {{
     font-family:var(--hdr); font-size:11px; font-weight:700;
