@@ -3826,6 +3826,17 @@ def _poc_line(strike_int, option_type):
     _poc, _tc = _hit
     if _poc is None and not _tc:
         return ""
+    # POC IS WITHHELD until the port reproduces the indicator.
+    # Measured against the TradingView plot on 2026-08-20:
+    #     24100 PE  profTop 124.25 matches the chart, but POC came out 112.36
+    #               against the chart's ~93.90
+    #     24500 CE  profBot 15.20 matches, profTop never registered at all
+    # Two of four bounds are right, so the sweep state machine is close but
+    # wrong — the suspect is the `top != top[1]` reset, which in Pine also
+    # fires on the na->value transition that this port suppresses.
+    # Tcol is unaffected (it depends only on highg/lowg, not on the profile),
+    # so it still shows. A wrong price on a trading card is worse than none.
+    _poc = None
     _tcol = ("var(--bull)" if _tc == "BULL"
              else "var(--bear)" if _tc == "BEAR" else "var(--muted)")
     _out = "<br><span style='color:var(--muted);font-size:8px;'>POC</span>"
