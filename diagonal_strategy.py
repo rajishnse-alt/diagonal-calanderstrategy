@@ -6438,7 +6438,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_poc_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -6452,7 +6452,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_poc_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
