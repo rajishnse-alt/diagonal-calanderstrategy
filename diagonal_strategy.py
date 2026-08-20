@@ -3780,6 +3780,66 @@ def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
             f"<span style='color:var(--muted);font-size:8px;'> Δ{_c5 - _mid:+.2f}</span>")
 
 
+def _poc_line(strike_int, option_type):
+    """
+    "POC 94.01 ● BULL" for one strike — port of BigBeluga's Structural
+    Liquidity & POC Matrix, the two outputs asked for.
+
+    POC  = middle of the fullest volume bin over the swept profile
+           (bins are ATR(100)*0.2 tall, filled by each bar's CLOSE + VOLUME)
+    Tcol = sweep state: BULL after a period-high sweep, BEAR after a
+           period-low sweep. It persists until the next sweep, as Pine's `var`
+           does — it is a state, not a per-bar signal.
+
+    POC needs BOTH a top and a bottom sweep to have registered before the
+    profile has bounds; until then it reports the sweep state alone rather than
+    a number derived from a half-defined range. Measured on 24500CE: only the
+    low had swept, so profTop was still 0 and any "POC" would have been noise.
+
+    Cached per 5-min slot — this costs an HTTP call on a miss.
+    """
+    if not strike_int or not token:
+        return ""
+    _ck = (f"poc_{_today_str}_{_inst_choice}_{near_exp}_"
+           f"{int(strike_int)}_{option_type}_{_spcl_slot}")
+    _hit = st.session_state.get(_ck)
+    if _hit is None:
+        try:
+            import importlib
+            _pm = importlib.import_module("niftyai.collector.poc")
+            _inst = _opt_inst_key(strike_int, option_type)
+            _rows = []
+            if _inst:
+                _enc = urllib.parse.quote(_inst, safe="")
+                _to = datetime.now(IST).date()
+                _r = requests.get(
+                    f"https://api.upstox.com/v3/historical-candle/{_enc}"
+                    f"/minutes/5/{_to}/{_to - timedelta(days=12)}",
+                    headers=hdr(token), timeout=6)
+                _rows = sorted((_r.json().get("data") or {}).get("candles") or [],
+                               key=lambda x: str(x[0]))
+            _res = _pm.analyse(_rows) if _rows else None
+            _hit = (_res or {}).get("poc"), (_res or {}).get("tcol")
+        except Exception:
+            _hit = (None, None)
+        st.session_state[_ck] = _hit
+    _poc, _tc = _hit
+    if _poc is None and not _tc:
+        return ""
+    _tcol = ("var(--bull)" if _tc == "BULL"
+             else "var(--bear)" if _tc == "BEAR" else "var(--muted)")
+    _out = "<br><span style='color:var(--muted);font-size:8px;'>POC</span>"
+    if _poc is not None:
+        _out += (f"<span style='color:var(--gold);font-weight:700;font-size:10px;'>"
+                 f" {_poc:,.2f}</span>")
+    else:
+        _out += "<span style='color:var(--muted);font-size:8px;'> —</span>"
+    if _tc:
+        _out += (f"<span style='color:{_tcol};font-weight:700;font-size:9px;'>"
+                 f" ● {_tc}</span>")
+    return _out
+
+
 def _tar_line(proj_high):
     """
     Tg — the projected target sitting above →PE H / →CE H:
@@ -6367,7 +6427,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_poc_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -6381,7 +6441,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_poc_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
