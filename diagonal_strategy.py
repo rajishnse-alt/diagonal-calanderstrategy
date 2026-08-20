@@ -14,6 +14,21 @@ FIX LOG — cross-reference index. Newest first. Search the marker to jump to
 the code. Every entry was reproduced before fixing; none are speculative.
 ════════════════════════════════════════════════════════════════════════════
 
+[POC-2026-08-20]  POC came out wrong — the window, not the port
+    BigBeluga's Structural Liquidity & POC Matrix builds its volume profile
+    from every bar the chart has loaded. _poc_line was requesting 12 days, so
+    the fullest bin was chosen from a fraction of the data and the POC landed
+    several bins low. Now merges the 27-day dated call (the `minutes/5` span
+    cap) with intraday for today, ~1487 bars, de-duped on timestamp.
+      Verified against the TradingView plot, 2026-08-20:
+        24500 CE   port 23.65 / BEAR    chart 23.50 / bear
+        24100 PE   port 118.14 / BEAR   chart 116.55 / bear
+      Note for anyone re-checking: the POC is the WHITE dashed line. The
+      yellow level on the PE chart (93.90) belongs to a different overlay —
+      comparing against it is what made the port look broken for two rounds.
+      Tcol is independent of the profile; it was correct throughout.
+                                                  -> search "_poc_line"
+
 [IP-2026-08-03]  Ideal Premium — three defects
     Definition: strike_a = LAST strike where CE LTP > PE LTP, strike_b = the
     very next strike; IP = mean of those FOUR previous-day lows.
@@ -3812,12 +3827,25 @@ def _poc_line(strike_int, option_type):
             if _inst:
                 _enc = urllib.parse.quote(_inst, safe="")
                 _to = datetime.now(IST).date()
-                _r = requests.get(
-                    f"https://api.upstox.com/v3/historical-candle/{_enc}"
-                    f"/minutes/5/{_to}/{_to - timedelta(days=12)}",
-                    headers=hdr(token), timeout=6)
-                _rows = sorted((_r.json().get("data") or {}).get("candles") or [],
-                               key=lambda x: str(x[0]))
+                # FULL history, not a fortnight. The profile is built from every
+                # bar the chart has loaded, so a short window changes which bin
+                # is fullest and moves the POC. 27d is the most `minutes/5`
+                # allows in one request; the dated call stops before today, so
+                # intraday is merged on top. Measured 2026-08-20 against the
+                # TradingView plot: 12d gave 112.36 on 24100PE, the full 1487
+                # bars give 118.14 against the chart's 116.55.
+                _u = (f"https://api.upstox.com/v3/historical-candle/{_enc}/minutes/5",
+                      f"https://api.upstox.com/v3/historical-candle/intraday/{_enc}"
+                      f"/minutes/5")
+                _raw = []
+                for _url in (f"{_u[0]}/{_to}/{_to - timedelta(days=27)}", _u[1]):
+                    try:
+                        _raw += ((requests.get(_url, headers=hdr(token), timeout=10)
+                                  .json().get("data") or {}).get("candles") or [])
+                    except Exception:
+                        pass
+                _d = {str(_c[0]): _c for _c in _raw}      # de-dup the overlap
+                _rows = [_d[_k] for _k in sorted(_d)]
             _res = _pm.analyse(_rows) if _rows else None
             _hit = (_res or {}).get("poc"), (_res or {}).get("tcol")
         except Exception:
@@ -3826,17 +3854,14 @@ def _poc_line(strike_int, option_type):
     _poc, _tc = _hit
     if _poc is None and not _tc:
         return ""
-    # POC IS WITHHELD until the port reproduces the indicator.
-    # Measured against the TradingView plot on 2026-08-20:
-    #     24100 PE  profTop 124.25 matches the chart, but POC came out 112.36
-    #               against the chart's ~93.90
-    #     24500 CE  profBot 15.20 matches, profTop never registered at all
-    # Two of four bounds are right, so the sweep state machine is close but
-    # wrong — the suspect is the `top != top[1]` reset, which in Pine also
-    # fires on the na->value transition that this port suppresses.
-    # Tcol is unaffected (it depends only on highg/lowg, not on the profile),
-    # so it still shows. A wrong price on a trading card is worse than none.
-    _poc = None
+    # VERIFIED 2026-08-20 against the TradingView plot (the WHITE line is the
+    # POC — the yellow 93.90 on that chart belongs to a different indicator,
+    # which is what sent the earlier check off course):
+    #     24500 CE   port 23.65 / BEAR   chart 23.50 / bear
+    #     24100 PE   port 118.14 / BEAR  chart 116.55 / bear
+    # The state machine was never the problem; the window was. See the fetch
+    # above. Residual on the PE is ~1.5 bins and comes from the chart having a
+    # different number of bars loaded than the API will serve in one request.
     _tcol = ("var(--bull)" if _tc == "BULL"
              else "var(--bear)" if _tc == "BEAR" else "var(--muted)")
     _out = "<br><span style='color:var(--muted);font-size:8px;'>POC</span>"
@@ -6438,7 +6463,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_poc_line(_best_pe_s, 'PE')}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -6452,7 +6477,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_poc_line(_best_ce_s, 'CE')}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
