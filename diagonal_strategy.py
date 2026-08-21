@@ -14,6 +14,22 @@ FIX LOG — cross-reference index. Newest first. Search the marker to jump to
 the code. Every entry was reproduced before fixing; none are speculative.
 ════════════════════════════════════════════════════════════════════════════
 
+[BAND-2026-08-21]  Strike suggestion on the day's first 5-min close
+    New line under ≈mid: the strikes whose OPENING 5-min candle close landed
+    INSIDE the projected band, ranked by nearness to H (H is what a long has
+    to clear, so the in-band strike sitting just under it needs the least
+    move). When nothing closed inside, falls back to the single strike whose
+    first 5-min close is nearest H, labelled "none in band · nearest H" so the
+    two cases are never confused on the card.
+      Measured 2026-08-21, NIFTY 26 Aug 25 expiry:
+        PE band 25.50-29.34 -> 24100 PE closed 27.00 (H-2.34); next out,
+                               24150 PE, closed 36.95 (H+7.61)
+        CE band 16.65-19.15 -> 24500 CE closed 17.00 (H-2.15); next out,
+                               24450 CE, closed 26.00 (H+6.85)
+      Near the money one 50-point step moves the premium 7-10 pts against a
+      band only ~2.5-4 wide, so a single hit per side is the normal outcome
+      and two would be the surprise.       -> search "_band_match"
+
 [POC-2026-08-20]  POC came out wrong — the window, not the port
     BigBeluga's Structural Liquidity & POC Matrix builds its volume profile
     from every bar the chart has loaded. _poc_line was requesting 12 days, so
@@ -3795,6 +3811,82 @@ def _mid_match_line(option_type, proj_low, proj_high, ltp_map, n_probe=5):
             f"<span style='color:var(--muted);font-size:8px;'> Δ{_c5 - _mid:+.2f}</span>")
 
 
+def _band_match(option_type, proj_low, proj_high, ltp_map, n_probe=7, keep=3):
+    """
+    Strikes whose DAY'S FIRST 5-min close landed INSIDE the projected band,
+    ranked by nearness to H.
+
+    Why H and not the midpoint: H is the level a long has to clear, so between
+    two strikes that both closed in the band the one sitting just under H is
+    already most of the way there and needs the least move to trigger. ≈mid
+    answers a different question (which strike is most centred) and both lines
+    are on the card because they disagree often.
+
+    If NOTHING closed inside the band, returns the single strike whose first
+    5-min close is nearest H, flagged inside=False — "closest to H" is the
+    fallback you asked for, not a second class of hit dressed up as one.
+
+    Shortlisting is done on the live chain LTP by distance to the band (0 when
+    the tick is already inside), purely to keep this to a handful of requests;
+    every decision below is made on the opening 5-min candle close.
+
+    Returns {"inside": bool, "hits": [{strike, close_5m, ltp, d_high}],
+             "low": L, "high": H} or None.
+    """
+    if not proj_low or not proj_high or not ltp_map:
+        return None
+    _lo, _hi = float(proj_low), float(proj_high)
+    if _hi < _lo:
+        _lo, _hi = _hi, _lo
+    _cands = []
+    for _s, _l in ltp_map.items():
+        try:
+            _si, _lf = int(float(_s)), float(_l)
+        except (TypeError, ValueError):
+            continue
+        if _lf > 0:
+            _cands.append((max(_lo - _lf, _lf - _hi, 0.0), abs(_lf - _hi), _si))
+    if not _cands:
+        return None
+    _cands.sort()
+    _in, _near = [], None
+    for _, _, _si in _cands[:n_probe]:
+        _c5 = _strike_first_5m_close(_si, option_type)
+        if _c5 is None or _c5 <= 0:
+            continue
+        _lf = float(ltp_map.get(_si, ltp_map.get(str(_si), 0)) or 0)
+        _row = {"strike": _si, "close_5m": _c5, "ltp": _lf, "d_high": _c5 - _hi}
+        if _lo <= _c5 <= _hi:
+            _in.append(_row)
+        if _near is None or abs(_row["d_high"]) < abs(_near["d_high"]):
+            _near = _row
+    if _in:
+        _in.sort(key=lambda r: abs(r["d_high"]))
+        return {"inside": True, "hits": _in[:keep], "low": _lo, "high": _hi}
+    if _near:
+        return {"inside": False, "hits": [_near], "low": _lo, "high": _hi}
+    return None
+
+
+def _band_match_line(option_type, proj_low, proj_high, ltp_map):
+    """One card line: the in-band strikes, or the nearest-to-H fallback."""
+    _b = _band_match(option_type, proj_low, proj_high, ltp_map)
+    if not _b:
+        return ""
+    _col = "var(--pe)" if option_type == "PE" else "var(--ce)"
+    _tag = ("<span style='color:var(--bull);font-size:8px;font-weight:700;'>in L↔H</span>"
+            if _b["inside"] else
+            "<span style='color:var(--muted);font-size:8px;'>none in band · nearest H</span>")
+    _out = f"<br>{_tag}"
+    for _r in _b["hits"]:
+        _out += (f"<span style='color:{_col};font-weight:700;font-size:10px;'>"
+                 f" {_r['strike']}</span>"
+                 f"<span style='color:{_col};font-size:9px;'> {_r['close_5m']:,.2f}</span>"
+                 f"<span style='color:var(--muted);font-size:8px;'>"
+                 f" H{_r['d_high']:+.2f}</span>")
+    return _out
+
+
 def _poc_line(strike_int, option_type):
     """
     "POC 94.01 ● BULL" for one strike — port of BigBeluga's Structural
@@ -6463,7 +6555,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"→PE L {_tk_low}{_pe_proj_fc}<br>{_fmt_s(_proj_pe_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--pe);"
         f"padding:4px 8px;border-bottom:1px solid var(--border);'>"
-        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_poc_line(_best_pe_s, 'PE')}{_pe_h_strike}</td>"
+        f"→PE H {_tk_high}{_pe_star}<br>{_fmt_s(_proj_pe_high)}{_tar_line(_proj_pe_high)}{_hma_line(_best_pe_s, 'PE')}{_mid_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_band_match_line('PE', _proj_pe_low, _proj_pe_high, near_pe)}{_poc_line(_best_pe_s, 'PE')}{_pe_h_strike}</td>"
         + _pe_rev_cell
         + f"</tr>"
         # PeSPCL row
@@ -6477,7 +6569,7 @@ if True:  # always render — individual cells show "—" if data missing
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
         f"padding:4px 8px;'>→CE L {_tk_low}{_ce_proj_fc}<br>{_fmt_s(_proj_ce_low)}</td>"
         f"<td style='font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ce);"
-        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_poc_line(_best_ce_s, 'CE')}{_ce_h_strike}</td>"
+        f"padding:4px 8px;'>→CE H {_tk_high}{_ce_star}<br>{_fmt_s(_proj_ce_high)}{_tar_line(_proj_ce_high)}{_hma_line(_best_ce_s, 'CE')}{_mid_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_band_match_line('CE', _proj_ce_low, _proj_ce_high, near_ce)}{_poc_line(_best_ce_s, 'CE')}{_ce_h_strike}</td>"
         + _ce_rev_cell
         + f"</tr>"
         f"</tbody></table></div>",
