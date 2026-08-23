@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "instrument": "BANKNIFTY",
+  "generated": null,
+  "stale": true,
+  "note": "Seed committed with the repo so the endpoint always answers. Replaced in place each time the app refreshes; 'stale' goes false and 'generated' is set once the live app has written."
+}

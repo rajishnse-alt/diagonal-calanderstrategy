@@ -1,0 +1,10 @@
+[server]
+# Serves ./static/ at  /app/static/<file>  on the app's own domain.
+# This is what turns the snapshot JSON into a real HTTP endpoint:
+#   https://diagonal-calanderstrategy008.streamlit.app/app/static/snapshot_NIFTY.json
+# .json is served with its proper content type; unknown extensions are sent as
+# plain text, so keep the .json suffix.
+enableStaticServing = true
+
+[browser]
+gatherUsageStats = false

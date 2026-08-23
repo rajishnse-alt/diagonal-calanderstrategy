@@ -14,6 +14,23 @@ FIX LOG — cross-reference index. Newest first. Search the marker to jump to
 the code. Every entry was reproduced before fixing; none are speculative.
 ════════════════════════════════════════════════════════════════════════════
 
+[API-2026-08-23]  JSON endpoint for querying the values from outside
+    Streamlit cannot register HTTP routes, but with
+        [server] enableStaticServing = true     (.streamlit/config.toml)
+    it serves ./static/ at /app/static/<file> on the app's own domain, and
+    .json goes out with the correct content type. The app rewrites the file
+    every refresh, so the URL is a plain GET for any client:
+        /app/static/snapshot_NIFTY.json   (also BANKNIFTY, SENSEX)
+    Written temp-then-replace so a poller never reads a half-written file.
+    Every value is read via globals().get() with a default, so a renamed
+    variable yields null rather than a NameError - this runs at the end of an
+    already-rendered page, where a raise would blank the whole app.
+    LIMIT: Community Cloud keeps nothing across container restarts and a
+    sleeping app writes nothing. Seed files are committed so the URL always
+    answers; check `stale` and `generated` before trusting a payload. The
+    GitHub Actions JSON under niftyai/ stays the durable path.
+                                                  -> search "API-2026-08-23"
+
 [BAND-2026-08-21]  Strike suggestion on the day's first 5-min close
     New line under ≈mid: the strikes whose OPENING 5-min candle close landed
     INSIDE the projected band, ranked by nearness to H (H is what a long has
@@ -8569,3 +8586,152 @@ with _ag_tabs[-1]:
 if _AUTOREFRESH_OK:
     st.caption(f"live · auto-refreshing every {_refresh_mins} min "
                f"(page stays interactive between updates)")
+
+
+# ── JSON API endpoint ────────────────────────────────────────────────────────
+# [API-2026-08-23]  Query the card values from outside the app.
+#
+#   GET https://diagonal-calanderstrategy008.streamlit.app/app/static/snapshot_NIFTY.json
+#   GET .../app/static/snapshot_BANKNIFTY.json      .../app/static/snapshot_SENSEX.json
+#
+# HOW THIS IS AN ENDPOINT AT ALL
+#   Streamlit cannot add HTTP routes, but with
+#       [server] enableStaticServing = true      (.streamlit/config.toml)
+#   it serves ./static/ at /app/static/<file> on the app's own domain, and
+#   .json goes out with the correct content type. So the app rewrites the file
+#   on every refresh and the URL is a plain GET for any client.
+#
+# WHAT IT CANNOT DO
+#   Community Cloud gives no persistence across container restarts, and a
+#   sleeping app writes nothing. The seed files committed in static/ mean the
+#   URL always answers rather than 404s; check `stale` and `generated` before
+#   trusting a payload. For values that must be there whether or not anyone has
+#   opened the app, the GitHub Actions JSON under niftyai/ is the durable path
+#   — this endpoint is the live one, not the reliable one.
+#
+# EVERY value is read through _api_get(), which is globals().get() with a
+# default. A name that is missing or renamed yields null in the payload instead
+# of raising — this block runs at the very end of a page that has already
+# rendered, and a NameError here would blank the whole app (see the
+# _spcl_slot incident in the FIX LOG).
+def _api_get(_name, _default=None):
+    _v = globals().get(_name, _default)
+    return _default if _v is None else _v
+
+
+def _api_num(_name, _dp=2):
+    """A float rounded for transport, or None. Never raises on a bad value."""
+    try:
+        _v = globals().get(_name)
+        return None if _v in (None, "") else round(float(_v), _dp)
+    except (TypeError, ValueError):
+        return None
+
+
+try:
+    import json as _api_json
+    import os as _api_os
+
+    _api_now = datetime.now(IST)
+    _api_ref = _api_get("_ref", {}) or {}
+
+    # The sqrt ladder is a list of (n, value); the payload wants the values and
+    # which one is the pivot, not the intermediate root.
+    _api_ladder = []
+    for _n, _v in (_api_get("_sq_levels", []) or []):
+        _api_ladder.append({"level": _v, "pivot": _n == _api_get("_sq_root")})
+
+    _api_payload = {
+        "schema": 1,
+        "stale": False,
+        "generated": _api_now.isoformat(timespec="seconds"),
+        "instrument": _api_get("_inst_choice", "NIFTY"),
+        "expiry": str(_api_get("near_exp", "")),
+        "spot": _api_num("spot"),
+        "atm": _api_get("atm"),
+        "vix": _api_num("_curr_vix"),
+
+        "ladder": _api_ladder,
+
+        "five_min": {
+            "high": _api_num("_nifty_5m_high"),
+            "low": _api_num("_nifty_5m_low"),
+            "critical_resistance": _api_num("_crit_res"),
+            "strong_support": _api_num("_strong_sup"),
+        },
+
+        "day": {
+            "high": _api_num("_idx_day_high"),
+            "low": _api_num("_idx_day_low"),
+            # support off the HIGH and resistance off the LOW - crossed on
+            # purpose, which is what puts the pair either side of spot.
+            "support": (round(_api_get("_idx_day_high") - math.sqrt(_api_get("_idx_day_high")), 2)
+                        if _api_get("_idx_day_high") else None),
+            "resistance": (round(_api_get("_idx_day_low") + math.sqrt(_api_get("_idx_day_low")), 2)
+                           if _api_get("_idx_day_low") else None),
+            "previous_session": bool(_api_get("_idx_day_prev", False)),
+        },
+
+        "referral": {
+            "time": _api_ref.get("time"),
+            "matches": _api_ref.get("n"),
+            "qualified": _api_ref.get("hits"),
+            "scanned": _api_ref.get("scanned"),
+            "basis": _api_ref.get("basis"),
+            "state": _api_ref.get("state"),
+            "up": _api_ref.get("up"),
+            "down": _api_ref.get("dn") or _api_ref.get("down"),
+        },
+
+        "futures": {
+            "last_5m_close": _api_num("_f5m"),
+            "expiries": [str(_e) for _e in (_api_get("_fut_expiries", []) or [])],
+        },
+
+        "pcr": {
+            "near": _api_num("_pcr", 4),
+            "change": _api_num("_pcr_chg", 4),
+            "far": _api_num("_far_pcr", 4),
+            "ce_oi": _api_get("_tot_ce_oi"),
+            "pe_oi": _api_get("_tot_pe_oi"),
+        },
+
+        "spcl": {
+            "ce": _api_num("_ce_spcl"),
+            "pe": _api_num("_pe_spcl"),
+            "proj_pe_low": _api_num("_proj_pe_low"),
+            "proj_pe_high": _api_num("_proj_pe_high"),
+            "proj_ce_low": _api_num("_proj_ce_low"),
+            "proj_ce_high": _api_num("_proj_ce_high"),
+        },
+
+        "suggested": {
+            "pe_strike": _api_get("_best_pe_s"),
+            "ce_strike": _api_get("_best_ce_s"),
+            "pe_ltp": _api_num("_atm_pe_ltp"),
+            "ce_ltp": _api_num("_atm_ce_ltp"),
+            "ce_vwap": _api_num("_atm_ce_vwap"),
+            "pe_vwap": _api_num("_atm_pe_vwap"),
+            "regime": _api_get("_regime_label"),
+        },
+    }
+
+    # Tg targets are the projected highs uplifted by _SPCL_TAR_PCT.
+    for _side in ("pe", "ce"):
+        _h = _api_payload["spcl"]["proj_%s_high" % _side]
+        _api_payload["spcl"]["tg_%s" % _side] = (
+            round(_h * (1 + _SPCL_TAR_PCT / 100.0), 2) if _h else None)
+
+    _api_dir = _api_os.path.join(_api_os.path.dirname(_api_os.path.abspath(__file__)),
+                                 "static")
+    _api_os.makedirs(_api_dir, exist_ok=True)
+    _api_file = _api_os.path.join(
+        _api_dir, "snapshot_%s.json" % str(_api_get("_inst_choice", "NIFTY")).upper())
+    # Write to a temp name and replace, so a reader never catches a half-written
+    # file - the app rewrites this every refresh while clients are polling it.
+    with open(_api_file + ".tmp", "w") as _api_fh:
+        _api_json.dump(_api_payload, _api_fh, indent=2, default=str)
+    _api_os.replace(_api_file + ".tmp", _api_file)
+except Exception as _api_e:
+    # Never let the endpoint take the page down. Surfaced small, not raised.
+    st.caption(f"api: snapshot not written ({type(_api_e).__name__})")
