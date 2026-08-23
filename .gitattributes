@@ -9,3 +9,11 @@
 # computed and thrown away.
 *.csv    merge=union
 *.jsonl  merge=union
+
+# API snapshots are REGENERATED WHOLE every run, never appended to. Union-merging
+# them would splice two documents into invalid JSON, so they must not inherit any
+# future *.json rule. On a concurrent-write conflict the right answer is simply
+# "keep the copy this run just computed" — the next run overwrites it anyway.
+# The `ours` driver is registered in the workflow (merge.ours.driver = true).
+api/*.json     merge=ours
+static/*.json  merge=ours
