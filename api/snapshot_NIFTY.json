@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-08-24T12:56:37+05:30",
+  "generated": "2026-08-24T13:14:58+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "NIFTY",
   "session": "2026-08-24",
   "expiry": "2026-08-25",
-  "spot": 24182.85,
-  "atm": 24200,
+  "spot": 24165.7,
+  "atm": 24150,
   "vix": null,
   "ladder": [
+    {
+      "level": 23105,
+      "pivot": false
+    },
     {
       "level": 23409,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 24025,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 24337,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 24649,
@@ -32,10 +36,6 @@
     },
     {
       "level": 24965,
-      "pivot": false
-    },
-    {
-      "level": 25281,
       "pivot": false
     }
   ],
@@ -47,24 +47,24 @@
   },
   "day": {
     "high": 24313.0,
-    "low": 24173.75,
+    "low": 24153.3,
     "support": 24157.07,
-    "resistance": 24329.23,
+    "resistance": 24308.71,
     "previous_session": false
   },
   "referral": {
-    "time": "12:55",
+    "time": "13:10",
     "matches": 0,
-    "qualified": 44,
-    "scanned": 45,
-    "basis": 21.95,
+    "qualified": 47,
+    "scanned": 48,
+    "basis": 28.7,
     "state": "PREMIUM",
     "up": {
-      "level": 24210.0,
+      "level": 24195.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 24182.1,
+      "level": 24158.5,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-08-25"
   },
   "pcr": {
-    "near": 0.6312,
-    "atm": 0.7803,
-    "ce_oi": 233118470,
-    "pe_oi": 147154085,
+    "near": 0.6231,
+    "atm": 1.3221,
+    "ce_oi": 225198090,
+    "pe_oi": 140318945,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 65.75,
-    "anchor_pe_ltp": 57.85,
-    "spot_hma": 24166.37
+    "anchor_ce_ltp": 81.35,
+    "anchor_pe_ltp": 47.3,
+    "spot_hma": 24160.46
   },
   "app_log_age_min": null
 }
