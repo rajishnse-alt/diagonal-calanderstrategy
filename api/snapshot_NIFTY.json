@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-08-24T13:33:23+05:30",
+  "generated": "2026-08-24T13:51:38+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "NIFTY",
   "session": "2026-08-24",
   "expiry": "2026-08-25",
-  "spot": 24173.55,
+  "spot": 24166.9,
   "atm": 24150,
   "vix": null,
   "ladder": [
@@ -53,18 +53,18 @@
     "previous_session": false
   },
   "referral": {
-    "time": "13:30",
+    "time": "13:50",
     "matches": 0,
-    "qualified": 51,
-    "scanned": 52,
-    "basis": 27.45,
+    "qualified": 55,
+    "scanned": 56,
+    "basis": 20.95,
     "state": "PREMIUM",
     "up": {
-      "level": 24209.7,
+      "level": 24200.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 24167.45,
+      "level": 24165.75,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-08-25"
   },
   "pcr": {
-    "near": 0.6429,
-    "atm": 1.4871,
-    "ce_oi": 226235100,
-    "pe_oi": 145454465,
+    "near": 0.6468,
+    "atm": 1.4261,
+    "ce_oi": 226674045,
+    "pe_oi": 146602170,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 81.85,
-    "anchor_pe_ltp": 43.55,
-    "spot_hma": 24158.8
+    "anchor_ce_ltp": 82.65,
+    "anchor_pe_ltp": 42.35,
+    "spot_hma": 24158.66
   },
   "app_log_age_min": null
 }
