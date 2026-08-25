@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-08-25T15:30:09+05:30",
+  "generated": "2026-08-25T15:48:02+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "BANKNIFTY",
   "session": "2026-08-25",
@@ -72,10 +72,10 @@
     "expiry": "2026-08-25"
   },
   "pcr": {
-    "near": 0.8149,
-    "atm": 0.748,
-    "ce_oi": 18096600,
-    "pe_oi": 14747190,
+    "near": 0.8479,
+    "atm": 0.9069,
+    "ce_oi": 15195660,
+    "pe_oi": 12884640,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,7 +91,7 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 14.35,
+    "anchor_ce_ltp": 14.2,
     "anchor_pe_ltp": 0.05,
     "spot_hma": 57416.22
   },
