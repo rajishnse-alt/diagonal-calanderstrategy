@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-02T14:19:20+05:30",
+  "generated": "2026-09-02T14:37:35+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "SENSEX",
   "session": "2026-09-02",
   "expiry": "2026-09-03",
-  "spot": 76476.5,
-  "atm": 76500,
+  "spot": 76552.95,
+  "atm": 76600,
   "vix": null,
   "ladder": [
     {
@@ -46,25 +46,25 @@
     "strong_support": 75994.0
   },
   "day": {
-    "high": 76532.93,
+    "high": 76567.55,
     "low": 76135.72,
-    "support": 76256.28,
+    "support": 76290.84,
     "resistance": 76411.65,
     "previous_session": false
   },
   "referral": {
-    "time": "14:15",
+    "time": "14:35",
     "matches": 0,
-    "qualified": 61,
-    "scanned": 61,
-    "basis": 547.25,
+    "qualified": 65,
+    "scanned": 65,
+    "basis": 495.05,
     "state": "PREMIUM",
     "up": {
-      "level": 77052.45,
+      "level": 77050.25,
       "watch": "SPOT"
     },
     "down": {
-      "level": 76474.2,
+      "level": 76528.92,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-09-24"
   },
   "pcr": {
-    "near": 1.0547,
-    "atm": 0.9246,
-    "ce_oi": 33768360,
-    "pe_oi": 35616860,
+    "near": 0.978,
+    "atm": 0.5655,
+    "ce_oi": 33852720,
+    "pe_oi": 33109500,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 248.65,
-    "anchor_pe_ltp": 215.9,
-    "spot_hma": 76472.95
+    "anchor_ce_ltp": 224.3,
+    "anchor_pe_ltp": 239.1,
+    "spot_hma": 76501.87
   },
   "app_log_age_min": null
 }
