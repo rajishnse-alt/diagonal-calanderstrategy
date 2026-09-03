@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-03T15:10:25+05:30",
+  "generated": "2026-09-03T15:30:25+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "SENSEX",
   "session": "2026-09-03",
   "expiry": "2026-09-03",
-  "spot": 76496.39,
-  "atm": 76500,
+  "spot": 76152.86,
+  "atm": 76200,
   "vix": null,
   "ladder": [
+    {
+      "level": 74529,
+      "pivot": false
+    },
     {
       "level": 75077,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 76177,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 76729,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 77285,
@@ -32,10 +36,6 @@
     },
     {
       "level": 77841,
-      "pivot": false
-    },
-    {
-      "level": 78401,
       "pivot": false
     }
   ],
@@ -47,24 +47,24 @@
   },
   "day": {
     "high": 76924.48,
-    "low": 76462.92,
+    "low": 76152.86,
     "support": 76647.13,
-    "resistance": 76739.44,
+    "resistance": 76428.82,
     "previous_session": false
   },
   "referral": {
-    "time": "15:05",
+    "time": "15:25",
     "matches": 0,
-    "qualified": 71,
-    "scanned": 71,
-    "basis": 512.05,
+    "qualified": 75,
+    "scanned": 75,
+    "basis": 771.79,
     "state": "PREMIUM",
     "up": {
-      "level": 77026.6,
+      "level": 77000.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 76462.92,
+      "level": 76152.86,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-09-24"
   },
   "pcr": {
-    "near": 0.8512,
-    "atm": 1.8622,
-    "ce_oi": 61350840,
-    "pe_oi": 52223740,
+    "near": 0.7752,
+    "atm": 0.9466,
+    "ce_oi": 47817700,
+    "pe_oi": 37066080,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 163.95,
-    "anchor_pe_ltp": 73.05,
-    "spot_hma": 76581.29
+    "anchor_ce_ltp": 0.5,
+    "anchor_pe_ltp": 47.1,
+    "spot_hma": 76546.81
   },
   "app_log_age_min": null
 }
