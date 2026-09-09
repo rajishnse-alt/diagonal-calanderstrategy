@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-09T14:55:30+05:30",
+  "generated": "2026-09-09T15:14:44+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "BANKNIFTY",
   "session": "2026-09-09",
   "expiry": "2026-09-29",
-  "spot": 56502.8,
-  "atm": 56500,
+  "spot": 56402.6,
+  "atm": 56400,
   "vix": null,
   "ladder": [
+    {
+      "level": 54757,
+      "pivot": false
+    },
     {
       "level": 55225,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 56169,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 56645,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 57121,
@@ -32,10 +36,6 @@
     },
     {
       "level": 57601,
-      "pivot": false
-    },
-    {
-      "level": 58081,
       "pivot": false
     }
   ],
@@ -47,24 +47,24 @@
   },
   "day": {
     "high": 56743.05,
-    "low": 56414.9,
+    "low": 56343.65,
     "support": 56504.84,
-    "resistance": 56652.42,
+    "resistance": 56581.02,
     "previous_session": false
   },
   "referral": {
-    "time": "14:50",
+    "time": "15:10",
     "matches": 0,
-    "qualified": 68,
-    "scanned": 68,
-    "basis": 373.7,
+    "qualified": 72,
+    "scanned": 72,
+    "basis": 336.85,
     "state": "PREMIUM",
     "up": {
-      "level": 56919.4,
+      "level": 56750.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 56479.2,
+      "level": 56371.9,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-09-29"
   },
   "pcr": {
-    "near": 1.1786,
-    "atm": 2.6456,
-    "ce_oi": 5547990,
-    "pe_oi": 6538800,
+    "near": 1.2078,
+    "atm": 1.4536,
+    "ce_oi": 5287710,
+    "pe_oi": 6386250,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 843.7,
-    "anchor_pe_ltp": 477.3,
-    "spot_hma": 56647.38
+    "anchor_ce_ltp": 837.45,
+    "anchor_pe_ltp": 503.85,
+    "spot_hma": 56561.46
   },
   "app_log_age_min": null
 }
