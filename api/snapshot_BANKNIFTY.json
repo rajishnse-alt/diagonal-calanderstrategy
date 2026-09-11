@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-10T15:41:12+05:30",
+  "generated": "2026-09-11T13:31:42+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "BANKNIFTY",
-  "session": "2026-09-10",
+  "session": "2026-09-11",
   "expiry": "2026-09-29",
-  "spot": 56471.95,
-  "atm": 56500,
+  "spot": 56322.4,
+  "atm": 56300,
   "vix": null,
   "ladder": [
+    {
+      "level": 54757,
+      "pivot": false
+    },
     {
       "level": 55225,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 56169,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 56645,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 57121,
@@ -33,38 +37,34 @@
     {
       "level": 57601,
       "pivot": false
-    },
-    {
-      "level": 58081,
-      "pivot": false
     }
   ],
   "five_min": {
-    "high": 56513.6,
-    "low": 56252.05,
-    "critical_resistance": 56661.16,
-    "strong_support": 56105.18
+    "high": 55996.65,
+    "low": 55699.45,
+    "critical_resistance": 56142.86,
+    "strong_support": 55554.02
   },
   "day": {
-    "high": 56575.15,
-    "low": 56231.85,
-    "support": 56337.29,
-    "resistance": 56468.98,
+    "high": 56342.45,
+    "low": 55699.45,
+    "support": 56105.08,
+    "resistance": 55935.46,
     "previous_session": false
   },
   "referral": {
-    "time": "15:25",
+    "time": "13:30",
     "matches": 0,
-    "qualified": 75,
-    "scanned": 75,
-    "basis": 163.05,
+    "qualified": 52,
+    "scanned": 52,
+    "basis": 289.0,
     "state": "PREMIUM",
     "up": {
-      "level": 56635.0,
+      "level": 56619.6,
       "watch": "SPOT"
     },
     "down": {
-      "level": 56262.5,
+      "level": 56303.1,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-09-29"
   },
   "pcr": {
-    "near": 0.9953,
-    "atm": 1.388,
-    "ce_oi": 6016860,
-    "pe_oi": 5988450,
+    "near": 1.1113,
+    "atm": 1.9509,
+    "ce_oi": 6065070,
+    "pe_oi": 6740070,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 685.0,
-    "anchor_pe_ltp": 580.0,
-    "spot_hma": 56286.98
+    "anchor_ce_ltp": 812.4,
+    "anchor_pe_ltp": 524.0,
+    "spot_hma": 56268.5
   },
   "app_log_age_min": null
 }
