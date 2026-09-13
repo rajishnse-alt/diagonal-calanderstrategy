@@ -390,7 +390,16 @@ st.markdown(f"""
                 max-width:460px; margin:3rem auto; }}
   .err-box {{ background:var(--bear-dim); border:1px solid var(--bear); border-radius:8px;
               padding:.6rem .9rem; color:var(--bear); font-family:var(--mono); font-size:12px; }}
-  #MainMenu,footer,header {{ visibility:hidden; }}
+  /* Chrome removal. visibility:hidden leaves the node in the DOM and still
+     clickable; display:none takes it out. The data-testid selectors cover the
+     current Streamlit build, the bare tags the older one - keep both, the
+     class names churn between releases. This is COSMETIC only: the real
+     controls are toolbarMode/showErrorDetails in config.toml. */
+  #MainMenu, footer, header,
+  [data-testid="stToolbar"], [data-testid="stDecoration"],
+  [data-testid="stStatusWidget"], [data-testid="stMainMenu"],
+  [data-testid="stToolbarActions"], [data-testid="stAppDeployButton"],
+  .stDeployButton, .stAppDeployButton {{ display:none !important; }}
   div[data-testid="stSelectbox"] label {{
     font-family:var(--mono)!important; font-size:11px!important; color:var(--muted)!important; }}
 </style>
