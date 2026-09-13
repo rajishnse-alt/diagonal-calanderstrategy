@@ -224,6 +224,71 @@ except ImportError:
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="NIFTY Diagonal Builder", page_icon="📐", layout="wide")
 
+# ── Email allowlist ──────────────────────────────────────────────────────────
+# [ALLOWLIST-2026-09-13]  Only named viewers may see the page.
+#
+# Placed IMMEDIATELY after set_page_config and before anything fetches or
+# renders, so a stranger gets the notice and nothing else. Everything below is
+# unreachable for them: st.stop() ends the script run.
+#
+# Configure in .streamlit/secrets.toml (Streamlit Cloud: Settings -> Secrets):
+#     allowed_emails = ["you@example.com", "partner@example.com"]
+# A plain comma-separated string works too.
+#
+# FAILS CLOSED. If the list is configured but the viewer's email cannot be
+# read, access is DENIED rather than allowed - an identity we cannot establish
+# is not an identity we can check. The open path exists only when NO list is
+# configured at all, which is how local development keeps working: never
+# configure the list locally, and never treat its absence as a safe default in
+# production.
+#
+# st.user.email is populated by the Community Cloud sign-in. This is a SECOND
+# lock, not the first: the app's own viewer allowlist (Settings -> Sharing) is
+# what stops someone reaching the server at all. Keep both - this one travels
+# with the code if the app ever moves off Community Cloud.
+def _allowed_emails():
+    try:
+        raw = st.secrets.get("allowed_emails", None)
+    except Exception:
+        return None                      # no secrets file at all -> not configured
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    out = set()
+    for e in raw:
+        e = str(e).strip().lower()
+        if e:
+            out.add(e)
+    return out or None
+
+
+def _viewer_email():
+    try:
+        v = st.user.get("email")
+    except Exception:
+        return None
+    return str(v).strip().lower() if v else None
+
+
+_ALLOW = _allowed_emails()
+if _ALLOW:
+    _WHO = _viewer_email()
+    if _WHO not in _ALLOW:
+        st.markdown(
+            "<div style='max-width:520px;margin:18vh auto;text-align:center;"
+            "font-family:system-ui,-apple-system,sans-serif;'>"
+            "<div style='font-size:40px;'>&#128274;</div>"
+            "<h3 style='margin:10px 0 6px;'>Access restricted</h3>"
+            "<p style='color:#888;font-size:14px;line-height:1.6;'>"
+            "This app is limited to approved viewers."
+            + (f"<br>Signed in as <code>{_WHO}</code>." if _WHO else
+               "<br>No signed-in account was detected.")
+            + "<br>Ask the owner to add your email.</p></div>",
+            unsafe_allow_html=True)
+        st.stop()
+
+
 # ── Theme toggle (read before injecting CSS) ───────────────────────────────
 _light_mode = st.session_state.get("light_mode", False)
 
