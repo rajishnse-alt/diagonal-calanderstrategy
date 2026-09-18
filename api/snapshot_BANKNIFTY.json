@@ -1,19 +1,15 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-18T14:02:10+05:30",
+  "generated": "2026-09-18T14:20:18+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "BANKNIFTY",
   "session": "2026-09-18",
   "expiry": "2026-09-29",
-  "spot": 56318.0,
-  "atm": 56300,
+  "spot": 56418.3,
+  "atm": 56400,
   "vix": null,
   "ladder": [
-    {
-      "level": 54757,
-      "pivot": false
-    },
     {
       "level": 55225,
       "pivot": false
@@ -24,11 +20,11 @@
     },
     {
       "level": 56169,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 56645,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 57121,
@@ -36,6 +32,10 @@
     },
     {
       "level": 57601,
+      "pivot": false
+    },
+    {
+      "level": 58081,
       "pivot": false
     }
   ],
@@ -46,25 +46,25 @@
     "strong_support": 55998.95
   },
   "day": {
-    "high": 56393.85,
+    "high": 56432.9,
     "low": 56073.55,
-    "support": 56156.38,
+    "support": 56195.34,
     "resistance": 56310.35,
     "previous_session": false
   },
   "referral": {
-    "time": "14:00",
+    "time": "14:15",
     "matches": 0,
-    "qualified": 58,
-    "scanned": 58,
-    "basis": 137.0,
+    "qualified": 61,
+    "scanned": 61,
+    "basis": 124.05,
     "state": "PREMIUM",
     "up": {
-      "level": 56482.8,
+      "level": 56575.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 56305.1,
+      "level": 56390.8,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-09-29"
   },
   "pcr": {
-    "near": 1.1055,
-    "atm": 1.2569,
-    "ce_oi": 6708570,
-    "pe_oi": 7416450,
+    "near": 1.1013,
+    "atm": 0.8925,
+    "ce_oi": 6816780,
+    "pe_oi": 7507410,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 562.1,
-    "anchor_pe_ltp": 418.0,
-    "spot_hma": 56350.68
+    "anchor_ce_ltp": 561.75,
+    "anchor_pe_ltp": 422.9,
+    "spot_hma": 56370.77
   },
   "app_log_age_min": null
 }
