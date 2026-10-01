@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-30T15:44:35+05:30",
+  "generated": "2026-10-01T15:36:28+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "SENSEX",
-  "session": "2026-09-30",
+  "session": "2026-10-01",
   "expiry": "2026-10-01",
-  "spot": 72480.29,
-  "atm": 72500,
+  "spot": 71909.7,
+  "atm": 71900,
   "vix": null,
   "ladder": [
+    {
+      "level": 70225,
+      "pivot": false
+    },
     {
       "level": 70757,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 71825,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 72361,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 72901,
@@ -33,23 +37,19 @@
     {
       "level": 73441,
       "pivot": false
-    },
-    {
-      "level": 73985,
-      "pivot": false
     }
   ],
   "five_min": {
-    "high": 72635.41,
-    "low": 72440.05,
-    "critical_resistance": 72825.06,
-    "strong_support": 72250.91
+    "high": 72450.34,
+    "low": 72187.62,
+    "critical_resistance": 72639.51,
+    "strong_support": 71999.14
   },
   "day": {
-    "high": 73062.23,
-    "low": 72366.44,
-    "support": 72791.93,
-    "resistance": 72635.45,
+    "high": 72572.9,
+    "low": 71292.88,
+    "support": 72303.51,
+    "resistance": 71559.89,
     "previous_session": false
   },
   "referral": {
@@ -57,14 +57,14 @@
     "matches": 0,
     "qualified": 75,
     "scanned": 75,
-    "basis": 560.01,
+    "basis": 606.95,
     "state": "PREMIUM",
     "up": {
-      "level": 73049.85,
+      "level": 72550.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 72440.79,
+      "level": 71909.7,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-10-29"
   },
   "pcr": {
-    "near": 0.8617,
-    "atm": 1.0812,
-    "ce_oi": 18715420,
-    "pe_oi": 16127520,
+    "near": 0.799,
+    "atm": 2.1353,
+    "ce_oi": 43520560,
+    "pe_oi": 34773080,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 222.4,
-    "anchor_pe_ltp": 293.15,
-    "spot_hma": 72446.72
+    "anchor_ce_ltp": 9.65,
+    "anchor_pe_ltp": 0.05,
+    "spot_hma": 71692.06
   },
   "app_log_age_min": null
 }

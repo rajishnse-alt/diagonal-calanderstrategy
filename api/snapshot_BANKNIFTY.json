@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-09-30T15:44:20+05:30",
+  "generated": "2026-10-01T15:36:03+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "BANKNIFTY",
-  "session": "2026-09-30",
+  "session": "2026-10-01",
   "expiry": "2026-10-27",
-  "spot": 54633.05,
-  "atm": 54600,
+  "spot": 54450.75,
+  "atm": 54500,
   "vix": null,
   "ladder": [
+    {
+      "level": 52901,
+      "pivot": false
+    },
     {
       "level": 53361,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 54289,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 54757,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 55225,
@@ -33,23 +37,19 @@
     {
       "level": 55697,
       "pivot": false
-    },
-    {
-      "level": 56169,
-      "pivot": false
     }
   ],
   "five_min": {
-    "high": 54538.85,
-    "low": 54174.3,
-    "critical_resistance": 54681.25,
-    "strong_support": 54032.85
+    "high": 54905.05,
+    "low": 54555.1,
+    "critical_resistance": 55048.41,
+    "strong_support": 54412.66
   },
   "day": {
-    "high": 55135.5,
-    "low": 54174.3,
-    "support": 54900.69,
-    "resistance": 54407.05,
+    "high": 55091.45,
+    "low": 54066.6,
+    "support": 54856.73,
+    "resistance": 54299.12,
     "previous_session": false
   },
   "referral": {
@@ -57,14 +57,14 @@
     "matches": 0,
     "qualified": 75,
     "scanned": 75,
-    "basis": 360.55,
+    "basis": 349.25,
     "state": "PREMIUM",
     "up": {
-      "level": 55039.0,
+      "level": 54824.4,
       "watch": "SPOT"
     },
     "down": {
-      "level": 54633.05,
+      "level": 54450.75,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-10-27"
   },
   "pcr": {
-    "near": 1.1059,
-    "atm": 1.2446,
-    "ce_oi": 3047010,
-    "pe_oi": 3369660,
+    "near": 1.0852,
+    "atm": 1.1704,
+    "ce_oi": 3277200,
+    "pe_oi": 3556530,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 1073.5,
-    "anchor_pe_ltp": 700.0,
-    "spot_hma": 54730.69
+    "anchor_ce_ltp": 1057.0,
+    "anchor_pe_ltp": 769.0,
+    "spot_hma": 54320.9
   },
   "app_log_age_min": null
 }
