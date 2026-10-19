@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-10-19T15:30:49+05:30",
+  "generated": "2026-10-19T15:49:24+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "SENSEX",
   "session": "2026-10-19",
@@ -72,10 +72,10 @@
     "expiry": "2026-10-29"
   },
   "pcr": {
-    "near": 0.7469,
-    "atm": 1.0022,
-    "ce_oi": 10186220,
-    "pe_oi": 7607920,
+    "near": 0.7301,
+    "atm": 0.7905,
+    "ce_oi": 10433860,
+    "pe_oi": 7617660,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,8 +91,8 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 360.95,
-    "anchor_pe_ltp": 400.25,
+    "anchor_ce_ltp": 357.75,
+    "anchor_pe_ltp": 390.95,
     "spot_hma": 73727.84
   },
   "app_log_age_min": null
