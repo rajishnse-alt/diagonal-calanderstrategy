@@ -1,15 +1,19 @@
 {
   "schema": 1,
   "stale": false,
-  "generated": "2026-10-22T15:52:13+05:30",
+  "generated": "2026-10-23T14:00:12+05:30",
   "source": "github-actions/public-candle-OI",
   "instrument": "SENSEX",
-  "session": "2026-10-22",
-  "expiry": "2026-10-22",
-  "spot": 73249.39,
-  "atm": 73200,
+  "session": "2026-10-23",
+  "expiry": "2026-10-29",
+  "spot": 72962.25,
+  "atm": 73000,
   "vix": null,
   "ladder": [
+    {
+      "level": 71289,
+      "pivot": false
+    },
     {
       "level": 71825,
       "pivot": false
@@ -20,11 +24,11 @@
     },
     {
       "level": 72901,
-      "pivot": false
+      "pivot": true
     },
     {
       "level": 73441,
-      "pivot": true
+      "pivot": false
     },
     {
       "level": 73985,
@@ -33,38 +37,34 @@
     {
       "level": 74529,
       "pivot": false
-    },
-    {
-      "level": 75077,
-      "pivot": false
     }
   ],
   "five_min": {
-    "high": 73396.56,
-    "low": 73005.11,
-    "critical_resistance": 73588.2,
-    "strong_support": 72814.49
+    "high": 73766.51,
+    "low": 73531.07,
+    "critical_resistance": 73959.11,
+    "strong_support": 73339.08
   },
   "day": {
-    "high": 73720.83,
-    "low": 73005.11,
-    "support": 73449.31,
-    "resistance": 73275.3,
+    "high": 73766.51,
+    "low": 72452.37,
+    "support": 73494.91,
+    "resistance": 72721.54,
     "previous_session": false
   },
   "referral": {
-    "time": "15:25",
+    "time": "13:55",
     "matches": 0,
-    "qualified": 62,
-    "scanned": 75,
-    "basis": 227.66,
+    "qualified": 55,
+    "scanned": 57,
+    "basis": 287.75,
     "state": "PREMIUM",
     "up": {
-      "level": 73500.65,
+      "level": 73250.0,
       "watch": "SPOT"
     },
     "down": {
-      "level": 73249.39,
+      "level": 72875.59,
       "watch": "FUTURE"
     }
   },
@@ -72,10 +72,10 @@
     "expiry": "2026-10-29"
   },
   "pcr": {
-    "near": 1.0505,
-    "atm": 2.7143,
-    "ce_oi": 33591540,
-    "pe_oi": 35287080,
+    "near": 1.1817,
+    "atm": 1.1967,
+    "ce_oi": 4172680,
+    "pe_oi": 4930880,
     "app_pcr_range": null
   },
   "spcl": {
@@ -91,9 +91,9 @@
   "suggested": {
     "pe_strike": null,
     "ce_strike": null,
-    "anchor_ce_ltp": 49.3,
-    "anchor_pe_ltp": 0.05,
-    "spot_hma": 73247.99
+    "anchor_ce_ltp": 725.2,
+    "anchor_pe_ltp": 537.0,
+    "spot_hma": 72647.87
   },
   "app_log_age_min": null
 }
